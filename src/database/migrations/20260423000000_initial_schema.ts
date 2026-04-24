@@ -1,4 +1,4 @@
-import pkg, { type Knex } from 'knex';
+import type { Knex } from 'knex';
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema
@@ -21,7 +21,11 @@ export async function up(knex: Knex): Promise<void> {
       table.text('description');
       table.integer('total_hours').notNullable();
       table.integer('rest_days_count').notNullable();
-      table.jsonb('patterns').notNullable(); // Array of {duration, count}
+
+      // Azure SQL does not support PostgreSQL jsonb.
+      // Store JSON as text / nvarchar(max), then JSON.parse / JSON.stringify in app code.
+      table.text('patterns').notNullable();
+
       table.timestamps(true, true);
     })
     .createTable('work_slots', (table) => {
@@ -40,6 +44,8 @@ export async function up(knex: Knex): Promise<void> {
       table.uuid('user_id').references('id').inTable('users').onDelete('CASCADE');
       table.dateTime('booked_at').defaultTo(knex.fn.now());
       table.enum('status', ['confirmed', 'cancelled', 'auto-assigned']).defaultTo('confirmed');
+
+      table.unique(['slot_id', 'user_id']);
     })
     .createTable('leave_requests', (table) => {
       table.uuid('id').primary();
