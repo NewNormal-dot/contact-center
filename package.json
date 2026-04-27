@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx server.ts",
     "build": "vite build",
-    "start": "npx --yes tsx server.ts",
+    "start": "npm install -g tsx@4.21.0 && tsx server.ts",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "migrate": "knex migrate:latest",
