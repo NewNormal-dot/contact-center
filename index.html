@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="mn">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,7 +7,44 @@
   </head>
   <body>
     <div id="root"></div>
+
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Agents.mn WebChat Widget -->
+    <script>
+      (function (w, d, s, o, f, js, fjs) {
+        w[o] =
+          w[o] ||
+          function () {
+            (w[o].q = w[o].q || []).push(arguments);
+          };
+
+        js = d.createElement(s);
+        fjs = d.getElementsByTagName(s)[0];
+
+        js.id = o;
+        js.src = f;
+        js.async = true;
+        js.defer = true;
+
+        fjs.parentNode.insertBefore(js, fjs);
+
+        js.onload = function () {
+          if (w.WebChat) {
+            w.WebChat.init({
+              url: 'https://chat.agents.mn/o/OeXh0hjz4uxU4moJ',
+              base_url: 'https://chat.agents.mn',
+              channel_id: 392
+            });
+          }
+        };
+      })(
+        window,
+        document,
+        'script',
+        'webchat',
+        'https://chat.agents.mn/js/webchat-widget.js'
+      );
+    </script>
   </body>
 </html>
-
