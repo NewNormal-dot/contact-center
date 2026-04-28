@@ -140,7 +140,9 @@ export default function Sidebar({
 
         <NavItem id="notifications" icon={Bell} label="Мэдэгдэл" badgeCount={unreadCount} />
         <NavItem id="training" icon={BookOpen} label="Сургалт" badgeCount={unreadTrainingCount} colorClass="bg-purple-500" />
-        <NavItem id="forecast" icon={Sparkles} label="Forecast" />
+        {(role === 'admin' || role === 'superadmin') && (
+          <NavItem id="forecast" icon={Sparkles} label="Forecast" />
+        )}
 
         {role === 'superadmin' && (
           <NavItem id="audit" icon={ShieldCheck} label="Аудит лог" />
