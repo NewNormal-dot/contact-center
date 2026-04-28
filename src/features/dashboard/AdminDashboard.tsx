@@ -347,7 +347,7 @@ export default function AdminDashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] flex font-sans transition-colors duration-300">
+    <div className="min-h-screen h-screen overflow-hidden bg-gray-50 dark:bg-[#0a0a0a] flex font-sans transition-colors duration-300">
       <Sidebar 
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
@@ -356,7 +356,7 @@ export default function AdminDashboard() {
         setIsCollapsed={setIsSidebarCollapsed} 
       />
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar">
+      <main className="flex-1 h-screen overflow-y-auto custom-scrollbar">
          <header className="sticky top-0 z-30 bg-white/80 dark:bg-gray-900/50 backdrop-blur-xl border-b border-black/5 dark:border-white/5 px-8 py-4 flex items-center justify-between transition-all">
            <div>
               <h1 className="text-lg font-black text-gray-900 dark:text-white uppercase tracking-tight">Admin Dashboard</h1>
