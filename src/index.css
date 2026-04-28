@@ -114,3 +114,10 @@ input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear {
   display: none;
 }
+
+/* Tailwind production safelist for deployed UI */
+@source inline("bg-red-500 bg-blue-500 bg-purple-500 bg-green-500 bg-yellow-500 bg-orange-500");
+@source inline("text-purple-400 text-blue-400 text-green-400 text-red-400 text-yellow-400 text-gray-400 text-white");
+@source inline("border-blue-500/20 border-blue-500/50 border-white/5 border-black/5 shadow-blue-500/20 shadow-blue-500/40");
+@source inline("from-blue-600 to-purple-600 from-blue-500/10 to-purple-500/10 hover:from-blue-700 hover:to-purple-700");
+@source inline("dark:bg-black dark:bg-gray-900 dark:bg-gray-800 dark:text-white dark:border-white/5 dark:hover:bg-gray-700");
