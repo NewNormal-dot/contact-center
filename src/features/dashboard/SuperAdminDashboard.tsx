@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
+import { LazyMedia } from '../../components/LazyMedia';
+import { DigitalClock } from '../../components/DigitalClock';
 import { 
   Users, 
   Settings, 
@@ -13,792 +14,1592 @@ import {
   CheckCircle2, 
   X,
   AlertCircle,
+  Lock,
   ShieldCheck,
+  Layers,
   UserPlus,
   FileText,
   Download,
   Bell,
   BookOpen,
+  Eye,
+  EyeOff,
+  Calendar,
+  Clock,
   Key,
+  XCircle,
+  ShieldAlert,
   ChevronRight,
   ChevronLeft,
   ChevronDown,
-  Sparkles,
-  User as UserIcon,
-  CircleAlert,
-  MoreVertical,
-  MoreHorizontal,
-  XCircle,
-  CheckCircle,
-  Sun,
-  Moon,
+  Camera
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useAuth } from '../../contexts/AuthContext';
-import { User, AuditLog, Notification, Training, WeeklyRuleTemplate } from '../../types';
-import apiClient from '../../lib/api-client';
-import Sidebar from '../../components/Sidebar';
-import SettingsModal from '../../components/SettingsModal';
+import { CSR, ActivityLog, Notification, TrainingMaterial } from '../../types';
+import { logAction } from '../../utils/logger';
+import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 
 export default function SuperAdminDashboard() {
   const navigate = useNavigate();
-  const { user: authUser, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState('users');
+  const { logout } = useAuth();
+  const [activeTab, setActiveTab] = useState('logs');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [selectedActionFilter, setSelectedActionFilter] = useState('all');
+  const [showSuccess, setShowSuccess] = useState(false);
 
   // States
-  const [users, setUsers] = useState<User[]>([]);
-  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [csrs, setCsrs] = useState<CSR[]>([]);
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [trainings, setTrainings] = useState<Training[]>([]);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [segments, setSegments] = useState<string[]>([]);
+  const [trainingMaterials, setTrainingMaterials] = useState<TrainingMaterial[]>([]);
+  const lastDataRef = useRef<string>('');
 
-  useEffect(() => {
-    if (toast) {
-      const timer = setTimeout(() => setToast(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [toast]);
-
-  // Modals
-  const [isAddingUser, setIsAddingUser] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
-  const [resetingUser, setResetingUser] = useState<User | null>(null);
-  const [deletingUser, setDeletingUser] = useState<User | null>(null);
-  const [resetPasswordValue, setResetPasswordValue] = useState('Password@123');
-  const [newUser, setNewUser] = useState<Partial<User>>({
-    name: '',
-    email: '',
-    role: 'csr',
-    employmentType: 'Full Time',
-    status: 'active'
+  const [showSeenDetails, setShowSeenDetails] = useState<Notification | TrainingMaterial | null>(null);
+  const [isAddingMaterial, setIsAddingMaterial] = useState(false);
+  const [editingMaterial, setEditingMaterial] = useState<TrainingMaterial | null>(null);
+  const [newMaterial, setNewMaterial] = useState<Partial<TrainingMaterial>>({ 
+    type: 'PDF',
+    deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
   });
-  const [noticeForm, setNoticeForm] = useState({ title: '', content: '', deadline: '' });
-  const [trainingForm, setTrainingForm] = useState({ title: '', description: '', attachmentUrl: '', attachmentName: '', deadline: '' });
+  const [isChangingMyPassword, setIsChangingMyPassword] = useState(false);
+  const [myPasswordForm, setMyPasswordForm] = useState({ old: '', new: '', confirm: '' });
+
+  const [confirmAction, setConfirmAction] = useState<{ title: string, onConfirm: () => void } | null>(null);
 
   useEffect(() => {
-    fetchData();
-  }, [activeTab]);
+    // Load initial data from local storage
+    const defaultUsers = [
+      { id: 'superadmin', name: 'Super Admin', email: 'superadmin@mobicom.mn', role: 'superadmin', status: 'online' },
+      { id: 'admin', name: 'Системийн админ', email: 'admin@mobicom.mn', role: 'admin', status: 'offline' },
+      { id: 'csr', name: 'Ажилтан', email: 'csr@mobicom.mn', role: 'csr', status: 'offline' }
+    ];
+    const initialUsers = getLocalData('users', defaultUsers);
+    
+    // Ensure defaults are saved if localStorage is empty
+    if (!localStorage.getItem('users')) {
+      setLocalData('users', defaultUsers);
+    }
+    setCsrs(initialUsers);
 
-  const fetchData = async () => {
-    setIsLoading(true);
-    try {
-      if (activeTab === 'users') {
-        const res = await apiClient.get('/users');
-        setUsers(res.data);
-      } else if (activeTab === 'audit') {
-        const res = await apiClient.get('/audit');
-        setLogs(res.data);
-      } else if (activeTab === 'notifications') {
-        const res = await apiClient.get('/broadcasts/notifications');
-        setNotifications(res.data);
-      } else if (activeTab === 'training') {
-        const res = await apiClient.get('/broadcasts/trainings');
-        setTrainings(res.data);
+    setLogs(getLocalData('activityLogs', []));
+    setNotifications(getLocalData('notifications', []));
+    
+    const defaultSegments = ['Postpaid', 'Prepaid', 'Hybrid', 'Corporate'];
+    const initialSegments = getLocalData('segments', defaultSegments);
+    if (!localStorage.getItem('segments')) {
+      setLocalData('segments', defaultSegments);
+    }
+    setSegments(initialSegments);
+    
+    setTrainingMaterials(getLocalData('trainingMaterials', []));
+
+    // Polling for "real-time" feel in test mode
+    const interval = setInterval(() => {
+      const newUsers = getLocalData('users', []);
+      const newLogs = getLocalData('activityLogs', []);
+      const newNotifs = getLocalData('notifications', []);
+      const newSegs = getLocalData('segments', []);
+      const newMaterials = getLocalData('trainingMaterials', []);
+
+      const dataHash = JSON.stringify({
+        newUsers,
+        newLogs,
+        newNotifs,
+        newSegs,
+        newMaterials
+      });
+
+      if (dataHash === lastDataRef.current) return;
+      lastDataRef.current = dataHash;
+
+      const deduplicateSeenBy = (items: any[]) => {
+        return items.map(item => ({
+          ...item,
+          seenBy: item.seenBy ? Array.from(new Map(item.seenBy.map((s: any) => [s.userId, s])).values()) : []
+        }));
+      };
+
+      setCsrs(newUsers);
+      setLogs(newLogs);
+      setNotifications(deduplicateSeenBy(newNotifs));
+      setSegments(newSegs);
+      setTrainingMaterials(deduplicateSeenBy(newMaterials));
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const [editingUser, setEditingUser] = useState<CSR | null>(null);
+  const [isAddingUser, setIsAddingUser] = useState(false);
+  const [newUser, setNewUser] = useState<Partial<CSR>>({
+    role: 'csr',
+    lineType: segments[0] || 'Postpaid',
+    status: 'offline',
+    photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
+  });
+  const [selectedMaterial, setSelectedMaterial] = useState<TrainingMaterial | null>(null);
+  const [newNotification, setNewNotification] = useState<Partial<Notification>>({
+    type: 'general',
+    deadline: new Date(Date.now() + 86400000).toISOString().slice(0, 16)
+  });
+  const [isAddingNotification, setIsAddingNotification] = useState(false);
+
+  const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => s.userId === 'superadmin')).length;
+  const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === 'superadmin')).length;
+
+  const markMaterialAsRead = (materialId: string) => {
+    const material = trainingMaterials.find(m => m.id === materialId);
+    if (material) {
+      const alreadySeen = material.seenBy?.some(s => s.userId === 'superadmin');
+      if (!alreadySeen) {
+        const newSeenBy = [...(material.seenBy || []), {
+          userId: 'superadmin',
+          userName: 'Super Admin',
+          seenAt: new Date().toISOString()
+        }];
+        updateLocalItem('trainingMaterials', materialId, { seenBy: newSeenBy });
+        logAction('Material Viewed', `Viewed training material: ${material.title}`);
       }
-    } catch (err) {
-      console.error('Fetch error:', err);
-    } finally {
-      setIsLoading(false);
+    }
+  };
+
+  const markNotificationAsRead = (notifId: string) => {
+    const notification = notifications.find(n => n.id === notifId);
+    if (notification) {
+      const alreadySeen = notification.seenBy?.some(s => s.userId === 'superadmin');
+      if (!alreadySeen) {
+        const newSeenBy = [...(notification.seenBy || []), {
+          userId: 'superadmin',
+          userName: 'Super Admin',
+          seenAt: new Date().toISOString()
+        }];
+        updateLocalItem('notifications', notifId, { seenBy: newSeenBy });
+        logAction('Notification Viewed', `Viewed notification: ${notification.title}`);
+      }
+    }
+  };
+
+  const triggerSuccess = () => {
+    setShowSuccess(true);
+    setTimeout(() => setShowSuccess(false), 3000);
+  };
+
+  const generateRandomPassword = (length = 10) => {
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+";
+    let retVal = "";
+    for (let i = 0, n = charset.length; i < length; ++i) {
+      retVal += charset.charAt(Math.floor(Math.random() * n));
+    }
+    return retVal;
+  };
+
+  // Handlers
+  const handleMyPasswordChange = (e: React.FormEvent) => {
+    e.preventDefault();
+    const profile = JSON.parse(localStorage.getItem('test_profile') || '{}');
+    if (!profile.id) return;
+
+    if (myPasswordForm.new !== myPasswordForm.confirm) {
+      alert('Шинэ нууц үгнүүд зөрүүтэй байна!');
+      return;
+    }
+
+    if (myPasswordForm.new.length < 6) {
+      alert('Шинэ нууц үг хамгийн багадаа 6 тэмдэгт байх ёстой!');
+      return;
+    }
+
+    const users = getLocalData('users', []);
+    const currentUserIndex = users.findIndex((u: any) => u.id === profile.id);
+
+    if (currentUserIndex === -1) {
+      alert('Хэрэглэгч олдсонгүй!');
+      return;
+    }
+
+    const currentUser = users[currentUserIndex];
+    if (currentUser.password && currentUser.password !== myPasswordForm.old) {
+      alert('Хуучин нууц үг буруу байна!');
+      return;
+    }
+
+    // Update password
+    users[currentUserIndex].password = myPasswordForm.new;
+    setLocalData('users', users);
+    
+    // Update local profile
+    profile.password = myPasswordForm.new;
+    localStorage.setItem('test_profile', JSON.stringify(profile));
+
+    logAction('Password Changed', `Changed password for ${profile.name}`);
+    alert('Нууц үг амжилттай солигдлоо!');
+    setIsChangingMyPassword(false);
+    setMyPasswordForm({ old: '', new: '', confirm: '' });
+  };
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingUser) {
+      try {
+        updateLocalItem('users', editingUser.id, { ...editingUser });
+        logAction('User Update', `Updated user ${editingUser.name} (${editingUser.role})`);
+        setEditingUser(null);
+        triggerSuccess();
+      } catch (error) {
+        console.error('Error updating user:', error);
+        alert('Хэрэглэгч шинэчлэхэд алдаа гарлаа.');
+      }
     }
   };
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      await apiClient.post('/users', newUser);
-      setIsAddingUser(false);
-      setNewUser({ name: '', email: '', role: 'csr', employmentType: 'Full Time', status: 'active' });
-      fetchData();
-      alert('Хэрэглэгч амжилттай үүсгэгдлээ. Анхны нууц үг: Password@123');
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Алдаа гарлаа');
+    if (newUser.name && newUser.role && newUser.lineType) {
+      // Check if email already exists
+      if (newUser.email && csrs.some(u => u.email?.toLowerCase() === newUser.email?.toLowerCase())) {
+        alert('Энэ и-мэйл хаяг аль хэдийн бүртгэгдсэн байна!');
+        return;
+      }
+
+      const randomPassword = generateRandomPassword();
+      const userId = Math.random().toString(36).substr(2, 9);
+      const user: CSR = {
+        id: userId,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role as any,
+        lineType: newUser.lineType,
+        status: 'offline',
+        photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUser.name}`,
+        password: randomPassword
+      };
+      
+      try {
+        addLocalItem('users', user);
+        logAction('User Creation', `Created new user: ${user.name} (${user.role}). Password sent to ${user.email}`);
+        
+        // Simulate sending email
+        console.log(`Sending email to ${user.email} with password: ${randomPassword}`);
+        alert(`Хэрэглэгч амжилттай үүсгэгдлээ. Нууц үг (${randomPassword}) ${user.email} хаяг руу илгээгдлээ.`);
+
+        setIsAddingUser(false);
+        setNewUser({
+          role: 'csr',
+          lineType: segments[0] || 'Postpaid',
+          status: 'offline',
+          photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
+        });
+        triggerSuccess();
+      } catch (error) {
+        console.error('Error adding user:', error);
+        alert('Хэрэглэгч нэмэхэд алдаа гарлаа.');
+      }
     }
   };
 
-  const handleUpdateStatus = async (userId: string, status: 'active' | 'inactive') => {
-    try {
-      await apiClient.put(`/users/${userId}`, { status });
-      fetchData();
-    } catch (err) {
-      alert('Алдаа гарлаа');
-    }
+  const requestConfirmation = (title: string, onConfirm: () => void) => {
+    setConfirmAction({ title, onConfirm });
   };
 
-  const handleUpdateUser = async (e: React.FormEvent) => {
+  const handleDeleteUser = (userId: string) => {
+    const user = csrs.find(u => u.id === userId);
+    if (!user) return;
+
+    requestConfirmation(`'${user.name}' ажилтныг устгахдаа итгэлтэй байна уу?`, () => {
+      try {
+        const updated = deleteLocalItem('users', userId);
+        setCsrs(updated);
+        logAction('User Deleted', `Deleted user: ${user.name} (${user.role})`);
+        triggerSuccess();
+      } catch (error) {
+        console.error('Error deleting user:', error);
+        alert('Хэрэглэгч устгахад алдаа гарлаа.');
+      }
+    });
+  };
+
+  const handleBulkUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const bstr = evt.target?.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const data = XLSX.utils.sheet_to_json(ws) as any[];
+
+      const newUsers: CSR[] = [];
+      let duplicates = 0;
+
+      data.forEach(row => {
+        const email = row['И-мэйл'] || row['Email'] || '';
+        if (email && csrs.some(u => u.email?.toLowerCase() === email.toLowerCase())) {
+          duplicates++;
+          return;
+        }
+
+        const randomPassword = generateRandomPassword();
+        newUsers.push({
+          id: Math.random().toString(36).substr(2, 9),
+          name: row['Нэр'] || row['Name'] || 'Unknown',
+          email: email,
+          role: (row['Эрх'] || row['Role'] || 'csr').toLowerCase() as any,
+          lineType: row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid',
+          status: 'offline',
+          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${row['Нэр'] || row['Name'] || Math.random()}`,
+          password: row['Нууц үг'] || row['Password'] || randomPassword
+        });
+      });
+
+      if (newUsers.length > 0) {
+        try {
+          const existingUsers = getLocalData('users', []);
+          setLocalData('users', [...existingUsers, ...newUsers]);
+          
+          logAction('Bulk User Creation', `Uploaded ${newUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
+          alert(`${newUsers.length} хэрэглэгч амжилттай нэмэгдлээ. ${duplicates} давхардсан и-мэйл алгасагдлаа.`);
+          triggerSuccess();
+        } catch (err) {
+          console.error('Error in bulk upload:', err);
+          alert('Олон хэрэглэгч нэмэхэд алдаа гарлаа.');
+        }
+      } else if (duplicates > 0) {
+        alert(`Бүх хэрэглэгчид аль хэдийн бүртгэгдсэн байна (${duplicates} давхардал).`);
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const handleAddMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingUser) return;
-    try {
-      await apiClient.put(`/users/${editingUser.id}`, editingUser);
-      setEditingUser(null);
-      fetchData();
-      setToast({ message: 'Хэрэглэгчийн мэдээлэл шинэчлэгдлээ', type: 'success' });
-    } catch (err: any) {
-      setToast({ message: err.response?.data?.error || 'Алдаа гарлаа', type: 'error' });
+    if (newMaterial.title && newMaterial.type) {
+      if (editingMaterial) {
+        // Update existing
+        const updates = {
+          title: newMaterial.title!,
+          description: newMaterial.description || '',
+          type: newMaterial.type as any,
+          url: newMaterial.url || editingMaterial.url,
+          thumbnailUrl: newMaterial.thumbnailUrl || editingMaterial.thumbnailUrl,
+          deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
+          seenBy: []
+        };
+        updateLocalItem('trainingMaterials', editingMaterial.id, updates);
+        logAction('Material Updated', `Updated training material: ${newMaterial.title}`);
+        setEditingMaterial(null);
+      } else {
+        // Add new
+        const material: TrainingMaterial = {
+          id: Math.random().toString(36).substr(2, 9),
+          title: newMaterial.title!,
+          description: newMaterial.description || '',
+          type: newMaterial.type as any,
+          url: newMaterial.url || '#',
+          date: new Date().toISOString().split('T')[0],
+          thumbnailUrl: newMaterial.thumbnailUrl,
+          deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
+          seenBy: []
+        };
+        addLocalItem('trainingMaterials', material);
+        
+        // Create a notification for the new training material
+        const notification: Notification = {
+          id: Math.random().toString(36).substr(2, 9),
+          title: 'Шинэ сургалт: ' + material.title,
+          content: `Шинэ сургалтын материал нэмэгдлээ. ${material.description}`,
+          deadline: material.deadline,
+          createdAt: new Date().toISOString(),
+          authorId: 'superadmin',
+          authorName: 'Super Admin',
+          type: 'training',
+          seenBy: []
+        };
+        addLocalItem('notifications', notification);
+        
+        logAction('Material Added', `Added training material: ${material.title}`);
+      }
+      setIsAddingMaterial(false);
+      setNewMaterial({ 
+        type: 'PDF',
+        deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
+      });
+      triggerSuccess();
     }
   };
 
-  const handleResetPassword = async () => {
-    if (!resetingUser) return;
-    try {
-      await apiClient.post(`/users/${resetingUser.id}/reset-password`, { password: resetPasswordValue || 'Password@123' });
-      setResetingUser(null);
-      setResetPasswordValue('Password@123');
-      setToast({ message: 'Нууц үг амжилттай шинэчлэгдлээ', type: 'success' });
-    } catch (err: any) {
-      setToast({ message: err.response?.data?.error || 'Алдаа гарлаа', type: 'error' });
-    }
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const base64 = evt.target?.result as string;
+      let type: 'PDF' | 'Video' | 'Image' | 'Link' = 'Link';
+      
+      if (file.type.startsWith('image/')) type = 'Image';
+      else if (file.type.startsWith('video/')) type = 'Video';
+      else if (file.type === 'application/pdf') type = 'PDF';
+
+      setNewMaterial(prev => ({
+        ...prev,
+        url: base64,
+        type,
+        title: prev.title || file.name.split('.')[0],
+        description: prev.description || `Файл: ${file.name}`
+      }));
+    };
+    reader.readAsDataURL(file);
   };
 
-  const handleDeleteUser = async () => {
-    if (!deletingUser) return;
-    
-    try {
-      await apiClient.delete(`/users/${deletingUser.id}`);
-      fetchData();
-      setDeletingUser(null);
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Алдаа гарлаа');
-    }
+  const handleResetUserPassword = (user: CSR) => {
+    const newPass = Math.random().toString(36).substr(2, 8);
+    updateLocalItem('users', user.id, { password: newPass });
+    logAction('Password Reset', `Reset password for ${user.name}. New password sent to ${user.email}`);
+    alert(`Шинэ нууц үг ${user.email} хаяг руу илгээгдлээ: ${newPass}`);
+    triggerSuccess();
   };
 
-  const checkDeletePermission = (user: User) => {
-    const isRootUser = 
-      authUser?.email?.toLowerCase() === 'enkhtur.a@mobicom.mn' || 
-      authUser?.email?.toLowerCase() === 'enkhtur040607@gmail.com';
-    
-    if (isRootUser) return true;
-    
-    if (authUser?.role === 'admin' && user.role !== 'csr') {
-      alert('Та зөвхөн ажилтан устгах эрхтэй');
-      return false;
-    }
-    if (authUser?.role === 'superadmin' && user.role === 'superadmin') {
-      alert('Та өөр супер админыг устгах эрхгүй');
-      return false;
-    }
-    if (authUser?.id === user.id) {
-      alert('Өөрийгөө устгах боломжгүй');
-      return false;
-    }
-    return true;
-  };
-
-
-
-  const handleAddNotification = async (e: React.FormEvent) => {
+  const handleChangeMyPassword = (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      await apiClient.post('/broadcasts/notifications', noticeForm);
-      setNoticeForm({ title: '', content: '', deadline: '' });
-      fetchData();
-      setToast({ message: 'Мэдэгдэл үүсгэгдлээ', type: 'success' });
-    } catch (err: any) {
-      setToast({ message: err.response?.data?.error || 'Мэдэгдэл үүсгэхэд алдаа гарлаа', type: 'error' });
+    if (myPasswordForm.new !== myPasswordForm.confirm) {
+      alert('Нууц үг зөрүүтэй байна!');
+      return;
     }
+    updateLocalItem('users', 'superadmin', { password: myPasswordForm.new });
+    logAction('Admin Password Change', 'Super Admin changed their own password');
+    setIsChangingMyPassword(false);
+    setMyPasswordForm({ old: '', new: '', confirm: '' });
+    triggerSuccess();
   };
 
-  const handleAddTraining = async (e: React.FormEvent) => {
+  const handleSendNotification = (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      await apiClient.post('/broadcasts/trainings', trainingForm);
-      setTrainingForm({ title: '', description: '', attachmentUrl: '', attachmentName: '', deadline: '' });
-      fetchData();
-      setToast({ message: 'Сургалт үүсгэгдлээ', type: 'success' });
-    } catch (err: any) {
-      setToast({ message: err.response?.data?.error || 'Сургалт үүсгэхэд алдаа гарлаа', type: 'error' });
+    if (newNotification.title && newNotification.content) {
+      const notification: Notification = {
+        id: Math.random().toString(36).substr(2, 9),
+        title: newNotification.title,
+        content: newNotification.content,
+        deadline: newNotification.deadline || '',
+        createdAt: new Date().toISOString(),
+        authorId: 'superadmin',
+        authorName: 'Super Admin',
+        type: newNotification.type as any,
+        seenBy: []
+      };
+      addLocalItem('notifications', notification);
+      logAction('Notification Sent', `Sent ${notification.type} notification: ${notification.title}`);
+      setIsAddingNotification(false);
+      setNewNotification({ type: 'general', deadline: new Date(Date.now() + 86400000).toISOString().split('T')[0] });
+      triggerSuccess();
     }
   };
 
-  const handleDeleteBroadcast = async (type: 'notifications' | 'trainings', id: string) => {
-    try {
-      await apiClient.delete(`/broadcasts/${type}/${id}`);
-      fetchData();
-      setToast({ message: 'Устгагдлаа', type: 'success' });
-    } catch (err: any) {
-      setToast({ message: err.response?.data?.error || 'Устгахад алдаа гарлаа', type: 'error' });
+  const exportToExcel = () => {
+    const data = csrs.map(u => ({
+      'ID': u.id,
+      'Нэр': u.name,
+      'Email': u.email || 'N/A',
+      'Сегмент': u.lineType,
+      'Эрх': u.role,
+      'Төлөв': u.status,
+      'Нууц үг': u.password || 'N/A'
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Users");
+    XLSX.writeFile(wb, "system_users_data.xlsx");
+    logAction('Data Export', 'Exported user data to Excel');
+  };
+
+  const exportLogsToExcel = () => {
+    const data = logs.map(l => ({
+      'Цаг': new Date(l.timestamp).toLocaleString(),
+      'Хэрэглэгч': l.userName,
+      'Эрх': l.userRole,
+      'Үйлдэл': l.action,
+      'Дэлгэрэнгүй': l.details
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Activity Logs");
+    XLSX.writeFile(wb, "activity_logs.xlsx");
+    logAction('Log Export', 'Exported activity logs to Excel');
+  };
+
+  const exportNotificationSeenToExcel = (item: Notification | TrainingMaterial) => {
+    const data = csrs.map(u => {
+      const seen = item.seenBy.find(s => s.userId === u.id);
+      return {
+        'Ажилтны нэр': u.name,
+        'Сегмент': u.lineType,
+        'Эрх': u.role,
+        'Үзсэн эсэх': seen ? 'Тийм' : 'Үгүй',
+        'Үзсэн хугацаа': seen ? new Date(seen.seenAt).toLocaleString() : '-',
+        'Хугацаа/Огноо': (item as any).deadline || (item as any).date
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Seen Status");
+    XLSX.writeFile(wb, `${item.title}_seen_status.xlsx`);
+    logAction('Export Seen Status', `Exported seen status for: ${item.title}`);
+  };
+
+  const handleUploadTraining = () => {
+    const title = prompt('Сургалтын материалын нэр:');
+    if (title) {
+      const newMaterial = {
+        id: Math.random().toString(36).substr(2, 9),
+        title,
+        type: 'PDF',
+        date: new Date().toISOString().split('T')[0]
+      };
+      setTrainingMaterials(prev => [newMaterial, ...prev]);
+      logAction('Training Upload', `Uploaded training material: ${title}`);
+      triggerSuccess();
     }
   };
 
-  const renderUsers = () => {
-    const isRootUser = 
-      authUser?.email?.toLowerCase() === 'enkhtur.a@mobicom.mn' || 
-      authUser?.email?.toLowerCase() === 'enkhtur040607@gmail.com';
+  const handleLogout = () => {
+    try {
+      logout();
+      navigate('/');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
 
-    const filteredUsers = users.filter(u => 
-      u.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      u.email.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+  const getActionCategory = (action: string) => {
+    const userActions = ['User Creation', 'User Update', 'Bulk User Creation', 'Password Reset', 'Admin Password Change', 'CSR Updated', 'CSR Added', 'Bulk CSR Added', 'Bulk CSR Deleted', 'Bulk CSR Moved'];
+    const contentActions = ['Material Added', 'Material Updated', 'Training Upload', 'Notification Sent', 'Notification Sent (Admin)'];
+    const systemActions = ['Data Export', 'Log Export', 'Export Seen Status', 'Material Viewed', 'Notification Viewed', 'Notification Read'];
+    const scheduleActions = ['Vacation Approved', 'Vacation Rejected', 'Shift Added', 'Shift Deleted', 'Shift Updated', 'Segment Added', 'Segment Updated', 'Segment Deleted'];
 
-    const categories = [
-      { id: 'superadmin', title: 'Super Admins', color: 'text-purple-400', icon: ShieldCheck },
-      { id: 'admin', title: 'Admins', color: 'text-blue-400', icon: ShieldCheck },
-      { id: 'csr', title: 'Ажилтнууд (CSR)', color: 'text-green-400', icon: Users }
-    ];
+    if (userActions.includes(action)) return { label: 'Хэрэглэгч', color: 'text-purple-400 bg-purple-500/10 border-purple-500/20' };
+    if (contentActions.includes(action)) return { label: 'Агуулга', color: 'text-green-400 bg-green-500/10 border-green-500/20' };
+    if (systemActions.includes(action)) return { label: 'Систем', color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' };
+    if (scheduleActions.includes(action)) return { label: 'Хуваарь', color: 'text-orange-400 bg-orange-500/10 border-orange-500/20' };
+    return { label: 'Бусад', color: 'text-gray-400 bg-gray-500/10 border-gray-500/20' };
+  };
 
-    const renderUserCard = (user: User) => (
-      <div key={user.id} className="bg-white dark:bg-gray-900/60 backdrop-blur-md border border-black/5 dark:border-white/5 rounded-2xl p-6 hover:border-blue-500/30 transition-all group shadow-sm shadow-black/5 dark:shadow-none">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full border-2 border-gray-100 dark:border-gray-800 overflow-hidden">
-               <img src={user.photoUrl || `https://ui-avatars.com/api/?name=${user.name}&background=random`} alt={user.name} className="w-full h-full object-cover" />
-            </div>
-            <div>
-              <h4 className="font-bold text-gray-900 dark:text-white group-hover:text-blue-500 transition-colors uppercase tracking-tight">{user.name}</h4>
-              <p className="text-[10px] text-gray-400 dark:text-gray-500 font-bold">{user.email}</p>
+  const renderLogs = () => {
+    const actionTypes = Array.from(new Set(logs.map(l => l.action))).sort();
+    const filteredLogs = logs.filter(l => {
+      const matchesSearch = l.userName.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                           l.action.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           l.details.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesAction = selectedActionFilter === 'all' || l.action === selectedActionFilter;
+      return matchesSearch && matchesAction;
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <h2 className="text-xl sm:text-2xl font-black text-white">Үйлдэлүүдийн бүртгэл</h2>
+            <div className="flex bg-gray-900/50 border border-gray-800 p-1 rounded-xl">
+              <select 
+                value={selectedActionFilter}
+                onChange={(e) => setSelectedActionFilter(e.target.value)}
+                className="bg-transparent text-[10px] font-bold text-gray-400 px-2 py-1 focus:outline-none cursor-pointer"
+              >
+                <option value="all" className="bg-gray-900">Бүх үйлдэл</option>
+                {actionTypes.map(type => (
+                  <option key={type} value={type} className="bg-gray-900">{type}</option>
+                ))}
+              </select>
             </div>
           </div>
-          <div className="relative">
-            <button 
-              onClick={() => setActiveMenuId(activeMenuId === user.id ? null : user.id)}
-              className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg hover:scale-110 active:scale-95 transition-all z-10"
-            >
-              <ChevronDown size={16} className={`transition-transform duration-300 ${activeMenuId === user.id ? 'rotate-180' : ''}`} />
-            </button>
+          <button 
+            onClick={exportLogsToExcel}
+            className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-lg shadow-green-900/20"
+          >
+            <Download size={16} />
+            Excel Татах
+          </button>
+        </div>
 
-            <AnimatePresence>
-              {activeMenuId === user.id && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setActiveMenuId(null)} />
-                  <motion.div 
-                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                    className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-900 border border-black/10 dark:border-white/10 rounded-xl shadow-2xl p-1 z-50 overflow-hidden"
-                  >
-                    <div className="px-3 py-2 border-b border-black/5 dark:border-white/5 mb-1">
-                      <p className="text-[8px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">Үйлдэл</p>
-                    </div>
-                    <button 
-                      onClick={() => { handleUpdateStatus(user.id, user.status === 'active' ? 'inactive' : 'active'); setActiveMenuId(null); }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-[10px] font-bold rounded-lg transition-colors border border-transparent ${
-                        user.status === 'active' 
-                          ? 'text-orange-400 hover:bg-orange-500/10 hover:border-orange-500/20' 
-                          : 'text-green-400 hover:bg-green-500/10 hover:border-green-500/20'
-                      }`}
-                    >
-                      {user.status === 'active' ? <XCircle size={12} /> : <CheckCircle size={12} />}
-                      {user.status === 'active' ? 'Идэвхгүй болгох' : 'Идэвхжүүлэх'}
-                    </button>
-                    <button 
-                      onClick={() => { 
-                        if (checkDeletePermission(user)) {
-                          setDeletingUser(user);
-                        }
-                        setActiveMenuId(null); 
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-[10px] font-bold text-red-500 hover:bg-red-500/10 rounded-lg transition-colors border border-transparent hover:border-red-500/20"
-                    >
-                      <Trash2 size={12} /> Устгах
-                    </button>
-                  </motion.div>
-                </>
-              )}
-            </AnimatePresence>
+        <div className="bg-gray-900/50 border border-gray-800 rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-800/50 text-gray-400 text-[10px] font-black uppercase tracking-widest">
+                  <th className="px-6 py-4">Цаг хугацаа</th>
+                  <th className="px-6 py-4">Хэрэглэгч</th>
+                  <th className="px-6 py-4">Ангилал</th>
+                  <th className="px-6 py-4">Үйлдэл</th>
+                  <th className="px-6 py-4">Дэлгэрэнгүй</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-800">
+                {filteredLogs.map(log => {
+                  const category = getActionCategory(log.action);
+                  return (
+                    <tr key={log.id} className="hover:bg-gray-800/30 transition-colors group">
+                      <td className="px-6 py-4 text-xs text-gray-500 font-medium">
+                        {new Date(log.timestamp).toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col">
+                          <span className="font-bold text-gray-200 text-sm">{log.userName}</span>
+                          <span className="text-[9px] text-gray-500 font-black uppercase tracking-tighter">{log.userRole}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase border ${category.color}`}>
+                          {category.label}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="text-xs font-bold text-blue-400 group-hover:text-blue-300 transition-colors">
+                          {log.action}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-xs text-gray-400 max-w-xs truncate" title={log.details}>
+                        {log.details}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredLogs.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-20 text-center text-gray-600 font-bold italic">
+                      Илэрц олдсонгүй
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 text-[10px] mb-4">
-           <div className="bg-gray-50 dark:bg-gray-800/20 p-2 rounded-lg border border-black/5 dark:border-white/5 border-dashed">
-              <p className="text-[8px] text-gray-400 dark:text-gray-500 font-bold mb-1 uppercase tracking-tighter">Төлөв</p>
-              <p className={`font-bold ${user.status === 'active' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                {user.status === 'active' ? 'Идэвхтэй' : 'Идэвхгүй'}
-              </p>
-           </div>
-           <div className="bg-gray-50 dark:bg-gray-800/20 p-2 rounded-lg border border-black/5 dark:border-white/5 border-dashed">
-              <p className="text-[8px] text-gray-400 dark:text-gray-500 font-bold mb-1 uppercase tracking-tighter">Төрөл</p>
-              <p className="font-bold text-gray-500 dark:text-gray-400">{user.employmentType}</p>
-           </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 relative z-10">
-           <button 
-            onClick={() => setEditingUser(user)}
-            className="bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-900 dark:text-white py-2.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-2 border border-black/5 dark:border-white/5 hover:border-blue-500/30 shadow-sm"
-           >
-             <Edit2 size={12} /> Засах
-           </button>
-           <button 
-            onClick={() => setResetingUser(user)}
-            className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-blue-400 py-2.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-2 border border-blue-500/20 shadow-sm"
-           >
-             <Key size={12} /> Нууц үг
-           </button>
         </div>
       </div>
     );
+  };
 
-    return (
-    <div className="space-y-10">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div>
-           <h2 className="text-3xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Хэрэглэгчид</h2>
-           <p className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase tracking-widest mt-1">Нийт {users.length} хэрэглэгч бүртгэлтэй байна</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="relative group">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors" size={16} />
-            <input 
-              type="text"
-              placeholder="Хайх..."
-              className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-xs text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all w-64 shadow-sm shadow-black/5 dark:shadow-none"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
+  const renderUsers = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-black text-white">Хэрэглэгчдийн удирдлага</h2>
+        <div className="flex gap-3">
+          <label className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold transition-all cursor-pointer">
+            <Plus size={18} />
+            Олноор нэмэх
+            <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleBulkUpload} />
+          </label>
           <button 
             onClick={() => setIsAddingUser(true)}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black transition-all shadow-lg shadow-blue-500/20 hover:scale-105 active:scale-95 text-[10px] uppercase tracking-wider"
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
           >
-            <UserPlus size={16} /> Хэрэглэгч нэмэх
+            <UserPlus size={18} />
+            Хэрэглэгч нэмэх
+          </button>
+          <button 
+            onClick={exportToExcel}
+            className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
+          >
+            <Download size={18} />
+            Excel Татах
           </button>
         </div>
       </div>
-
-      <div className="space-y-12">
-        {categories.map(cat => {
-          const catUsers = filteredUsers.filter(u => u.role === cat.id);
-          if (catUsers.length === 0) return null;
-
-          return (
-            <div key={cat.id} className="space-y-6">
-              <div className="flex items-center gap-3 border-b border-black/5 dark:border-white/5 pb-3">
-                <cat.icon size={20} className={cat.color} />
-                <h3 className={`text-sm font-black uppercase tracking-[0.2em] ${cat.color}`}>{cat.title}</h3>
-                <span className="bg-gray-100 dark:bg-white/5 text-[10px] px-3 py-1 rounded-full text-gray-400 dark:text-gray-500 font-black">{catUsers.length}</span>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {csrs.map(user => (
+          <div key={user.id} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl space-y-4 hover:border-blue-500/30 transition-all">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <img src={user.photoUrl} alt={user.name} className="w-12 h-12 rounded-full border-2 border-gray-800" />
+                <div>
+                  <h4 className="font-bold text-white">{user.name}</h4>
+                  <p className="text-xs text-gray-500">{user.email || 'И-мэйл байхгүй'}</p>
+                  <p className="text-[10px] text-blue-500 font-black uppercase mt-0.5">{user.lineType}</p>
+                </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {catUsers.map(user => renderUserCard(user))}
-              </div>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                user.role === 'superadmin' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
+                user.role === 'admin' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                'bg-gray-500/10 text-gray-400 border border-gray-500/20'
+              }`}>
+                {user.role}
+              </span>
             </div>
-          );
-        })}
-      </div>
-        <AnimatePresence>
-          {/* Add User Modal */}
-        {isAddingUser && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-md"
-              onClick={() => setIsAddingUser(false)}
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-md bg-white dark:bg-[#0d0d0d] border border-black/10 dark:border-white/10 rounded-2xl p-8 shadow-2xl"
-            >
-              <h3 className="text-2xl font-black text-gray-900 dark:text-white mb-6 uppercase tracking-tight">Шинэ хэрэглэгч бүртгэх</h3>
-              <form onSubmit={handleAddUser} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">Нэр</label>
-                  <input 
-                    type="text" required
-                    className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                    value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">И-мэйл</label>
-                  <input 
-                    type="email" required
-                    className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                    value={newUser.email || ''} onChange={e => setNewUser({...newUser, email: e.target.value})}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">Эрх</label>
-                    <select 
-                      className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                      value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as any})}
-                    >
-                      <option value="csr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">CSR</option>
-                      <option value="admin" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Admin</option>
-                      <option value="superadmin" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Superadmin</option>
-                    </select>
-                  </div>
-                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">Төрөл</label>
-                    <select 
-                      className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                      value={newUser.employmentType} onChange={e => setNewUser({...newUser, employmentType: e.target.value as any})}
-                    >
-                      <option value="Full Time" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Full Time</option>
-                      <option value="Part Time" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Part Time</option>
-                    </select>
-                  </div>
-                </div>
+            
+            <div className="pt-4 border-t border-gray-800 space-y-3">
+              <div className="flex gap-2">
                 <button 
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 rounded-xl font-black mt-4 shadow-lg shadow-blue-500/20 transition-all uppercase text-[10px] tracking-[0.2em]"
+                  onClick={() => setEditingUser(user)}
+                  className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2"
                 >
-                  Хадгалах
+                  <Edit2 size={14} />
+                  Засах
                 </button>
-              </form>
-            </motion.div>
-          </div>
-        )}
-
-          {resetingUser && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-              <motion.div 
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="absolute inset-0 bg-black/60 backdrop-blur-md"
-                onClick={() => setResetingUser(null)}
-              />
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-                className="relative w-full max-w-sm bg-white dark:bg-[#0d0d0d] border border-black/10 dark:border-white/10 rounded-2xl p-8 shadow-2xl"
-              >
-                <div className="flex items-center gap-3 text-blue-600 dark:text-blue-400 mb-4">
-                  <Key size={24} />
-                  <h3 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Нууц үг шинэчлэх</h3>
-                </div>
-                <p className="text-gray-500 dark:text-gray-400 text-[10px] mb-6">
-                  <span className="text-gray-900 dark:text-white font-bold">{resetingUser.name}</span> хэрэглэгчийн нэвтрэх шинэ нууц үгийг оруулна уу.
-                </p>
-                <div className="space-y-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1">Шинэ нууц үг</label>
-                    <input 
-                      type="text"
-                      className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                      value={resetPasswordValue}
-                      onChange={e => setResetPasswordValue(e.target.value)}
-                    />
-                  </div>
-                  <div className="flex gap-3 pt-2">
-                    <button 
-                      onClick={() => setResetingUser(null)}
-                      className="flex-1 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-white font-bold py-3 rounded-xl transition-colors text-sm"
-                    >
-                      Болих
-                    </button>
-                    <button 
-                      onClick={handleResetPassword}
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20 text-sm"
-                    >
-                      Шинэчлэх
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            </div>
-          )}
-
-          {deletingUser && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-              <motion.div 
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="absolute inset-0 bg-red-950/10 dark:bg-black/60 backdrop-blur-md"
-                onClick={() => setDeletingUser(null)}
-              />
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-                className="relative w-full max-w-sm bg-white dark:bg-[#0d0d0d] border border-red-500/20 rounded-2xl p-8 shadow-2xl"
-              >
-                <div className="flex items-center gap-3 text-red-500 mb-4">
-                  <AlertCircle size={24} />
-                  <h3 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Устгах уу?</h3>
-                </div>
-                <p className="text-gray-500 dark:text-gray-400 text-xs mb-6 leading-relaxed">
-                  Та <span className="text-gray-900 dark:text-white font-bold">{deletingUser.email}</span> хэрэглэгчийг устгахдаа итгэлтэй байна уу? Энэ үйлдлийг буцаах боломжгүй.
-                </p>
-                <div className="flex gap-3">
-                  <button 
-                    onClick={() => setDeletingUser(null)}
-                    className="flex-1 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-white font-bold py-3 rounded-xl transition-colors text-sm"
-                  >
-                    Болих
-                  </button>
-                  <button 
-                    onClick={handleDeleteUser}
-                    className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-red-500/20 text-sm"
-                  >
-                    Устгах
-                  </button>
-                </div>
-              </motion.div>
-            </div>
-          )}
-
-        {editingUser && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-md"
-              onClick={() => setEditingUser(null)}
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-md bg-white dark:bg-[#0d0d0d] border border-black/10 dark:border-white/10 rounded-2xl p-8 shadow-2xl"
-            >
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Засах: {editingUser.name}</h3>
-                <button onClick={() => setEditingUser(null)} className="text-gray-400 hover:text-red-500 transition-colors p-2 hover:bg-red-500/10 rounded-xl">
-                  <X size={24} />
+                <button 
+                  onClick={() => handleResetUserPassword(user)}
+                  className="flex-1 py-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 text-xs font-bold rounded-lg border border-blue-500/20 transition-all flex items-center justify-center gap-2"
+                >
+                  <Key size={14} />
+                  Reset
+                </button>
+                <button 
+                  onClick={() => handleDeleteUser(user.id)}
+                  className="p-2 bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg border border-red-500/20 transition-all"
+                  title="Устгах"
+                >
+                  <Trash2 size={14} />
                 </button>
               </div>
-              <form onSubmit={handleUpdateUser} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">Нэр</label>
-                  <input 
-                    type="text" required
-                    className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                    value={editingUser.name} onChange={e => setEditingUser({...editingUser, name: e.target.value})}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">Эрх</label>
-                    <select 
-                      className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                      value={editingUser.role} onChange={e => setEditingUser({...editingUser, role: e.target.value as any})}
-                      disabled={!isRootUser && editingUser.role === 'superadmin'}
-                    >
-                      <option value="csr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">CSR</option>
-                      <option value="admin" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Admin</option>
-                      <option value="superadmin" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Superadmin</option>
-                    </select>
-                  </div>
-                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">Төрөл</label>
-                    <select 
-                      className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                      value={editingUser.employmentType} onChange={e => setEditingUser({...editingUser, employmentType: e.target.value as any})}
-                    >
-                      <option value="Full Time" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Full Time</option>
-                      <option value="Part Time" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Part Time</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase ml-1 tracking-wider">Төлөв</label>
-                  <select 
-                    className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors text-gray-900 dark:text-white"
-                    value={editingUser.status} onChange={e => setEditingUser({...editingUser, status: e.target.value as any})}
-                  >
-                    <option value="active" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Active</option>
-                    <option value="inactive" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white">Inactive</option>
-                  </select>
-                </div>
-                <button 
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 rounded-xl font-black mt-4 shadow-lg shadow-blue-500/20 transition-all uppercase text-[10px] tracking-[0.2em]"
-                >
-                  Шинэчлэх
-                </button>
-              </form>
-            </motion.div>
+            </div>
           </div>
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.9 }}
-            className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border backdrop-blur-xl ${
-              toast.type === 'success' 
-                ? 'bg-green-500/10 border-green-500/20 text-green-500' 
-                : 'bg-red-500/10 border-red-500/20 text-red-500'
-            }`}
-          >
-            {toast.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
-            <span className="text-sm font-black uppercase tracking-wider">{toast.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-    </div>
-    );
-  };
-
-  const renderAuditLogs = () => (
-    <div className="space-y-6">
-       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Аудит бүртгэл</h2>
-        <button className="flex items-center gap-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-white px-4 py-2 rounded-xl font-bold transition-all text-sm border border-black/5 dark:border-white/5 shadow-sm">
-           <Download size={16} /> Excel татах
-        </button>
-      </div>
-
-      <div className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-             <thead>
-               <tr className="bg-gray-50 dark:bg-white/5 text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest border-b border-black/5 dark:border-white/5">
-                 <th className="px-6 py-4">Хугацаа</th>
-                 <th className="px-6 py-4">Хэрэглэгч</th>
-                 <th className="px-6 py-4">Үйлдэл</th>
-                 <th className="px-6 py-4">Объект</th>
-                 <th className="px-6 py-4">Дэлгэрэнгүй</th>
-               </tr>
-             </thead>
-             <tbody className="divide-y divide-black/5 dark:divide-white/5">
-               {logs.map(log => (
-                 <tr key={log.id} className="text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
-                    <td className="px-6 py-4 font-medium">{new Date(log.createdAt).toLocaleString()}</td>
-                    <td className="px-6 py-4 font-bold text-gray-900 dark:text-white">{log.userId}</td>
-                    <td className="px-6 py-4">
-                      <span className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 font-bold border border-blue-500/20 text-[10px] uppercase">
-                        {log.action}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-medium">{log.entityType}</td>
-                    <td className="px-6 py-4 max-w-xs truncate" title={log.details}>{log.details}</td>
-                 </tr>
-               ))}
-             </tbody>
-          </table>
-        </div>
+        ))}
       </div>
     </div>
   );
 
-
-
   const renderNotifications = () => (
-    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5 flex items-center gap-2"><Bell size={20} className="text-blue-500" /> Мэдэгдэл нэмэх</h2>
-        <form onSubmit={handleAddNotification} className="space-y-3">
-          <input required placeholder="Гарчиг" value={noticeForm.title} onChange={e => setNoticeForm({...noticeForm, title: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-          <textarea required placeholder="Агуулга" value={noticeForm.content} onChange={e => setNoticeForm({...noticeForm, content: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-          <input type="datetime-local" value={noticeForm.deadline} onChange={e => setNoticeForm({...noticeForm, deadline: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider">Хадгалах</button>
-        </form>
-      </section>
-      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5">Идэвхтэй мэдэгдлүүд</h2>
-        <div className="space-y-3">
-          {notifications.map(item => <div key={item.id} className="bg-gray-50 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-xl p-4"><div className="flex justify-between gap-3"><div><h4 className="font-black text-gray-900 dark:text-white">{item.title}</h4><p className="text-xs text-gray-500 whitespace-pre-line mt-1">{item.content}</p></div><button onClick={() => handleDeleteBroadcast('notifications', item.id)} className="text-red-500 hover:bg-red-500/10 p-2 rounded-lg"><Trash2 size={16} /></button></div></div>)}
-          {notifications.length === 0 && <p className="text-sm text-gray-400 font-bold text-center py-8">Мэдэгдэл алга</p>}
-        </div>
-      </section>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-black text-white">Мэдэгдэлүүд</h2>
+        <button 
+          onClick={() => setIsAddingNotification(true)}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/20"
+        >
+          <Plus size={20} />
+          Шинэ мэдэгдэл
+        </button>
+      </div>
+
+      <div className="space-y-4">
+        {notifications.filter(n => n.type === 'general' || n.type === 'important').map((notif, idx) => {
+          const isDeadlinePassed = notif.deadline && new Date(notif.deadline) < new Date();
+          return (
+            <div key={`notif-${notif.id}-${idx}`} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  notif.type === 'training' ? 'bg-purple-500/10 text-purple-400' : 'bg-blue-500/10 text-blue-400'
+                }`}>
+                  {notif.type === 'training' ? <BookOpen size={20} /> : <Bell size={20} />}
+                </div>
+                <div>
+                  <h4 className="font-bold text-white">{notif.title}</h4>
+                  <p className="text-xs text-gray-500">Хугацаа: {notif.deadline}</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] font-black text-gray-600 uppercase block mb-1">Уншсан байдал</span>
+                <span className="text-sm font-bold text-blue-400">{notif.seenBy.length} / {csrs.length}</span>
+              </div>
+            </div>
+            
+            <p className="text-gray-400 text-sm mb-6 line-clamp-2">{notif.content}</p>
+            
+            <div className="flex items-center justify-between pt-4 border-t border-gray-800">
+              <div className="flex -space-x-2">
+                {notif.seenBy.slice(0, 5).map((seen, idx) => (
+                  <div key={`seen-${notif.id}-${seen.userId}-${idx}`} className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400" title={seen.userName}>
+                    {seen.userName.charAt(0)}
+                  </div>
+                ))}
+                {notif.seenBy.length > 5 && (
+                  <div className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400">
+                    +{notif.seenBy.length - 5}
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => exportNotificationSeenToExcel(notif)}
+                  className="text-xs text-green-500 font-bold hover:underline flex items-center gap-1"
+                >
+                  <Download size={12} />
+                  Excel Татах
+                </button>
+                <button 
+                  onClick={() => setShowSeenDetails(notif)}
+                  className="text-xs text-blue-500 font-bold hover:underline"
+                >
+                  Дэлгэрэнгүй харах
+                </button>
+                {!notif.seenBy?.some(s => s.userId === 'superadmin') && !isDeadlinePassed && (
+                  <button 
+                    onClick={() => markNotificationAsRead(notif.id)}
+                    className="text-xs text-green-500 font-bold hover:underline flex items-center gap-1"
+                  >
+                    <CheckCircle2 size={12} />
+                    Би үзсэн
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )})}
+      </div>
     </div>
   );
 
   const renderTraining = () => (
-    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5 flex items-center gap-2"><BookOpen size={20} className="text-purple-500" /> Сургалт нэмэх</h2>
-        <form onSubmit={handleAddTraining} className="space-y-3">
-          <input required placeholder="Гарчиг" value={trainingForm.title} onChange={e => setTrainingForm({...trainingForm, title: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-          <textarea required placeholder="Тайлбар" value={trainingForm.description} onChange={e => setTrainingForm({...trainingForm, description: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-          <input placeholder="Файлын холбоос" value={trainingForm.attachmentUrl} onChange={e => setTrainingForm({...trainingForm, attachmentUrl: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-          <input type="datetime-local" value={trainingForm.deadline} onChange={e => setTrainingForm({...trainingForm, deadline: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
-          <button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider">Хадгалах</button>
-        </form>
-      </section>
-      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5">Идэвхтэй сургалтууд</h2>
-        <div className="space-y-3">
-          {trainings.map(item => <div key={item.id} className="bg-gray-50 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-xl p-4"><div className="flex justify-between gap-3"><div><h4 className="font-black text-gray-900 dark:text-white">{item.title}</h4><p className="text-xs text-gray-500 whitespace-pre-line mt-1">{item.description}</p>{item.attachmentUrl && <a href={item.attachmentUrl} target="_blank" className="text-xs text-blue-500 font-bold mt-2 inline-block">Материал нээх</a>}</div><button onClick={() => handleDeleteBroadcast('trainings', item.id)} className="text-red-500 hover:bg-red-500/10 p-2 rounded-lg"><Trash2 size={16} /></button></div></div>)}
-          {trainings.length === 0 && <p className="text-sm text-gray-400 font-bold text-center py-8">Сургалт алга</p>}
-        </div>
-      </section>
-    </div>
-  );
-
-  const renderForecast = () => (
-    <div className="flex flex-col items-center justify-center py-20 bg-gray-100 dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl border-dashed rgb-border">
-       <Sparkles size={64} className="text-blue-500 mb-6 opacity-50" />
-       <h3 className="text-2xl font-black text-gray-900 dark:text-white mb-2">Дуудлагын Forecast</h3>
-       <p className="text-gray-500 max-w-md text-center text-sm font-medium">Энэ модуль нь дуудлагын урсгал болон ажилтны хэрэгцээг тооцоолох зориулалттай бөгөөд одоогоор хөгжүүлэлтийн шатанд байна.</p>
-       <div className="mt-8 flex gap-4">
-          <button className="bg-gray-200 dark:bg-gray-800 px-6 py-3 rounded-xl text-gray-400 font-bold text-sm cursor-not-allowed">Excel загвар татах</button>
-          <button className="bg-gray-200 dark:bg-gray-800 px-6 py-3 rounded-xl text-gray-400 font-bold text-sm cursor-not-allowed">Импорт хийх</button>
-       </div>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-black text-white">Сургалтын материалууд</h2>
+        <button 
+          onClick={() => {
+            setEditingMaterial(null);
+            setNewMaterial({ 
+              type: 'PDF',
+              deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
+            });
+            setIsAddingMaterial(true);
+          }}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
+        >
+          <Plus size={18} />
+          Материал нэмэх
+        </button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {trainingMaterials.map((material, idx) => (
+          <div 
+            key={`training-${material.id}-${idx}`} 
+            onClick={() => setSelectedMaterial(material)}
+            className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl space-y-4 hover:border-blue-500/30 transition-all group cursor-pointer"
+          >
+            <div className="aspect-video bg-gray-800 rounded-xl overflow-hidden relative border border-gray-700/50">
+              {material.thumbnailUrl ? (
+                <LazyMedia 
+                  src={material.thumbnailUrl} 
+                  alt={material.title} 
+                  type="Image" 
+                  className="w-full h-full" 
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 bg-gray-800/50">
+                  {material.type === 'Video' ? <Clock size={40} /> : material.type === 'PDF' ? <FileText size={40} /> : <BookOpen size={40} />}
+                  <span className="text-[10px] font-black uppercase mt-2">Зураггүй</span>
+                </div>
+              )}
+              <div className="absolute top-3 right-3 px-2 py-1 bg-black/60 backdrop-blur-md rounded text-[10px] font-black text-white uppercase border border-white/10">
+                {material.type}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <h4 className="font-bold text-white text-lg group-hover:text-blue-400 transition-colors">{material.title}</h4>
+                <div className="text-right">
+                  <span className="text-[10px] font-black text-blue-400">{material.seenBy?.length || 0} / {csrs.length}</span>
+                </div>
+              </div>
+              <p className="text-sm text-gray-500 mt-1 line-clamp-2">{material.description}</p>
+              <div className="flex items-center justify-between mt-3">
+                <div className="flex flex-col gap-1">
+                  <p className="text-[10px] text-gray-600 font-bold uppercase">{material.date}</p>
+                  {material.deadline && (
+                    <p className={`text-[10px] font-bold uppercase ${new Date(material.deadline) < new Date() ? 'text-red-500' : 'text-gray-500'}`}>
+                      Хугацаа: {material.deadline}
+                    </p>
+                  )}
+                </div>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowSeenDetails(material);
+                  }}
+                  className="text-[10px] text-blue-500 font-bold hover:underline"
+                >
+                  Дэлгэрэнгүй
+                </button>
+              </div>
+            </div>
+            <div className="pt-4 border-t border-gray-800 flex gap-2">
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingMaterial(material);
+                  setNewMaterial({
+                    title: material.title,
+                    description: material.description,
+                    type: material.type,
+                    url: material.url,
+                    thumbnailUrl: material.thumbnailUrl,
+                    deadline: material.deadline
+                  });
+                  setIsAddingMaterial(true);
+                }}
+                className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg transition-all"
+              >
+                Засах
+              </button>
+              <button 
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    deleteLocalItem('trainingMaterials', material.id);
+                    logAction('Training Deleted', `Deleted material: ${material.title}`);
+                    triggerSuccess();
+                  } catch (error) {
+                    console.error('Error deleting material:', error);
+                    alert('Устгахад алдаа гарлаа.');
+                  }
+                }}
+                className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen h-screen overflow-hidden bg-gray-50 dark:bg-[#0a0a0a] flex font-sans transition-colors duration-300">
-      <Sidebar 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab} 
-        onSettingsClick={() => setIsSettingsOpen(true)}
-        isCollapsed={isSidebarCollapsed} 
-        setIsCollapsed={setIsSidebarCollapsed} 
-      />
+    <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden font-sans">
+      {/* Sidebar */}
+      <div className={`${isSidebarCollapsed ? 'w-20' : 'w-72'} bg-gray-900/50 border-r border-gray-800 flex flex-col transition-all duration-300 relative z-50`}>
+        <button 
+          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          className="absolute -right-3 top-10 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform"
+        >
+          {isSidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+        </button>
 
-      <main className="flex-1 h-screen overflow-y-auto custom-scrollbar">
-        <header className="sticky top-0 z-30 bg-white/80 dark:bg-gray-900/50 backdrop-blur-xl border-b border-black/5 dark:border-white/5 px-8 py-4 flex items-center justify-between transition-all duration-300">
-          <div className="flex items-center gap-4">
-             <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-500/30">
-                <ShieldCheck size={24} />
-             </div>
-             <div>
-                <h1 className="text-lg font-black text-gray-900 dark:text-white uppercase tracking-tight">Superadmin Dashboard</h1>
-                <p className="text-[10px] text-gray-400 dark:text-gray-500 font-bold">System Management & Audit</p>
-             </div>
-          </div>
-
-          <div className="flex items-center gap-6">
-            <div className="relative group">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors" size={16} />
-              <input 
-                type="text"
-                placeholder="Хайх..."
-                className="bg-gray-100 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-xl pl-10 pr-4 py-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all w-64 shadow-inner"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
+        <div className={isSidebarCollapsed ? 'p-4' : 'p-8'}>
+          <div className={`flex items-center gap-3 mb-8 ${isSidebarCollapsed ? 'justify-center' : ''}`}>
+            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/20 shrink-0">
+              <ShieldAlert size={24} className="text-white" />
             </div>
-            <button onClick={logout} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all" title="Гарах">
-              <LogOut size={20} />
-            </button>
+            {!isSidebarCollapsed && (
+              <div>
+                <h1 className="text-xl font-black tracking-tighter">SUPER ADMIN</h1>
+                <p className="text-[10px] text-blue-500 font-black uppercase tracking-widest">System Control</p>
+              </div>
+            )}
           </div>
-        </header>
 
-        <div className="p-8">
-           <AnimatePresence mode="wait">
-              {isLoading ? (
-                <motion.div 
-                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  className="flex items-center justify-center py-40"
-                >
-                  <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
-                </motion.div>
-              ) : (
-                <motion.div
-                  key={activeTab}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  {activeTab === 'users' && renderUsers()}
-                  {activeTab === 'audit' && renderAuditLogs()}
-                  {activeTab === 'forecast' && renderForecast()}
-                  {activeTab === 'notifications' && renderNotifications()}
-                  {activeTab === 'training' && renderTraining()}
-                </motion.div>
-              )}
-           </AnimatePresence>
+          <nav className="space-y-2">
+            {[
+              { id: 'logs', label: 'Үйлдэлүүд', icon: FileText },
+              { id: 'users', label: 'Хэрэглэгчид', icon: Users },
+              { id: 'notifications', label: 'Мэдэгдэлүүд', icon: Bell, badge: unreadCount },
+              { id: 'training', label: 'Сургалт', icon: BookOpen, badge: unreadTrainingCount },
+            ].map(item => (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-all ${
+                  activeTab === item.id 
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
+                } ${isSidebarCollapsed ? 'justify-center' : ''}`}
+                title={isSidebarCollapsed ? item.label : ''}
+              >
+                <div className="flex items-center gap-3">
+                  <item.icon size={20} />
+                  {!isSidebarCollapsed && <span>{item.label}</span>}
+                </div>
+                {!isSidebarCollapsed && item.badge !== undefined && item.badge > 0 && (
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full min-w-[20px] text-center ${
+                    item.id === 'notifications' ? 'bg-red-500 text-white' : 'bg-purple-500 text-white'
+                  }`}>
+                    {item.badge}
+                  </span>
+                )}
+                {isSidebarCollapsed && item.badge !== undefined && item.badge > 0 && (
+                  <span className={`absolute top-1 right-1 w-4 h-4 text-[8px] font-black flex items-center justify-center rounded-full border-2 border-[#0a0a0a] ${
+                    item.id === 'notifications' ? 'bg-red-500 text-white' : 'bg-purple-500 text-white'
+                  }`}>
+                    {item.badge}
+                  </span>
+                )}
+              </button>
+            ))}
+            <div className="pt-4 mt-4 border-t border-gray-800">
+            </div>
+          </nav>
         </div>
-      </main>
 
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.9 }}
-            className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border backdrop-blur-xl ${
-              toast.type === 'success' 
-                ? 'bg-green-500/10 border-green-500/20 text-green-500' 
-                : 'bg-red-500/10 border-red-500/20 text-red-500'
-            }`}
+        <div className={`mt-auto p-8 border-t border-gray-800 ${isSidebarCollapsed ? 'p-4 flex flex-col items-center gap-2' : ''}`}>
+          <button 
+            onClick={() => setIsChangingMyPassword(true)}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-gray-400 hover:bg-gray-800 transition-all mb-2 ${isSidebarCollapsed ? 'justify-center' : ''}`}
+            title={isSidebarCollapsed ? 'Нууц үг солих' : ''}
           >
-            {toast.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
-            <span className="text-sm font-black uppercase tracking-wider">{toast.message}</span>
+            <Settings size={20} />
+            {!isSidebarCollapsed && <span>Нууц үг солих</span>}
+          </button>
+          <button 
+            onClick={handleLogout}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-red-500 hover:bg-red-500/10 transition-all ${isSidebarCollapsed ? 'justify-center' : ''}`}
+            title={isSidebarCollapsed ? 'Системээс гарах' : ''}
+          >
+            <LogOut size={20} />
+            {!isSidebarCollapsed && <span>Системээс гарах</span>}
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-12">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-8 sm:mb-12">
+            <div>
+              <h2 className="text-2xl sm:text-4xl font-black text-white tracking-tight mb-2">
+                {activeTab === 'logs' ? 'Системийн бүртгэл' : 
+                 activeTab === 'users' ? 'Хэрэглэгчийн удирдлага' : 
+                 activeTab === 'notifications' ? 'Мэдэгдэл & Сургалт' : 'Тохиргоо'}
+              </h2>
+              <p className="text-xs sm:text-sm text-gray-500">Тавтай морил, Super Admin. Системийн бүх үйл ажиллагааг эндээс хянана уу.</p>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-6">
+              <DigitalClock />
+              <div className="relative w-full sm:w-72">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                <input 
+                  type="text" 
+                  placeholder="Хайх..." 
+                  className="w-full bg-gray-900/50 border border-gray-800 rounded-xl py-2.5 pl-11 pr-4 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+
+          {activeTab === 'logs' && renderLogs()}
+          {activeTab === 'users' && renderUsers()}
+          {activeTab === 'notifications' && renderNotifications()}
+          {activeTab === 'training' && renderTraining()}
+        </div>
+      </div>
+
+      {/* Add/Edit Material Modal */}
+      <AnimatePresence>
+        {isAddingMaterial && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setIsAddingMaterial(false); setEditingMaterial(null); }} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <h2 className="text-2xl font-black text-white mb-6">{editingMaterial ? 'Материал засах' : 'Сургалтын материал нэмэх'}</h2>
+              <form onSubmit={handleAddMaterial} className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Гарчиг</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newMaterial.title || ''}
+                    onChange={e => setNewMaterial(prev => ({ ...prev, title: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                    placeholder="Материалын гарчиг"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Тайлбар</label>
+                  <textarea 
+                    value={newMaterial.description || ''}
+                    onChange={e => setNewMaterial(prev => ({ ...prev, description: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 h-24 resize-none"
+                    placeholder="Материалын дэлгэрэнгүй тайлбар"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Нүүр зураг (Thumbnail)</label>
+                  <div className="relative group">
+                    <input 
+                      type="file" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            setNewMaterial(prev => ({ ...prev, thumbnailUrl: reader.result as string }));
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                      accept="image/*"
+                    />
+                    <div className="w-full bg-gray-800 border border-gray-700 rounded-xl py-4 px-4 text-center group-hover:border-blue-500/50 transition-all flex items-center justify-center gap-3">
+                      {newMaterial.thumbnailUrl ? (
+                        <div className="flex items-center gap-3">
+                          <img src={newMaterial.thumbnailUrl} className="w-10 h-10 rounded-lg object-cover border border-gray-600" alt="Thumbnail" />
+                          <p className="text-xs text-green-400 font-bold">Зураг сонгогдлоо</p>
+                        </div>
+                      ) : (
+                        <>
+                          <Camera size={20} className="text-gray-500 group-hover:text-blue-400" />
+                          <p className="text-xs text-gray-400 font-bold">Зураг оруулах (Заавал биш)</p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Файл оруулах</label>
+                  <div className="relative group">
+                    <input 
+                      type="file" 
+                      onChange={handleFileChange}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                    />
+                    <div className="w-full bg-gray-800 border-2 border-dashed border-gray-700 rounded-xl py-8 px-4 text-center group-hover:border-blue-500/50 transition-all">
+                      <Plus size={24} className="mx-auto text-gray-500 mb-2 group-hover:text-blue-400" />
+                      <p className="text-sm text-gray-400 font-bold">Файл сонгох эсвэл чирж авчирна уу</p>
+                      <p className="text-[10px] text-gray-600 mt-1 uppercase font-black">PDF, Image, Video</p>
+                    </div>
+                  </div>
+                  {newMaterial.url && newMaterial.url.startsWith('data:') && (
+                    <div className="flex items-center justify-between mt-2 px-2">
+                      <p className="text-[10px] text-green-500 font-bold flex items-center gap-1">
+                        <CheckCircle2 size={12} /> Файл амжилттай сонгогдлоо
+                      </p>
+                      <span className="text-[10px] text-gray-500 font-mono truncate max-w-[200px]">
+                        {newMaterial.description?.startsWith('Файл: ') ? newMaterial.description : 'Шинэ файл'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">URL эсвэл Зургийн URL (Заавал биш)</label>
+                  <input 
+                    type="text" 
+                    value={newMaterial.url && !newMaterial.url.startsWith('data:') ? newMaterial.url : (newMaterial.thumbnailUrl || '')}
+                    onChange={e => {
+                      if (newMaterial.type === 'Link') {
+                        setNewMaterial(prev => ({ ...prev, url: e.target.value }));
+                      } else {
+                        setNewMaterial(prev => ({ ...prev, thumbnailUrl: e.target.value }));
+                      }
+                    }}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                    placeholder="https://..."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Дуусах хугацаа (Deadline)</label>
+                  <input 
+                    type="datetime-local" 
+                    required
+                    value={newMaterial.deadline || ''}
+                    onChange={e => setNewMaterial(prev => ({ ...prev, deadline: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="pt-4 flex gap-3">
+                  <button type="button" onClick={() => { setIsAddingMaterial(false); setEditingMaterial(null); }} className="flex-1 py-3 bg-gray-800 text-white font-bold rounded-xl hover:bg-gray-700 transition-all">Цуцлах</button>
+                  <button type="submit" className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20">
+                    {editingMaterial ? 'Хадгалах' : 'Нэмэх'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+
+        {isChangingMyPassword && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsChangingMyPassword(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <h2 className="text-2xl font-black text-white mb-6">Нууц үг солих</h2>
+              <form onSubmit={handleChangeMyPassword} className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Хуучин нууц үг</label>
+                  <input 
+                    type="password" 
+                    required
+                    value={myPasswordForm.old}
+                    onChange={e => setMyPasswordForm(prev => ({ ...prev, old: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Шинэ нууц үг</label>
+                  <input 
+                    type="password" 
+                    required
+                    value={myPasswordForm.new}
+                    onChange={e => setMyPasswordForm(prev => ({ ...prev, new: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Шинэ нууц үг давтах</label>
+                  <input 
+                    type="password" 
+                    required
+                    value={myPasswordForm.confirm}
+                    onChange={e => setMyPasswordForm(prev => ({ ...prev, confirm: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="pt-4 flex gap-3">
+                  <button type="button" onClick={() => setIsChangingMyPassword(false)} className="flex-1 py-3 bg-gray-800 text-white font-bold rounded-xl hover:bg-gray-700 transition-all">Цуцлах</button>
+                  <button type="submit" className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20">Хадгалах</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Material Viewer Modal */}
+        <AnimatePresence>
+          {selectedMaterial && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedMaterial(null)} className="absolute inset-0 bg-black/90 backdrop-blur-md" />
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-5xl bg-gray-900 border border-gray-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+                <div className="p-6 border-b border-gray-800 flex items-center justify-between bg-gray-900/50 backdrop-blur-xl">
+                  <div className="flex-1">
+                    <h2 className="text-xl font-black text-white">{selectedMaterial.title}</h2>
+                    <p className="text-xs text-gray-500 mt-1">{selectedMaterial.description}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {(() => {
+                      const isDeadlinePassed = selectedMaterial.deadline && new Date(selectedMaterial.deadline) < new Date();
+                      const alreadySeen = selectedMaterial.seenBy?.some(s => s.userId === 'superadmin');
+                      
+                      if (!alreadySeen && !isDeadlinePassed) {
+                        return (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              markMaterialAsRead(selectedMaterial.id);
+                              setSelectedMaterial(null);
+                            }}
+                            className="px-6 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-green-900/20 flex items-center gap-2"
+                          >
+                            <CheckCircle2 size={18} />
+                            Би үзсэн
+                          </button>
+                        );
+                      }
+                      return null;
+                    })()}
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedMaterial(null);
+                      }} 
+                      className="p-2 text-gray-500 hover:text-white hover:bg-white/5 rounded-xl transition-all"
+                    >
+                      <X size={24} />
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="flex-1 overflow-auto bg-black flex items-center justify-center p-4">
+                  {selectedMaterial.type === 'Image' ? (
+                    <LazyMedia 
+                      src={selectedMaterial.url} 
+                      alt={selectedMaterial.title} 
+                      type="Image" 
+                      className="max-w-full max-h-full rounded-xl" 
+                      objectFit="contain"
+                    />
+                  ) : selectedMaterial.type === 'Video' ? (
+                    <LazyMedia 
+                      src={selectedMaterial.url} 
+                      type="Video" 
+                      className="max-w-full max-h-full rounded-xl" 
+                      objectFit="contain"
+                    />
+                  ) : selectedMaterial.type === 'PDF' ? (
+                    <iframe src={selectedMaterial.url} className="w-full h-full min-h-[60vh] rounded-xl border-none" title={selectedMaterial.title} />
+                  ) : (
+                    <div className="text-center space-y-6 p-12">
+                      <div className="w-20 h-20 bg-blue-600/10 rounded-3xl flex items-center justify-center mx-auto border border-blue-500/20">
+                        <BookOpen size={40} className="text-blue-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-bold text-white mb-2">Гадна холбоос</h3>
+                        <p className="text-gray-400 max-w-md mx-auto">Энэ материал нь гадны вэбсайт дээр байрлаж байна. Та доорх товчийг дарж шинэ цонхонд нээнэ үү.</p>
+                      </div>
+                      <a 
+                        href={selectedMaterial.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 px-8 py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20"
+                      >
+                        Холбоосыг нээх
+                        <ChevronDown size={20} className="-rotate-90" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {showSeenDetails && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowSeenDetails(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl flex flex-col max-h-[80vh]">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-black text-white">Үзсэн ажилтнууд</h2>
+                  <p className="text-gray-400 text-sm">{showSeenDetails.title}</p>
+                </div>
+                <button onClick={() => setShowSeenDetails(null)} className="text-gray-500 hover:text-white">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                {showSeenDetails.seenBy.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                    <AlertCircle size={48} className="mb-4 opacity-20" />
+                    <p className="font-bold">Одоогоор үзсэн хэрэглэгч байхгүй байна.</p>
+                  </div>
+                ) : (
+                  showSeenDetails.seenBy.map((seen, idx) => {
+                    const user = csrs.find(u => u.id === seen.userId);
+                    return (
+                      <div key={`seen-detail-${seen.userId}-${idx}`} className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-800">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-xs font-bold text-blue-400">
+                            {seen.userName.charAt(0)}
+                          </div>
+                          <div>
+                            <p className="font-bold text-white">{seen.userName}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-[10px] text-blue-500 uppercase font-black">
+                                {user?.role === 'superadmin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : 'CSR'}
+                              </p>
+                              <span className="w-1 h-1 bg-gray-700 rounded-full"></span>
+                              <p className="text-[10px] text-gray-500 uppercase font-black">{user?.lineType || 'N/A'}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="flex items-center gap-1.5 text-green-500 text-xs font-bold mb-0.5">
+                            <CheckCircle2 size={14} />
+                            Үзсэн
+                          </div>
+                          <p className="text-[10px] text-gray-500">{new Date(seen.seenAt).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="mt-6 pt-6 border-t border-gray-800">
+                <button 
+                  onClick={() => exportNotificationSeenToExcel(showSeenDetails)}
+                  className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold flex items-center justify-center gap-2"
+                >
+                  <Download size={20} />
+                  Excel Татах
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Success Toast */}
+      <AnimatePresence>
+        {showSuccess && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-green-600 text-white px-6 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-3 border border-green-400/30"
+          >
+            <CheckCircle2 size={20} />
+            Амжилттай!
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Change Password Modal */}
+      <AnimatePresence>
+        {isChangingMyPassword && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsChangingMyPassword(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <button onClick={() => setIsChangingMyPassword(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition-colors">
+                <X size={24} />
+              </button>
+              <h2 className="text-2xl font-black text-white mb-6">Нууц үг солих</h2>
+              <form onSubmit={handleMyPasswordChange} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1 block mb-2">Хуучин нууц үг</label>
+                  <input type="password" value={myPasswordForm.old} onChange={(e) => setMyPasswordForm({...myPasswordForm, old: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3.5 px-5 text-white focus:outline-none focus:border-blue-500 font-bold" required />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1 block mb-2">Шинэ нууц үг</label>
+                  <input type="password" value={myPasswordForm.new} onChange={(e) => setMyPasswordForm({...myPasswordForm, new: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3.5 px-5 text-white focus:outline-none focus:border-blue-500 font-bold" required />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1 block mb-2">Шинэ нууц үг давтах</label>
+                  <input type="password" value={myPasswordForm.confirm} onChange={(e) => setMyPasswordForm({...myPasswordForm, confirm: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3.5 px-5 text-white focus:outline-none focus:border-blue-500 font-bold" required />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button type="button" onClick={() => setIsChangingMyPassword(false)} className="flex-1 py-3.5 bg-gray-800 text-white rounded-xl font-bold hover:bg-gray-700 transition-all">Цуцлах</button>
+                  <button type="submit" className="flex-1 py-3.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20">Хадгалах</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit User Modal */}
+      <AnimatePresence>
+        {isAddingUser && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAddingUser(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <h2 className="text-2xl font-black text-white mb-6">Шинэ хэрэглэгч нэмэх</h2>
+              <form onSubmit={handleAddUser} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Нэр</label>
+                  <input type="text" value={newUser.name || ''} onChange={(e) => setNewUser({...newUser, name: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="Ажилтны нэр..." required />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">И-мэйл хаяг</label>
+                  <input type="email" value={newUser.email || ''} onChange={(e) => setNewUser({...newUser, email: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="example@mail.com" required />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эрх (Role)</label>
+                  <select value={newUser.role} onChange={(e) => setNewUser({...newUser, role: e.target.value as any})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                    <option value="csr">CSR</option>
+                    <option value="admin">Admin</option>
+                    <option value="superadmin">Super Admin</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
+                  <select value={newUser.lineType} onChange={(e) => setNewUser({...newUser, lineType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                    {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button type="button" onClick={() => setIsAddingUser(false)} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold">Цуцлах</button>
+                  <button type="submit" className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold">Нэмэх</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit User Modal */}
+      <AnimatePresence>
+        {editingUser && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingUser(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <h2 className="text-2xl font-black text-white mb-6">Хэрэглэгч засах</h2>
+              <form onSubmit={handleUpdateUser} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Нэр</label>
+                  <input type="text" value={editingUser.name} onChange={(e) => setEditingUser({...editingUser, name: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" />
+                </div>
+                {editingUser.role !== 'superadmin' && (
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">И-мэйл хаяг</label>
+                    <input 
+                      type="email" 
+                      value={editingUser.email || ''} 
+                      onChange={(e) => setEditingUser({...editingUser, email: e.target.value})} 
+                      className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" 
+                      placeholder="example@mail.com"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эрх (Role)</label>
+                  <select value={editingUser.role} onChange={(e) => setEditingUser({...editingUser, role: e.target.value as any})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                    <option value="csr">CSR</option>
+                    <option value="admin">Admin</option>
+                    <option value="superadmin">Super Admin</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
+                  <select value={editingUser.lineType} onChange={(e) => setEditingUser({...editingUser, lineType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                    {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button type="button" onClick={() => setEditingUser(null)} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold">Цуцлах</button>
+                  <button type="submit" className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold">Хадгалах</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Notification Modal */}
+      <AnimatePresence>
+        {isAddingNotification && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAddingNotification(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <h2 className="text-2xl font-black text-white mb-6">Шинэ мэдэгдэл илгээх</h2>
+              <form onSubmit={handleSendNotification} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Төрөл</label>
+                  <div className="flex bg-gray-800 p-1 rounded-xl">
+                    <button type="button" onClick={() => setNewNotification({...newNotification, type: 'general'})} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${newNotification.type === 'general' ? 'bg-blue-600 text-white' : 'text-gray-500'}`}>Ерөнхий</button>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Гарчиг</label>
+                  <input type="text" value={newNotification.title || ''} onChange={(e) => setNewNotification({...newNotification, title: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="Мэдэгдлийн гарчиг..." required />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Агуулга</label>
+                  <textarea value={newNotification.content || ''} onChange={(e) => setNewNotification({...newNotification, content: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 h-32 resize-none" placeholder="Мэдэгдлийн дэлгэрэнгүй агуулга..." required />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Дуусах хугацаа (Deadline)</label>
+                  <input type="datetime-local" value={newNotification.deadline} onChange={(e) => setNewNotification({...newNotification, deadline: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" required />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <button type="button" onClick={() => setIsAddingNotification(false)} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold">Цуцлах</button>
+                  <button type="submit" className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold">Илгээх</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Confirmation Modal */}
+      <AnimatePresence>
+        {confirmAction && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setConfirmAction(null)} className="absolute inset-0 bg-black/90 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-sm bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <div className="w-16 h-16 bg-red-600/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500/20">
+                <ShieldAlert size={32} className="text-red-400" />
+              </div>
+              <h2 className="text-xl font-black text-white text-center mb-2">{confirmAction.title}</h2>
+              <p className="text-gray-400 text-center text-sm mb-6">Та энэ үйлдлийг хийхдээ итгэлтэй байна уу?</p>
+              
+              <div className="flex gap-3">
+                <button onClick={() => setConfirmAction(null)} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold">Цуцлах</button>
+                <button 
+                  onClick={() => {
+                    confirmAction.onConfirm();
+                    setConfirmAction(null);
+                  }} 
+                  className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold"
+                >
+                  Тийм, устга
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

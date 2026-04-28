@@ -15,28 +15,10 @@ function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: 
   const { user, loading } = useAuth();
 
   if (loading) return <div className="min-h-screen bg-black flex items-center justify-center text-white">Уншиж байна...</div>;
-  if (!user) return <Navigate to="/" replace />;
-
-  const hasAccess = !role || user.role === role || (role === 'admin' && user.role === 'superadmin');
-  if (!hasAccess) return <Navigate to="/" replace />;
+  if (!user) return <Navigate to="/" />;
+  if (role && user.role !== role) return <Navigate to="/" />;
 
   return <>{children}</>;
-}
-
-function HomeOrLogin() {
-  const { user } = useAuth();
-
-  if (user) {
-    const redirectPath = user.role === 'superadmin'
-      ? '/superadmin'
-      : user.role === 'admin'
-      ? '/admin'
-      : '/csr';
-
-    return <Navigate to={redirectPath} replace />;
-  }
-
-  return <Login />;
 }
 
 export default function App() {
@@ -53,11 +35,10 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<HomeOrLogin />} />
+          <Route path="/" element={<Login />} />
           <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
           <Route path="/csr" element={<ProtectedRoute role="csr"><CsrDashboard /></ProtectedRoute>} />
           <Route path="/superadmin" element={<ProtectedRoute role="superadmin"><SuperAdminDashboard /></ProtectedRoute>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
