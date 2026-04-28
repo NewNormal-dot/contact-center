@@ -1,9 +1,30 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Outfit:wght@600;700;800;900&display=swap');
 @import "tailwindcss";
+@config "../tailwind.config.ts";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-outfit: "Outfit", ui-sans-serif, system-ui, sans-serif;
+}
 
 @layer base {
   html {
     font-size: 14px;
+    min-height: 100%;
+    background: #0a0a0a;
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: #0a0a0a;
+    font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  #root {
+    min-height: 100vh;
   }
   @media (min-width: 768px) {
     html {
@@ -15,6 +36,7 @@
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
+    height: 6px;
   }
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
@@ -30,67 +52,33 @@
   .rgb-border {
     position: relative;
   }
-  
   .rgb-border::before {
     content: "";
     position: absolute;
     inset: 0;
-    border-radius: 1rem; /* matches rounded-2xl */
-    padding: 2px; /* Border thickness */
-    background: linear-gradient(
-      45deg,
-      #ff0000,
-      #ff7300,
-      #fffb00,
-      #48ff00,
-      #00ffd5,
-      #002bff,
-      #7a00ff,
-      #ff00c8,
-      #ff0000
-    );
+    border-radius: 1rem;
+    padding: 2px;
+    background: linear-gradient(45deg, #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000);
     background-size: 400%;
     animation: rgb-glow-anim 20s linear infinite;
-    will-change: background-position;
-    -webkit-mask: 
-      linear-gradient(#fff 0 0) content-box, 
-      linear-gradient(#fff 0 0);
-    mask: 
-      linear-gradient(#fff 0 0) content-box, 
-      linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
     pointer-events: none;
     z-index: 1;
   }
-
   .rgb-border::after {
     content: "";
     position: absolute;
     inset: -4px;
     border-radius: 1.2rem;
     padding: 6px;
-    background: linear-gradient(
-      45deg,
-      #ff0000,
-      #ff7300,
-      #fffb00,
-      #48ff00,
-      #00ffd5,
-      #002bff,
-      #7a00ff,
-      #ff00c8,
-      #ff0000
-    );
+    background: linear-gradient(45deg, #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000);
     background-size: 400%;
     animation: rgb-glow-anim 20s linear infinite;
-    will-change: background-position;
-    -webkit-mask: 
-      linear-gradient(#fff 0 0) content-box, 
-      linear-gradient(#fff 0 0);
-    mask: 
-      linear-gradient(#fff 0 0) content-box, 
-      linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
     filter: blur(8px);
@@ -100,23 +88,28 @@
   }
 }
 
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black transition-all shadow-lg shadow-blue-500/20 hover:scale-105 active:scale-95 text-[10px] uppercase tracking-wider;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-white px-4 py-2 rounded-xl font-bold transition-all text-sm border border-black/5 dark:border-white/5 shadow-sm;
+  }
+  .action-btn {
+    @apply inline-flex items-center justify-center gap-1 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-white py-2 rounded-lg text-[10px] font-bold transition-all border border-black/5 dark:border-white/5;
+  }
+}
+
 @keyframes rgb-glow-anim {
-  0% {
-    background-position: 0 0;
-  }
-  50% {
-    background-position: 400% 0;
-  }
-  100% {
-    background-position: 0 0;
-  }
+  0% { background-position: 0 0; }
+  50% { background-position: 400% 0; }
+  100% { background-position: 0 0; }
 }
 
 :root {
   color-scheme: light dark;
 }
 
-/* Hide default browser password reveal icon (especially in Edge) */
 input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear {
   display: none;

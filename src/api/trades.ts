@@ -85,6 +85,25 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
   }
 });
 
+// Final Reject (Admin)
+router.patch('/:id/reject', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+  const { id } = req.params;
+  const actingUserId = req.user.id;
+
+  try {
+    await db('trade_requests').where({ id }).update({
+      status: 'rejected',
+      approved_by: actingUserId,
+      updated_at: db.fn.now()
+    });
+    await logAction(actingUserId, 'REJECT_TRADE', 'trade_requests', id, 'Trade rejected');
+    res.json({ message: 'Арилжааны хүсэлт татгалзагдлаа' });
+  } catch (err) {
+    console.error('Reject trade error:', err);
+    res.status(500).json({ error: 'Арилжаа татгалзахад алдаа гарлаа' });
+  }
+});
+
 // Final Approve (Admin)
 router.patch('/:id/approve', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { id } = req.params;

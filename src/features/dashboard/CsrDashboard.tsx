@@ -38,6 +38,8 @@ export default function CsrDashboard() {
   const [slots, setSlots] = useState<WorkSlot[]>([]);
   const [myBookings, setMyBookings] = useState<any[]>([]);
   const [trades, setTrades] = useState<TradeRequest[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [trainings, setTrainings] = useState<any[]>([]);
   const [activeMonth, setActiveMonth] = useState(new Date().toISOString().slice(0, 7));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -56,6 +58,10 @@ export default function CsrDashboard() {
 
       const tradesRes = await apiClient.get('/trades');
       setTrades(tradesRes.data);
+      const notificationRes = await apiClient.get('/broadcasts/notifications');
+      setNotifications(notificationRes.data);
+      const trainingRes = await apiClient.get('/broadcasts/trainings');
+      setTrainings(trainingRes.data);
     } catch (err) {
       console.error(err);
     } finally {
@@ -79,6 +85,26 @@ export default function CsrDashboard() {
        fetchData();
     } catch (err) {
        alert('Цуцлах боломжгүй эсвэл алдаа гарлаа');
+    }
+  };
+
+
+
+  const markNotificationRead = async (id: string) => {
+    try {
+      await apiClient.post('/broadcasts/notifications/read', { notificationId: id });
+      fetchData();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Мэдэгдэл шинэчлэхэд алдаа гарлаа');
+    }
+  };
+
+  const completeTraining = async (id: string) => {
+    try {
+      await apiClient.post('/broadcasts/trainings/complete', { trainingId: id });
+      fetchData();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Сургалт дуусгахад алдаа гарлаа');
     }
   };
 
@@ -143,6 +169,49 @@ export default function CsrDashboard() {
             );
           })}
        </div>
+    </div>
+  );
+
+
+
+  const renderNotifications = () => (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Мэдэгдэл</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {notifications.map(item => (
+          <div key={item.id} className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4 className="font-black text-gray-900 dark:text-white">{item.title}</h4>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 whitespace-pre-line">{item.content}</p>
+              </div>
+              {!item.readAt && <button onClick={() => markNotificationRead(item.id)} className="bg-blue-600 text-white px-3 py-2 rounded-xl text-[10px] font-black uppercase">Уншсан</button>}
+            </div>
+          </div>
+        ))}
+        {notifications.length === 0 && <div className="col-span-full py-20 text-center border-2 border-dashed border-black/5 dark:border-white/5 rounded-3xl text-gray-400 font-bold">Мэдэгдэл алга</div>}
+      </div>
+    </div>
+  );
+
+  const renderTraining = () => (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Сургалт</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {trainings.map(item => (
+          <div key={item.id} className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4 className="font-black text-gray-900 dark:text-white">{item.title}</h4>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 whitespace-pre-line">{item.description}</p>
+                {item.attachmentUrl && <a href={item.attachmentUrl} target="_blank" className="text-xs text-blue-500 font-black mt-3 inline-block">Материал нээх</a>}
+              </div>
+              {item.completedAt ? <span className="text-green-500 text-[10px] font-black uppercase">Дууссан</span> : <button onClick={() => completeTraining(item.id)} className="bg-purple-600 text-white px-3 py-2 rounded-xl text-[10px] font-black uppercase">Дуусгах</button>}
+            </div>
+          </div>
+        ))}
+        {trainings.length === 0 && <div className="col-span-full py-20 text-center border-2 border-dashed border-black/5 dark:border-white/5 rounded-3xl text-gray-400 font-bold">Сургалт алга</div>}
+      </div>
     </div>
   );
 
@@ -224,8 +293,8 @@ export default function CsrDashboard() {
                            </div>
                         </div>
                      )}
-                     {activeTab === 'notifications' && <div className="text-gray-400 dark:text-gray-500 italic">Мэдэгдэл...</div>}
-                     {activeTab === 'training' && <div className="text-gray-400 dark:text-gray-500 italic">Сургалт...</div>}
+                     {activeTab === 'notifications' && renderNotifications()}
+                     {activeTab === 'training' && renderTraining()}
                   </motion.div>
                )}
             </AnimatePresence>

@@ -76,6 +76,8 @@ export default function SuperAdminDashboard() {
     employmentType: 'Full Time',
     status: 'active'
   });
+  const [noticeForm, setNoticeForm] = useState({ title: '', content: '', deadline: '' });
+  const [trainingForm, setTrainingForm] = useState({ title: '', description: '', attachmentUrl: '', attachmentName: '', deadline: '' });
 
   useEffect(() => {
     fetchData();
@@ -183,6 +185,42 @@ export default function SuperAdminDashboard() {
       return false;
     }
     return true;
+  };
+
+
+
+  const handleAddNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiClient.post('/broadcasts/notifications', noticeForm);
+      setNoticeForm({ title: '', content: '', deadline: '' });
+      fetchData();
+      setToast({ message: 'Мэдэгдэл үүсгэгдлээ', type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err.response?.data?.error || 'Мэдэгдэл үүсгэхэд алдаа гарлаа', type: 'error' });
+    }
+  };
+
+  const handleAddTraining = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiClient.post('/broadcasts/trainings', trainingForm);
+      setTrainingForm({ title: '', description: '', attachmentUrl: '', attachmentName: '', deadline: '' });
+      fetchData();
+      setToast({ message: 'Сургалт үүсгэгдлээ', type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err.response?.data?.error || 'Сургалт үүсгэхэд алдаа гарлаа', type: 'error' });
+    }
+  };
+
+  const handleDeleteBroadcast = async (type: 'notifications' | 'trainings', id: string) => {
+    try {
+      await apiClient.delete(`/broadcasts/${type}/${id}`);
+      fetchData();
+      setToast({ message: 'Устгагдлаа', type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err.response?.data?.error || 'Устгахад алдаа гарлаа', type: 'error' });
+    }
   };
 
   const renderUsers = () => {
@@ -622,6 +660,51 @@ export default function SuperAdminDashboard() {
     </div>
   );
 
+
+
+  const renderNotifications = () => (
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
+        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5 flex items-center gap-2"><Bell size={20} className="text-blue-500" /> Мэдэгдэл нэмэх</h2>
+        <form onSubmit={handleAddNotification} className="space-y-3">
+          <input required placeholder="Гарчиг" value={noticeForm.title} onChange={e => setNoticeForm({...noticeForm, title: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          <textarea required placeholder="Агуулга" value={noticeForm.content} onChange={e => setNoticeForm({...noticeForm, content: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          <input type="datetime-local" value={noticeForm.deadline} onChange={e => setNoticeForm({...noticeForm, deadline: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider">Хадгалах</button>
+        </form>
+      </section>
+      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
+        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5">Идэвхтэй мэдэгдлүүд</h2>
+        <div className="space-y-3">
+          {notifications.map(item => <div key={item.id} className="bg-gray-50 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-xl p-4"><div className="flex justify-between gap-3"><div><h4 className="font-black text-gray-900 dark:text-white">{item.title}</h4><p className="text-xs text-gray-500 whitespace-pre-line mt-1">{item.content}</p></div><button onClick={() => handleDeleteBroadcast('notifications', item.id)} className="text-red-500 hover:bg-red-500/10 p-2 rounded-lg"><Trash2 size={16} /></button></div></div>)}
+          {notifications.length === 0 && <p className="text-sm text-gray-400 font-bold text-center py-8">Мэдэгдэл алга</p>}
+        </div>
+      </section>
+    </div>
+  );
+
+  const renderTraining = () => (
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
+        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5 flex items-center gap-2"><BookOpen size={20} className="text-purple-500" /> Сургалт нэмэх</h2>
+        <form onSubmit={handleAddTraining} className="space-y-3">
+          <input required placeholder="Гарчиг" value={trainingForm.title} onChange={e => setTrainingForm({...trainingForm, title: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          <textarea required placeholder="Тайлбар" value={trainingForm.description} onChange={e => setTrainingForm({...trainingForm, description: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          <input placeholder="Файлын холбоос" value={trainingForm.attachmentUrl} onChange={e => setTrainingForm({...trainingForm, attachmentUrl: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          <input type="datetime-local" value={trainingForm.deadline} onChange={e => setTrainingForm({...trainingForm, deadline: e.target.value})} className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          <button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider">Хадгалах</button>
+        </form>
+      </section>
+      <section className="bg-white dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl p-6 shadow-sm">
+        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight mb-5">Идэвхтэй сургалтууд</h2>
+        <div className="space-y-3">
+          {trainings.map(item => <div key={item.id} className="bg-gray-50 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-xl p-4"><div className="flex justify-between gap-3"><div><h4 className="font-black text-gray-900 dark:text-white">{item.title}</h4><p className="text-xs text-gray-500 whitespace-pre-line mt-1">{item.description}</p>{item.attachmentUrl && <a href={item.attachmentUrl} target="_blank" className="text-xs text-blue-500 font-bold mt-2 inline-block">Материал нээх</a>}</div><button onClick={() => handleDeleteBroadcast('trainings', item.id)} className="text-red-500 hover:bg-red-500/10 p-2 rounded-lg"><Trash2 size={16} /></button></div></div>)}
+          {trainings.length === 0 && <p className="text-sm text-gray-400 font-bold text-center py-8">Сургалт алга</p>}
+        </div>
+      </section>
+    </div>
+  );
+
   const renderForecast = () => (
     <div className="flex flex-col items-center justify-center py-20 bg-gray-100 dark:bg-gray-900/40 border border-black/5 dark:border-white/5 rounded-2xl border-dashed rgb-border">
        <Sparkles size={64} className="text-blue-500 mb-6 opacity-50" />
@@ -692,8 +775,8 @@ export default function SuperAdminDashboard() {
                   {activeTab === 'users' && renderUsers()}
                   {activeTab === 'audit' && renderAuditLogs()}
                   {activeTab === 'forecast' && renderForecast()}
-                  {activeTab === 'notifications' && <div className="text-gray-500 font-bold italic">Мэдэгдэл удирдлагын хэсэг удахгүй...</div>}
-                  {activeTab === 'training' && <div className="text-gray-500 font-bold italic">Сургалт удирдлагын хэсэг удахгүй...</div>}
+                  {activeTab === 'notifications' && renderNotifications()}
+                  {activeTab === 'training' && renderTraining()}
                 </motion.div>
               )}
            </AnimatePresence>
