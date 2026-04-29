@@ -12,10 +12,14 @@ import SuperAdminDashboard from './features/dashboard/SuperAdminDashboard';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: string }) {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
 
   if (loading) return <div className="min-h-screen bg-black flex items-center justify-center text-white">Уншиж байна...</div>;
   if (!user) return <Navigate to="/" />;
+  if (user.status === 'inactive') {
+    logout();
+    return <Navigate to="/" />;
+  }
   if (role && user.role !== role) return <Navigate to="/" />;
 
   return <>{children}</>;

@@ -535,7 +535,7 @@ export default function SuperAdminDashboard() {
 
   const exportNotificationSeenToExcel = (item: Notification | TrainingMaterial) => {
     const data = csrs.map(u => {
-      const seen = item.seenBy.find(s => s.userId === u.id);
+      const seen = (item.seenBy ?? []).find(s => s.userId === u.id);
       return {
         'Ажилтны нэр': u.name,
         'Сегмент': u.lineType,
@@ -556,11 +556,14 @@ export default function SuperAdminDashboard() {
   const handleUploadTraining = () => {
     const title = prompt('Сургалтын материалын нэр:');
     if (title) {
-      const newMaterial = {
+      const newMaterial: TrainingMaterial = {
         id: Math.random().toString(36).substr(2, 9),
         title,
+        description: '',
         type: 'PDF',
-        date: new Date().toISOString().split('T')[0]
+        url: '#',
+        date: new Date().toISOString().split('T')[0],
+        seenBy: []
       };
       setTrainingMaterials(prev => [newMaterial, ...prev]);
       logAction('Training Upload', `Uploaded training material: ${title}`);
@@ -778,6 +781,7 @@ export default function SuperAdminDashboard() {
       <div className="space-y-4">
         {notifications.filter(n => n.type === 'general' || n.type === 'important').map((notif, idx) => {
           const isDeadlinePassed = notif.deadline && new Date(notif.deadline) < new Date();
+          const seenBy = notif.seenBy ?? [];
           return (
             <div key={`notif-${notif.id}-${idx}`} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-4">
@@ -794,7 +798,7 @@ export default function SuperAdminDashboard() {
               </div>
               <div className="text-right">
                 <span className="text-[10px] font-black text-gray-600 uppercase block mb-1">Уншсан байдал</span>
-                <span className="text-sm font-bold text-blue-400">{notif.seenBy.length} / {csrs.length}</span>
+                <span className="text-sm font-bold text-blue-400">{seenBy.length} / {csrs.length}</span>
               </div>
             </div>
             
@@ -802,14 +806,14 @@ export default function SuperAdminDashboard() {
             
             <div className="flex items-center justify-between pt-4 border-t border-gray-800">
               <div className="flex -space-x-2">
-                {notif.seenBy.slice(0, 5).map((seen, idx) => (
+                {seenBy.slice(0, 5).map((seen, idx) => (
                   <div key={`seen-${notif.id}-${seen.userId}-${idx}`} className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400" title={seen.userName}>
                     {seen.userName.charAt(0)}
                   </div>
                 ))}
-                {notif.seenBy.length > 5 && (
+                {seenBy.length > 5 && (
                   <div className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400">
-                    +{notif.seenBy.length - 5}
+                    +{seenBy.length - 5}
                   </div>
                 )}
               </div>
@@ -939,7 +943,8 @@ export default function SuperAdminDashboard() {
                 onClick={async (e) => {
                   e.stopPropagation();
                   try {
-                    deleteLocalItem('trainingMaterials', material.id);
+                    const updatedMaterials = deleteLocalItem('trainingMaterials', material.id);
+                    setTrainingMaterials(updatedMaterials);
                     logAction('Training Deleted', `Deleted material: ${material.title}`);
                     triggerSuccess();
                   } catch (error) {
@@ -1350,13 +1355,13 @@ export default function SuperAdminDashboard() {
               </div>
 
               <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
-                {showSeenDetails.seenBy.length === 0 ? (
+                {(showSeenDetails.seenBy ?? []).length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-gray-500">
                     <AlertCircle size={48} className="mb-4 opacity-20" />
                     <p className="font-bold">Одоогоор үзсэн хэрэглэгч байхгүй байна.</p>
                   </div>
                 ) : (
-                  showSeenDetails.seenBy.map((seen, idx) => {
+                  (showSeenDetails.seenBy ?? []).map((seen, idx) => {
                     const user = csrs.find(u => u.id === seen.userId);
                     return (
                       <div key={`seen-detail-${seen.userId}-${idx}`} className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-800">

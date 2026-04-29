@@ -519,7 +519,8 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteMaterial = (id: string) => {
-    deleteLocalItem('trainingMaterials', id);
+    const updatedMaterials = deleteLocalItem('trainingMaterials', id);
+    setTrainingMaterials(updatedMaterials);
     logAction('Material Deleted', `Deleted material with ID: ${id}`);
   };
 
@@ -561,7 +562,8 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteNotification = (id: string) => {
-    deleteLocalItem('notifications', id);
+    const updatedNotifications = deleteLocalItem('notifications', id);
+    setNotifications(updatedNotifications);
     logAction('Notification Deleted', `Deleted notification: ${id}`);
   };
 

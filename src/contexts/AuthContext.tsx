@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { User } from '../types';
 import apiClient from '../lib/api-client';
+import { getLocalData } from '../utils/localStorage';
 
 interface AuthContextType {
   user: User | null;
@@ -147,22 +148,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('user');
-    const token = localStorage.getItem('token');
+    const initialize = () => {
+      const savedUser = localStorage.getItem('user');
+      const token = localStorage.getItem('token');
 
-    if (savedUser && token) {
-      try {
-        const normalized = normalizeUser(JSON.parse(savedUser));
-        setUser(normalized);
-        localStorage.setItem('test_profile', JSON.stringify(normalized));
-        localStorage.setItem(`${normalized.role}_profile`, JSON.stringify(normalized));
-        hydrateLocalDataForUi(normalized.role).catch(() => undefined);
-      } catch (e) {
-        localStorage.removeItem('user');
-        localStorage.removeItem('token');
+      if (savedUser && token) {
+        try {
+          const normalized = normalizeUser(JSON.parse(savedUser));
+          setUser(normalized);
+          localStorage.setItem('test_profile', JSON.stringify(normalized));
+          localStorage.setItem(`${normalized.role}_profile`, JSON.stringify(normalized));
+          hydrateLocalDataForUi(normalized.role).catch(() => undefined);
+        } catch (e) {
+          localStorage.removeItem('user');
+          localStorage.removeItem('token');
+        }
       }
-    }
-    setLoading(false);
+      setLoading(false);
+    };
+
+    const syncCurrentUser = () => {
+      const savedUserStr = localStorage.getItem('user');
+      if (!savedUserStr) return;
+      try {
+        const savedUser = JSON.parse(savedUserStr);
+        const storedUsers = getLocalData('users', []);
+        const matchingUser = storedUsers.find((u: any) => u.id === savedUser.id);
+        if (!matchingUser) return;
+
+        const normalized = normalizeUser(matchingUser);
+        if (normalized.status === 'inactive') {
+          logout();
+          return;
+        }
+
+        if (normalized.role !== savedUser.role || normalized.status !== savedUser.status) {
+          setUser(normalized);
+          localStorage.setItem('user', JSON.stringify(normalized));
+          localStorage.setItem('test_profile', JSON.stringify(normalized));
+          localStorage.setItem(`${normalized.role}_profile`, JSON.stringify(normalized));
+        }
+      } catch (e) {
+        // ignore malformed local data
+      }
+    };
+
+    initialize();
+    const interval = window.setInterval(syncCurrentUser, 3000);
+    window.addEventListener('storage', syncCurrentUser);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('storage', syncCurrentUser);
+    };
   }, []);
 
   const login = async (email: string, password: string) => {
