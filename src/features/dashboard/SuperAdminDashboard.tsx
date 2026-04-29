@@ -42,7 +42,7 @@ import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalI
 
 export default function SuperAdminDashboard() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, profile } = useAuth();
   const [activeTab, setActiveTab] = useState('logs');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -687,83 +687,113 @@ export default function SuperAdminDashboard() {
     );
   };
 
-  const renderUsers = () => (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-black text-white">Хэрэглэгчдийн удирдлага</h2>
-        <div className="flex gap-3">
-          <label className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold transition-all cursor-pointer">
-            <Plus size={18} />
-            Олноор нэмэх
-            <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleBulkUpload} />
-          </label>
-          <button 
-            onClick={() => setIsAddingUser(true)}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
-          >
-            <UserPlus size={18} />
-            Хэрэглэгч нэмэх
-          </button>
-          <button 
-            onClick={exportToExcel}
-            className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
-          >
-            <Download size={18} />
-            Excel Татах
-          </button>
+  const renderUsers = () => {
+    const groupedRoles = [
+      { key: 'superadmin', title: 'Superadmin эрхтэй хэрэглэгчид', users: csrs.filter(u => u.role === 'superadmin') },
+      { key: 'admin', title: 'Admin эрхтэй хэрэглэгчид', users: csrs.filter(u => u.role === 'admin') },
+      { key: 'csr', title: 'CSR эрхтэй хэрэглэгчид', users: csrs.filter(u => u.role === 'csr') },
+    ];
+
+    return (
+      <div className="space-y-10">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-black text-white">Хэрэглэгчдийн удирдлага</h2>
+          <div className="flex gap-3">
+            <label className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold transition-all cursor-pointer">
+              <Plus size={18} />
+              Олноор нэмэх
+              <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleBulkUpload} />
+            </label>
+            <button 
+              onClick={() => setIsAddingUser(true)}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
+            >
+              <UserPlus size={18} />
+              Хэрэглэгч нэмэх
+            </button>
+            <button 
+              onClick={exportToExcel}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
+            >
+              <Download size={18} />
+              Excel Татах
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-8">
+          {groupedRoles.map(group => (
+            <div key={group.key} className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-xl font-black text-white">{group.title}</h3>
+                  <p className="text-xs text-gray-500">{group.users.length} хэрэглэгч</p>
+                </div>
+                {group.users.length === 0 && (
+                  <span className="text-xs text-gray-400 uppercase tracking-widest">Одоогоор бүртгэлгүй</span>
+                )}
+              </div>
+
+              {group.users.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {group.users.map(user => (
+                    <div key={user.id} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl space-y-4 hover:border-blue-500/30 transition-all">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <img src={user.photoUrl} alt={user.name} className="w-12 h-12 rounded-full border-2 border-gray-800" />
+                          <div>
+                            <h4 className="font-bold text-white">{user.name}</h4>
+                            <p className="text-xs text-gray-500">{user.email || 'И-мэйл байхгүй'}</p>
+                            <p className="text-[10px] text-blue-500 font-black uppercase mt-0.5">{user.lineType}</p>
+                          </div>
+                        </div>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                          user.role === 'superadmin' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
+                          user.role === 'admin' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                          'bg-gray-500/10 text-gray-400 border border-gray-500/20'
+                        }`}>
+                          {user.role}
+                        </span>
+                      </div>
+                      <div className="pt-4 border-t border-gray-800 space-y-3">
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => setEditingUser(user)}
+                            className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2"
+                          >
+                            <Edit2 size={14} />
+                            Засах
+                          </button>
+                          <button 
+                            onClick={() => handleResetUserPassword(user)}
+                            className="flex-1 py-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 text-xs font-bold rounded-lg border border-blue-500/20 transition-all flex items-center justify-center gap-2"
+                          >
+                            <Key size={14} />
+                            Reset
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteUser(user.id)}
+                            className="p-2 bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg border border-red-500/20 transition-all"
+                            title="Устгах"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-gray-700 bg-gray-900/40 p-6 text-center text-sm text-gray-400">
+                  Энэ ангилалд одоогоор хэрэглэгч байхгүй.
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {csrs.map(user => (
-          <div key={user.id} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl space-y-4 hover:border-blue-500/30 transition-all">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <img src={user.photoUrl} alt={user.name} className="w-12 h-12 rounded-full border-2 border-gray-800" />
-                <div>
-                  <h4 className="font-bold text-white">{user.name}</h4>
-                  <p className="text-xs text-gray-500">{user.email || 'И-мэйл байхгүй'}</p>
-                  <p className="text-[10px] text-blue-500 font-black uppercase mt-0.5">{user.lineType}</p>
-                </div>
-              </div>
-              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                user.role === 'superadmin' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
-                user.role === 'admin' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                'bg-gray-500/10 text-gray-400 border border-gray-500/20'
-              }`}>
-                {user.role}
-              </span>
-            </div>
-            
-            <div className="pt-4 border-t border-gray-800 space-y-3">
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => setEditingUser(user)}
-                  className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2"
-                >
-                  <Edit2 size={14} />
-                  Засах
-                </button>
-                <button 
-                  onClick={() => handleResetUserPassword(user)}
-                  className="flex-1 py-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 text-xs font-bold rounded-lg border border-blue-500/20 transition-all flex items-center justify-center gap-2"
-                >
-                  <Key size={14} />
-                  Reset
-                </button>
-                <button 
-                  onClick={() => handleDeleteUser(user.id)}
-                  className="p-2 bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg border border-red-500/20 transition-all"
-                  title="Устгах"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+    );
+  };
 
   const renderNotifications = () => (
     <div className="space-y-6">
@@ -981,8 +1011,8 @@ export default function SuperAdminDashboard() {
             </div>
             {!isSidebarCollapsed && (
               <div>
-                <h1 className="text-xl font-black tracking-tighter">SUPER ADMIN</h1>
-                <p className="text-[10px] text-blue-500 font-black uppercase tracking-widest">System Control</p>
+                <h1 className="text-xl font-black tracking-tighter">{profile?.name || 'Super Admin'}</h1>
+                <p className="text-[10px] text-blue-500 font-black uppercase tracking-widest">{profile?.lineType || 'System Control'}</p>
               </div>
             )}
           </div>
@@ -1059,7 +1089,7 @@ export default function SuperAdminDashboard() {
                  activeTab === 'users' ? 'Хэрэглэгчийн удирдлага' : 
                  activeTab === 'notifications' ? 'Мэдэгдэл & Сургалт' : 'Тохиргоо'}
               </h2>
-              <p className="text-xs sm:text-sm text-gray-500">Тавтай морил, Super Admin. Системийн бүх үйл ажиллагааг эндээс хянана уу.</p>
+              <p className="text-xs sm:text-sm text-gray-500">Тавтай морил, {profile?.name || 'Super Admin'}. Системийн бүх үйл ажиллагааг эндээс хянана уу.</p>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center gap-6">
               <DigitalClock />
