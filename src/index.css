@@ -83,6 +83,24 @@
     pointer-events: none;
     z-index: -1;
   }
+
+  .animate-bell-ring {
+    animation: bell-ring 2.8s ease-in-out infinite;
+    transform-origin: center top;
+  }
+
+  .sparkle-emoji {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: -0.2rem;
+    right: -0.2rem;
+    font-size: 0.75rem;
+    line-height: 1;
+    animation: sparkle 2.4s ease-in-out infinite;
+    pointer-events: none;
+  }
 }
 
 @layer components {
@@ -166,6 +184,17 @@
   0% { background-position: 0 0; }
   50% { background-position: 400% 0; }
   100% { background-position: 0 0; }
+}
+
+@keyframes bell-ring {
+  0%, 100% { transform: rotate(0deg); }
+  10%, 30% { transform: rotate(-14deg); }
+  20%, 40% { transform: rotate(14deg); }
+}
+
+@keyframes sparkle {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.8; }
+  50% { transform: translateY(-2px) scale(1.1); opacity: 1; }
 }
 
 :root {

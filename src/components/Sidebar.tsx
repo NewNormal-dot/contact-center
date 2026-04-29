@@ -161,9 +161,12 @@ export default function Sidebar({
           } ${isCollapsed ? 'justify-center' : ''}`}
           title={isCollapsed ? 'Мэдэгдэл' : ''}
         >
-          <div className="flex items-center gap-3">
-            <Bell size={20} />
+          <div className="relative flex items-center gap-3">
+            <Bell size={20} className="animate-bell-ring" />
             {!isCollapsed && <span>Мэдэгдэл</span>}
+            {!isCollapsed && unreadCount > 0 && (
+              <span className="sparkle-emoji">✨</span>
+            )}
           </div>
           {unreadCount > 0 && (
             <span className={`bg-red-500 text-white text-[10px] font-black flex items-center justify-center rounded-full border-2 border-[#0a0a0a] ${isCollapsed ? 'w-4 h-4' : 'px-2 py-0.5 min-w-[20px] text-center'}`}>
@@ -182,7 +185,7 @@ export default function Sidebar({
           title={isCollapsed ? 'Сургалт' : ''}
         >
           <div className="flex items-center gap-3">
-            <BookOpen size={20} />
+            <BookOpen size={20} className={unreadTrainingCount > 0 ? 'animate-bell-ring' : ''} />
             {!isCollapsed && <span>Сургалт</span>}
           </div>
           {unreadTrainingCount > 0 && (
