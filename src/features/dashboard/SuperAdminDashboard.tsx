@@ -46,6 +46,7 @@ export default function SuperAdminDashboard() {
   const [activeTab, setActiveTab] = useState('logs');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [userSearchQuery, setUserSearchQuery] = useState('');
   const [selectedActionFilter, setSelectedActionFilter] = useState('all');
   const [showSuccess, setShowSuccess] = useState(false);
 
@@ -688,36 +689,58 @@ export default function SuperAdminDashboard() {
   };
 
   const renderUsers = () => {
+    const filteredUsers = csrs.filter(u => {
+      const q = userSearchQuery.trim().toLowerCase();
+      if (!q) return true;
+      return [u.name, u.email, u.role, u.lineType]
+        .filter(Boolean)
+        .some(field => field!.toLowerCase().includes(q));
+    });
+
     const groupedRoles = [
-      { key: 'superadmin', title: 'Superadmin эрхтэй хэрэглэгчид', users: csrs.filter(u => u.role === 'superadmin') },
-      { key: 'admin', title: 'Admin эрхтэй хэрэглэгчид', users: csrs.filter(u => u.role === 'admin') },
-      { key: 'csr', title: 'CSR эрхтэй хэрэглэгчид', users: csrs.filter(u => u.role === 'csr') },
+      { key: 'superadmin', title: 'Superadmin', users: filteredUsers.filter(u => u.role === 'superadmin') },
+      { key: 'admin', title: 'Admin', users: filteredUsers.filter(u => u.role === 'admin') },
+      { key: 'csr', title: 'CSR', users: filteredUsers.filter(u => u.role === 'csr') },
     ];
 
     return (
       <div className="space-y-10">
-        <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-black text-white">Хэрэглэгчдийн удирдлага</h2>
-          <div className="flex gap-3">
-            <label className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold transition-all cursor-pointer">
-              <Plus size={18} />
-              Олноор нэмэх
-              <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleBulkUpload} />
-            </label>
-            <button 
-              onClick={() => setIsAddingUser(true)}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
-            >
-              <UserPlus size={18} />
-              Хэрэглэгч нэмэх
-            </button>
-            <button 
-              onClick={exportToExcel}
-              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
-            >
-              <Download size={18} />
-              Excel Татах
-            </button>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-2xl font-black text-white">Хэрэглэгчдийн удирдлага</h2>
+            <p className="text-sm text-gray-400">Superadmin, Admin, CSR ангилалд хялбархан хуваадаг.</p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative w-full sm:w-72">
+              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
+              <input
+                value={userSearchQuery}
+                onChange={(e) => setUserSearchQuery(e.target.value)}
+                placeholder="Хайх..."
+                className="w-full pl-11 pr-4 py-3 bg-gray-900/70 border border-gray-800 rounded-2xl text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <label className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold transition-all cursor-pointer">
+                <Plus size={18} />
+                Олноор нэмэх
+                <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleBulkUpload} />
+              </label>
+              <button 
+                onClick={() => setIsAddingUser(true)}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
+              >
+                <UserPlus size={18} />
+                Хэрэглэгч нэмэх
+              </button>
+              <button 
+                onClick={exportToExcel}
+                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
+              >
+                <Download size={18} />
+                Excel Татах
+              </button>
+            </div>
           </div>
         </div>
 
