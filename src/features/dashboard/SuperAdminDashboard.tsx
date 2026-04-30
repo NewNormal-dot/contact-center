@@ -56,6 +56,8 @@ export default function SuperAdminDashboard() {
   });
   const [selectedActionFilter, setSelectedActionFilter] = useState('all');
   const [showSuccess, setShowSuccess] = useState(false);
+  const [isUploadingBulk, setIsUploadingBulk] = useState(false);
+  const bulkUploadRef = useRef<HTMLInputElement | null>(null);
 
   // States
   const [csrs, setCsrs] = useState<CSR[]>([]);
@@ -99,6 +101,32 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const fetchLogs = async () => {
+    try {
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 3);
+      const response = await apiClient.get('/audit', {
+        params: {
+          startDate: startDate.toISOString(),
+        },
+      });
+      const backendLogs = response.data.map((log: any) => ({
+        id: log.id,
+        timestamp: log.created_at || log.createdAt || log.timestamp,
+        userId: log.user_id,
+        userName: log.user_name || log.userName || 'Unknown',
+        userRole: log.user_role || log.userRole || 'unknown',
+        action: log.action,
+        details: log.details || ''
+      }));
+      setLogs(backendLogs);
+    } catch (error) {
+      console.error('Error fetching audit logs:', error);
+      const fallbackLogs = getLocalData('activity_logs', []);
+      setLogs(fallbackLogs);
+    }
+  };
+
   useEffect(() => {
     if (!profile) return;
     fetchUsers();
@@ -118,51 +146,24 @@ export default function SuperAdminDashboard() {
   }, [showUserAddMenu]);
 
   useEffect(() => {
-    // User list is loaded from the backend via fetchUsers().
-    setLogs(getLocalData('activityLogs', []));
-    setNotifications(getLocalData('notifications', []));
-    
     const defaultSegments = ['Postpaid', 'Prepaid', 'Hybrid', 'Corporate'];
     const initialSegments = getLocalData('segments', defaultSegments);
     if (!localStorage.getItem('segments')) {
       setLocalData('segments', defaultSegments);
     }
     setSegments(initialSegments);
-    
+    setNotifications(getLocalData('notifications', []));
     setTrainingMaterials(getLocalData('trainingMaterials', []));
 
-    // Polling for "real-time" feel in test mode
+    fetchLogs();
+
     const interval = setInterval(() => {
-      const newLogs = getLocalData('activityLogs', []);
-      const newNotifs = getLocalData('notifications', []);
-      const newSegs = getLocalData('segments', []);
-      const newMaterials = getLocalData('trainingMaterials', []);
-
-      const dataHash = JSON.stringify({
-        newLogs,
-        newNotifs,
-        newSegs,
-        newMaterials
-      });
-
-      if (dataHash === lastDataRef.current) return;
-      lastDataRef.current = dataHash;
-
-      const deduplicateSeenBy = (items: any[]) => {
-        return items.map(item => ({
-          ...item,
-          seenBy: item.seenBy ? Array.from(new Map(item.seenBy.map((s: any) => [s.userId, s])).values()) : []
-        }));
-      };
-
-      setLogs(newLogs);
-      setNotifications(deduplicateSeenBy(newNotifs));
-      setSegments(newSegs);
-      setTrainingMaterials(deduplicateSeenBy(newMaterials));
-    }, 2000);
+      fetchUsers();
+      fetchLogs();
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [profile]);
 
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
   const [isAddingUser, setIsAddingUser] = useState(false);
@@ -219,6 +220,10 @@ export default function SuperAdminDashboard() {
   const triggerSuccess = () => {
     setShowSuccess(true);
     setTimeout(() => setShowSuccess(false), 3000);
+  };
+
+  const requestConfirmation = (title: string, onConfirm: () => void) => {
+    setConfirmAction({ title, onConfirm });
   };
 
   const generateRandomPassword = (length = 10) => {
@@ -319,16 +324,14 @@ export default function SuperAdminDashboard() {
           status: 'offline',
           photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
         });
+        await fetchUsers();
+        await fetchLogs();
         triggerSuccess();
       } catch (error: any) {
         console.error('Error adding user:', error);
         alert(error.response?.data?.error || 'Хэрэглэгч нэмэхэд алдаа гарлаа.');
       }
     }
-  };
-
-  const requestConfirmation = (title: string, onConfirm: () => void) => {
-    setConfirmAction({ title, onConfirm });
   };
 
   const handleDeleteUser = (userId: string) => {
@@ -348,10 +351,12 @@ export default function SuperAdminDashboard() {
     });
   };
 
-  const handleBulkUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
+    setIsUploadingBulk(true);
     const reader = new FileReader();
     reader.onload = async (evt) => {
       const bstr = evt.target?.result;
@@ -360,28 +365,39 @@ export default function SuperAdminDashboard() {
       const ws = wb.Sheets[wsname];
       const data = XLSX.utils.sheet_to_json(ws) as any[];
 
-      const newUsers: CSR[] = [];
+      const newUsers: Array<Partial<CSR> & { password: string }> = [];
       let duplicates = 0;
+      let invalidRows = 0;
 
       data.forEach(row => {
         const email = row['И-мэйл'] || row['Email'] || '';
-        if (email && csrs.some(u => u.email?.toLowerCase() === email.toLowerCase())) {
+        const name = row['Нэр'] || row['Name'] || '';
+        const role = ((row['Эрх'] || row['Role'] || 'csr') as string).toLowerCase();
+        const code = row['Код'] || row['Code'] || '';
+        const segment = row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid';
+        const employmentType = row['Цагийн төрөл'] || row['EmploymentType'] || row['Employment Type'] || 'Full Time';
+
+        if (!email || !name || !role) {
+          invalidRows++;
+          return;
+        }
+
+        if (csrs.some(u => u.email?.toLowerCase() === email.toLowerCase())) {
           duplicates++;
           return;
         }
 
         const randomPassword = generateRandomPassword();
         newUsers.push({
-          id: Math.random().toString(36).substr(2, 9),
-          code: row['Код'] || row['Code'] || '',
-          name: row['Нэр'] || row['Name'] || 'Unknown',
-          email: email,
-          role: (row['Эрх'] || row['Role'] || 'csr').toLowerCase() as any,
-          lineType: row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid',
-          employmentType: row['Цагийн төрөл'] || row['EmploymentType'] || row['Employment Type'] || 'Full Time',
-          status: 'offline',
-          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${row['Нэр'] || row['Name'] || Math.random()}`,
-          password: row['Нууц үг'] || row['Password'] || randomPassword
+          code,
+          name,
+          email,
+          role: role as any,
+          lineType: segment,
+          employmentType,
+          status: 'active',
+          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
+          password: randomPassword,
         });
       });
 
@@ -395,13 +411,13 @@ export default function SuperAdminDashboard() {
               name: rowUser.name,
               role: rowUser.role,
               status: rowUser.status,
-              employmentType: rowUser.employmentType || 'Full Time',
+              employmentType: rowUser.employmentType,
               code: rowUser.code,
             });
             createdUsers.push({
               ...response.data,
               lineType: rowUser.lineType,
-              employmentType: rowUser.employmentType || 'Full Time',
+              employmentType: rowUser.employmentType,
               code: rowUser.code,
               photoUrl: rowUser.photoUrl,
               status: rowUser.status,
@@ -415,15 +431,18 @@ export default function SuperAdminDashboard() {
         if (createdUsers.length > 0) {
           setCsrs(prev => [...prev, ...createdUsers]);
           setShowUserAddMenu(false);
+          await fetchUsers();
+          await fetchLogs();
           logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
-          alert(`${createdUsers.length} хэрэглэгч амжилттай нэмэгдлээ. ${duplicates} давхардсан болон алдаа гарсан мөрүүд алгасагдлаа.`);
+          alert(`${createdUsers.length} хэрэглэгч амжилттай нэмэгдлээ. ${duplicates} давхардсан, ${invalidRows} форматын алдаатай мөрүүд алгасагдлаа.`);
           triggerSuccess();
         } else {
-          alert(`Бүх хэрэглэгчид аль хэдийн бүртгэгдсэн байна (${duplicates} давхардал).`);
+          alert(`Файл доторх мөрүүдийн аль нь ч шинээр нэмэгдсэнгүй. ${duplicates} давхардсан, ${invalidRows} алдаатай мөр.`);
         }
-      } else if (duplicates > 0) {
-        alert(`Бүх хэрэглэгчид аль хэдийн бүртгэгдсэн байна (${duplicates} давхардал).`);
+      } else {
+        alert(`Файлд тохирох мөр олдсонгүй. Формат: Код | Нэр | И-мэйл | Эрх | Сегмент | Цагийн төрөл`);
       }
+      setIsUploadingBulk(false);
     };
     reader.readAsBinaryString(file);
   };
@@ -509,12 +528,18 @@ export default function SuperAdminDashboard() {
     reader.readAsDataURL(file);
   };
 
-  const handleResetUserPassword = (user: CSR) => {
+  const handleResetUserPassword = async (user: CSR) => {
     const newPass = Math.random().toString(36).substr(2, 8);
-    updateLocalItem('users', user.id, { password: newPass });
-    logAction('Password Reset', `Reset password for ${user.name}. New password sent to ${user.email}`);
-    alert(`Шинэ нууц үг ${user.email} хаяг руу илгээгдлээ: ${newPass}`);
-    triggerSuccess();
+    try {
+      await apiClient.post(`/users/${user.id}/reset-password`, { password: newPass });
+      logAction('Password Reset', `Reset password for ${user.name}. New password sent to ${user.email}`);
+      alert(`Шинэ нууц үг ${user.email} хаяг руу илгээгдлээ: ${newPass}`);
+      triggerSuccess();
+      fetchLogs();
+    } catch (error: any) {
+      console.error('Error resetting password:', error);
+      alert(error.response?.data?.error || 'Нууц үг сэргээхэд алдаа гарлаа.');
+    }
   };
 
   const handleChangeMyPassword = (e: React.FormEvent) => {
@@ -634,10 +659,10 @@ export default function SuperAdminDashboard() {
   };
 
   const getActionCategory = (action: string) => {
-    const userActions = ['User Creation', 'User Update', 'Bulk User Creation', 'Password Reset', 'Admin Password Change', 'CSR Updated', 'CSR Added', 'Bulk CSR Added', 'Bulk CSR Deleted', 'Bulk CSR Moved'];
-    const contentActions = ['Material Added', 'Material Updated', 'Training Upload', 'Notification Sent', 'Notification Sent (Admin)'];
+    const userActions = ['User Creation', 'User Update', 'Bulk User Creation', 'Password Reset', 'Admin Password Change', 'CSR Updated', 'CSR Added', 'Bulk CSR Added', 'Bulk CSR Deleted', 'Bulk CSR Moved', 'CREATE_USER', 'UPDATE_USER', 'DELETE_USER', 'RESET_PASSWORD', 'LOGIN_SUCCESS', 'CHANGE_PASSWORD'];
+    const contentActions = ['Material Added', 'Material Updated', 'Training Upload', 'Notification Sent', 'Notification Sent (Admin)', 'CREATE_NOTIFICATION', 'DELETE_NOTIFICATION', 'CREATE_TRAINING', 'DELETE_TRAINING'];
     const systemActions = ['Data Export', 'Log Export', 'Export Seen Status', 'Material Viewed', 'Notification Viewed', 'Notification Read'];
-    const scheduleActions = ['Vacation Approved', 'Vacation Rejected', 'Shift Added', 'Shift Deleted', 'Shift Updated', 'Segment Added', 'Segment Updated', 'Segment Deleted'];
+    const scheduleActions = ['Vacation Approved', 'Vacation Rejected', 'Shift Added', 'Shift Deleted', 'Shift Updated', 'Segment Added', 'Segment Updated', 'Segment Deleted', 'REJECT_TRADE', 'APPROVE_TRADE'];
 
     if (userActions.includes(action)) return { label: 'Хэрэглэгч', color: 'text-purple-400 bg-purple-500/10 border-purple-500/20' };
     if (contentActions.includes(action)) return { label: 'Агуулга', color: 'text-green-400 bg-green-500/10 border-green-500/20' };
@@ -798,13 +823,36 @@ export default function SuperAdminDashboard() {
                 >
                   Нэгээр нэмэх
                 </button>
-                <label className="w-full mt-2 rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all cursor-pointer px-4 py-3 flex items-center justify-between gap-2">
-                  <span>Олноор нэмэх</span>
-                  <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={(e) => { handleBulkUpload(e); }} />
-                </label>
-                <p className="mt-3 text-xs text-gray-400 leading-relaxed">
-                  Формат: Код | Нэр | И-мэйл | Эрх | Сегмент | Цагийн төрөл (Full Time / Part Time)
-                </p>
+                <button
+                  type="button"
+                  onClick={() => bulkUploadRef.current?.click()}
+                  className="w-full mt-2 rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all px-4 py-3 flex items-center justify-between gap-2"
+                >
+                  <span>Excel оруулах</span>
+                  <span className="text-xs text-gray-400">Файл сонгох</span>
+                </button>
+                <input
+                  ref={bulkUploadRef}
+                  type="file"
+                  accept=".xlsx, .xls, .csv"
+                  className="hidden"
+                  onChange={(e) => { handleBulkUpload(e); }}
+                />
+                <div className="mt-3 rounded-2xl border border-gray-800 bg-gray-900/80 p-4 text-xs text-gray-300 space-y-2">
+                  <p className="font-bold text-white">Excel файл форматын заавар</p>
+                  <p>Заавал байх багана:</p>
+                  <ul className="list-disc list-inside space-y-1 text-gray-400">
+                    <li><span className="font-semibold text-white">Код</span> - ажилтны код</li>
+                    <li><span className="font-semibold text-white">Нэр</span> - бүртгэлд орох нэр</li>
+                    <li><span className="font-semibold text-white">И-мэйл</span> - хэрэглэгчийн хаяг</li>
+                    <li><span className="font-semibold text-white">Эрх</span> - superadmin, admin, csr</li>
+                    <li><span className="font-semibold text-white">Сегмент</span> - Postpaid, Prepaid, Hybrid, Corporate</li>
+                    <li><span className="font-semibold text-white">Цагийн төрөл</span> - Full Time эсвэл Part Time</li>
+                  </ul>
+                  <div className="font-mono text-[11px] rounded-xl bg-gray-950 p-3">
+                    Код, Нэр, И-мэйл, Эрх, Сегмент, Цагийн төрөл
+                  </div>
+                </div>
               </div>
             )}
           </div>

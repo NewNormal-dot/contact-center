@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import db from '../database/db';
 import { authenticate } from '../middleware/auth';
+import { logAction } from './audit';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-default-secret-change-this-in-prod';
@@ -28,6 +29,7 @@ router.post('/change-password', authenticate, async (req: any, res) => {
       password_hash: hashedPassword
     });
 
+    await logAction(userId, 'CHANGE_PASSWORD', 'users', userId, 'User changed their password');
     res.json({ message: 'Нууц үг амжилттай солигдлоо' });
   } catch (err) {
     console.error(err);
@@ -53,6 +55,8 @@ router.post('/login', async (req, res) => {
       JWT_SECRET,
       { expiresIn: '24h' }
     );
+
+    await logAction(user.id, 'LOGIN_SUCCESS', 'users', user.id, `User logged in: ${user.email}`);
 
     const { password_hash, ...userResult } = user;
     const formattedUser = {

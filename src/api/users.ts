@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
+import { logAction } from './audit';
 
 const router = express.Router();
 
@@ -74,6 +75,7 @@ router.post('/', authenticate, async (req: any, res) => {
       code
     });
 
+    await logAction(req.user.id, 'CREATE_USER', 'users', id, `Created user ${name} (${role})`);
     res.status(201).json({ id, email, name, role });
   } catch (err) {
     console.error(err);
@@ -109,6 +111,7 @@ router.put('/:id', authenticate, async (req: any, res) => {
     }
 
     await db('users').where({ id }).update(updates);
+    await logAction(req.user.id, 'UPDATE_USER', 'users', id, `Updated user ${name} (${role || userToUpdate.role})`);
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
     res.status(500).json({ error: 'Алдаа гарлаа' });
@@ -138,6 +141,7 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin']), asyn
       updated_at: db.fn.now()
     });
 
+    await logAction(actingUser.id, 'RESET_PASSWORD', 'users', id, `Reset password for ${userToUpdate.email || userToUpdate.name}`);
     res.json({ message: 'Нууц үг амжилттай солигдлоо' });
   } catch (err) {
     console.error(err);
@@ -181,6 +185,7 @@ router.delete('/:id', authenticate, async (req: any, res) => {
     }
 
     await db('users').where({ id }).delete();
+    await logAction(actingUser.id, 'DELETE_USER', 'users', id, `Deleted user ${userToDelete.email || userToDelete.name}`);
     res.json({ message: 'Хэрэглэгч амжилттай устгагдлаа' });
   } catch (err) {
     console.error(err);
