@@ -343,6 +343,8 @@ export default function SuperAdminDashboard() {
         await apiClient.delete(`/users/${userId}`);
         setCsrs(prev => prev.filter(u => u.id !== userId));
         logAction('User Deleted', `Deleted user: ${user.name} (${user.role})`);
+        await fetchUsers();
+        await fetchLogs();
         triggerSuccess();
       } catch (error: any) {
         console.error('Error deleting user:', error);
@@ -595,6 +597,27 @@ export default function SuperAdminDashboard() {
     logAction('Data Export', 'Exported user data to Excel');
   };
 
+  const downloadBulkUploadTemplate = () => {
+    const templateRows = [
+      {
+        'Код': '',
+        'Нэр': '',
+        'И-мэйл': '',
+        'Эрх': 'csr',
+        'Сегмент': 'Postpaid',
+        'Цагийн төрөл': 'Full Time'
+      }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateRows, {
+      header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Сегмент', 'Цагийн төрөл']
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "BulkUploadTemplate");
+    XLSX.writeFile(wb, "user_bulk_upload_template.xlsx");
+    logAction('Bulk Template Download', 'Downloaded bulk upload template Excel');
+  };
+
   const exportLogsToExcel = () => {
     const data = logs.map(l => ({
       'Цаг': new Date(l.timestamp).toLocaleString(),
@@ -823,14 +846,23 @@ export default function SuperAdminDashboard() {
                 >
                   Нэгээр нэмэх
                 </button>
-                <button
-                  type="button"
-                  onClick={() => bulkUploadRef.current?.click()}
-                  className="w-full mt-2 rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all px-4 py-3 flex items-center justify-between gap-2"
-                >
-                  <span>Excel оруулах</span>
-                  <span className="text-xs text-gray-400">Файл сонгох</span>
-                </button>
+                <div className="grid gap-2">
+                  <button
+                    type="button"
+                    onClick={() => bulkUploadRef.current?.click()}
+                    className="w-full rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all px-4 py-3 flex items-center justify-between gap-2"
+                  >
+                    <span>Excel оруулах</span>
+                    <span className="text-xs text-gray-400">Файл сонгох</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadBulkUploadTemplate}
+                    className="w-full rounded-2xl border border-blue-600 text-blue-300 hover:bg-blue-600/10 transition-all px-4 py-3 font-bold"
+                  >
+                    Bulk upload template татах
+                  </button>
+                </div>
                 <input
                   ref={bulkUploadRef}
                   type="file"
