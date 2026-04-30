@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "NODE_ENV=development tsx server.ts",
+    "dev": "tsx server.ts",
     "build": "vite build",
-    "start": "npm install -g tsx@4.21.0 && tsx server.ts",
-    "clean": "rm -rf dist",
+    "start": "tsx server.ts",
+    "clean": "node -e \"import('node:fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\"",
     "lint": "tsc --noEmit",
     "migrate": "knex migrate:latest",
     "seed": "knex seed:run"

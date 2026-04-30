@@ -43,6 +43,14 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
   const { receiver_id, sender_slot_id, receiver_slot_id } = req.body;
   const sender_id = req.user.id;
 
+  if (!receiver_id || !sender_slot_id || !receiver_slot_id) {
+    return res.status(400).json({ error: 'Солих хэрэглэгч болон ээлжийн мэдээлэл шаардлагатай' });
+  }
+
+  if (receiver_id === sender_id) {
+    return res.status(400).json({ error: 'Өөртэйгөө ээлж солих боломжгүй' });
+  }
+
   try {
     // Verify bookings exist
     const senderBooking = await db('slot_bookings').where({ user_id: sender_id, slot_id: sender_slot_id, status: 'confirmed' }).first();
@@ -74,9 +82,16 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
   const { status } = req.body; // 'accepted' or 'rejected'
   const userId = req.user.id;
 
+  if (!['accepted', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'Хариуны төлөв буруу байна' });
+  }
+
   try {
     const trade = await db('trade_requests').where({ id, receiver_id: userId }).first();
     if (!trade) return res.status(404).json({ error: 'Арилжааны хүсэлт олдсонгүй' });
+    if (trade.status !== 'pending') {
+      return res.status(400).json({ error: 'Зөвхөн хүлээгдэж буй хүсэлтэд хариу өгөх боломжтой' });
+    }
 
     await db('trade_requests').where({ id }).update({ status, updated_at: db.fn.now() });
     res.json({ message: 'Амжилттай хариу илгээлээ' });

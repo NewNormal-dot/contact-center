@@ -411,6 +411,31 @@ export default function AdminDashboard() {
     logAction('Export Vacations', `Exported vacations for ${months[monthIndex]}`);
   };
 
+  const handleExportExcel = () => {
+    const filteredCsrs = csrs.filter(c => {
+      const matchesSearch = c.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSegment = filters.segment === 'All' || c.lineType === filters.segment;
+      const matchesEmail = !filters.email || (c.email || '').toLowerCase().includes(filters.email.toLowerCase());
+      const matchesCode = !filters.code || (c.code || '').toLowerCase().includes(filters.code.toLowerCase());
+      return matchesSearch && matchesSegment && matchesEmail && matchesCode;
+    });
+
+    const rows = filteredCsrs.map(c => ({
+      'Ажилтны код': c.code || c.id.slice(0, 6).toUpperCase(),
+      'Нэр': c.name,
+      'Имэйл': c.email || `${c.name.toLowerCase().replace(/\s/g, '.')}@example.com`,
+      'Сегмент': c.lineType,
+      'Ажлын төрөл': c.employmentType || 'Full Time',
+      'Төлөв': c.status || 'offline'
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Ажилтнууд");
+    XLSX.writeFile(wb, `Employees_Export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    logAction('Export Employees', `Exported ${filteredCsrs.length} employees to Excel`);
+  };
+
   const handleChangePassword = (e: React.FormEvent) => {
     e.preventDefault();
     if (!profile) return;
@@ -770,34 +795,41 @@ export default function AdminDashboard() {
 
     return (
       <div className="space-y-12">
-        <div className="flex items-center justify-between">
-          <div className="flex bg-gray-900 border border-gray-800 p-1.5 rounded-3xl shadow-2xl backdrop-blur-xl">
-            <button 
+        <div className="flex items-center justify-between gap-4">
+          {/* Action buttons and search in one row */}
+          <div className="flex items-center gap-2">
+            <button
               onClick={() => setIsAddingUser(true)}
-              className="flex items-center gap-2.5 px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-white bg-blue-600 shadow-xl shadow-blue-900/50 hover:scale-[1.02] hover:bg-blue-500 active:scale-95 transition-all"
+              className="flex items-center gap-2.5 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-white bg-blue-600 shadow-xl shadow-blue-900/50 hover:scale-[1.02] hover:bg-blue-500 active:scale-95 transition-all"
             >
               <UserPlus size={18} />
-              Ажилтан нэмэх
+              Нэгээр нэмэх
             </button>
-            <button 
+            <button
               onClick={() => setIsAddingSegment(true)}
-              className="flex items-center gap-2.5 px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-white hover:bg-gray-800 transition-all ml-1"
+              className="flex items-center gap-2.5 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-white hover:bg-gray-800 transition-all"
             >
               <Plus size={18} />
-              Сегмент нэмэх
+              Олноор нэмэх
+            </button>
+            <button
+              onClick={handleExportExcel}
+              className="flex items-center gap-2.5 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-white bg-green-500 hover:bg-green-600 transition-all"
+            >
+              <Download size={18} />
+              Excel татах
             </button>
           </div>
-
-          <div className="relative group overflow-hidden rounded-[2rem]">
+          <div className="relative group overflow-hidden rounded-[2rem] ml-4">
             <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none text-gray-500 group-focus-within:text-blue-500 transition-colors z-10">
               <Search size={20} />
             </div>
-            <input 
-              type="text" 
-              placeholder="Ажилтан хайх..." 
+            <input
+              type="text"
+              placeholder="Ажилтан хайх..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-14 pr-8 py-4 bg-gray-900/40 border border-gray-800 rounded-[2rem] text-sm focus:outline-none focus:border-blue-500/50 focus:bg-gray-900/60 transition-all w-80 text-white backdrop-blur-xl shadow-inner scroll-smooth" 
+              className="pl-14 pr-8 py-4 bg-gray-900/40 border border-gray-800 rounded-[2rem] text-sm focus:outline-none focus:border-blue-500/50 focus:bg-gray-900/60 transition-all w-56 text-white backdrop-blur-xl shadow-inner scroll-smooth"
             />
           </div>
         </div>

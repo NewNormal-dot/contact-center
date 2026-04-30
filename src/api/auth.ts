@@ -5,13 +5,18 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '../database/db';
 import { authenticate } from '../middleware/auth';
 import { logAction } from './audit';
+import { getJwtSecret } from '../utils/jwtSecret';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'your-default-secret-change-this-in-prod';
+const JWT_SECRET = getJwtSecret();
 
 router.post('/change-password', authenticate, async (req: any, res) => {
   const { oldPassword, newPassword } = req.body;
   const userId = req.user.id;
+
+  if (!oldPassword || !newPassword || String(newPassword).length < 6) {
+    return res.status(400).json({ error: 'Нууц үг хамгийн багадаа 6 тэмдэгт байх ёстой' });
+  }
 
   try {
     const user = await db('users').where({ id: userId }).first();
@@ -39,6 +44,11 @@ router.post('/change-password', authenticate, async (req: any, res) => {
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'И-мэйл болон нууц үг шаардлагатай' });
+  }
+
   try {
     const user = await db('users').where({ email }).first();
     if (!user || user.status === 'inactive') {

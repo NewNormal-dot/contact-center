@@ -34,7 +34,7 @@ const config: { [key: string]: Knex.Config } = {
 
   production: {
     client: 'mssql',
-    connection: {
+    connection: () => ({
       server: requireEnv('DB_SERVER'),
       database: requireEnv('DB_NAME'),
       user: requireEnv('DB_USER'),
@@ -44,7 +44,7 @@ const config: { [key: string]: Knex.Config } = {
         encrypt: true,
         trustServerCertificate: false,
       },
-    },
+    }),
     migrations: {
       directory: migrationDir,
     },
