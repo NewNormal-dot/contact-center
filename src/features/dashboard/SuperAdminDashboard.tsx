@@ -819,12 +819,22 @@ export default function SuperAdminDashboard() {
           </div>
           <div className="relative flex flex-wrap gap-3 items-center">
             <button
-              onClick={() => setShowUserAddMenu(prev => !prev)}
+              onClick={() => {
+                setShowUserAddMenu(false);
+                setIsAddingUser(true);
+              }}
               className="flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold text-base transition-all shadow-lg shadow-blue-900/20"
+            >
+              <UserPlus size={20} />
+              Нэгээр нэмэх
+            </button>
+            <button
+              onClick={() => setShowUserAddMenu(prev => !prev)}
+              className={`flex items-center gap-3 ${showUserAddMenu ? 'bg-white text-black border border-gray-300' : 'bg-gray-900/90 text-white border border-gray-800'} px-5 py-3 rounded-2xl font-bold text-base transition-all`}
               aria-expanded={showUserAddMenu}
             >
               <UserPlus size={20} />
-              Хэрэглэгч нэмэх
+              Олноор нэмэх
               <ChevronDown size={18} className={`${showUserAddMenu ? 'rotate-180' : ''} transition-transform`} />
             </button>
             <button 
@@ -836,33 +846,21 @@ export default function SuperAdminDashboard() {
             </button>
 
             {showUserAddMenu && (
-              <div ref={userAddMenuRef} className="absolute top-full right-0 z-50 mt-3 w-full max-w-xs rounded-3xl border border-gray-800 bg-black/95 p-3 shadow-2xl shadow-black/40 backdrop-blur-xl">
+              <div ref={userAddMenuRef} className="absolute top-full right-0 z-50 mt-3 w-full max-w-xs rounded-3xl border border-gray-800 bg-black/95 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl space-y-3">
                 <button
-                  onClick={() => {
-                    setShowUserAddMenu(false);
-                    setIsAddingUser(true);
-                  }}
-                  className="w-full text-left rounded-2xl px-4 py-3 bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all"
+                  type="button"
+                  onClick={downloadBulkUploadTemplate}
+                  className="w-full rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all px-4 py-3"
                 >
-                  Нэгээр нэмэх
+                  Template татах
                 </button>
-                <div className="grid gap-2">
-                  <button
-                    type="button"
-                    onClick={() => bulkUploadRef.current?.click()}
-                    className="w-full rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all px-4 py-3 flex items-center justify-between gap-2"
-                  >
-                    <span>Excel оруулах</span>
-                    <span className="text-xs text-gray-400">Файл сонгох</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={downloadBulkUploadTemplate}
-                    className="w-full rounded-2xl border border-blue-600 text-blue-300 hover:bg-blue-600/10 transition-all px-4 py-3 font-bold"
-                  >
-                    Bulk upload template татах
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => bulkUploadRef.current?.click()}
+                  className="w-full rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all px-4 py-3"
+                >
+                  Файл upload хийх
+                </button>
                 <input
                   ref={bulkUploadRef}
                   type="file"
@@ -870,21 +868,6 @@ export default function SuperAdminDashboard() {
                   className="hidden"
                   onChange={(e) => { handleBulkUpload(e); }}
                 />
-                <div className="mt-3 rounded-2xl border border-gray-800 bg-gray-900/80 p-4 text-xs text-gray-300 space-y-2">
-                  <p className="font-bold text-white">Excel файл форматын заавар</p>
-                  <p>Заавал байх багана:</p>
-                  <ul className="list-disc list-inside space-y-1 text-gray-400">
-                    <li><span className="font-semibold text-white">Код</span> - ажилтны код</li>
-                    <li><span className="font-semibold text-white">Нэр</span> - бүртгэлд орох нэр</li>
-                    <li><span className="font-semibold text-white">И-мэйл</span> - хэрэглэгчийн хаяг</li>
-                    <li><span className="font-semibold text-white">Эрх</span> - superadmin, admin, csr</li>
-                    <li><span className="font-semibold text-white">Сегмент</span> - Postpaid, Prepaid, Hybrid, Corporate</li>
-                    <li><span className="font-semibold text-white">Цагийн төрөл</span> - Full Time эсвэл Part Time</li>
-                  </ul>
-                  <div className="font-mono text-[11px] rounded-xl bg-gray-950 p-3">
-                    Код, Нэр, И-мэйл, Эрх, Сегмент, Цагийн төрөл
-                  </div>
-                </div>
               </div>
             )}
           </div>
