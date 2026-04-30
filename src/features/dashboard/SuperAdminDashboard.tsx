@@ -47,7 +47,12 @@ export default function SuperAdminDashboard() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [userSearchQuery, setUserSearchQuery] = useState('');
-  const [showBulkMenu, setShowBulkMenu] = useState(false);
+  const [showUserAddMenu, setShowUserAddMenu] = useState(false);
+  const [collapsedRoles, setCollapsedRoles] = useState<Record<string, boolean>>({
+    superadmin: true,
+    admin: true,
+    csr: true,
+  });
   const [selectedActionFilter, setSelectedActionFilter] = useState('all');
   const [showSuccess, setShowSuccess] = useState(false);
 
@@ -70,6 +75,20 @@ export default function SuperAdminDashboard() {
   const [myPasswordForm, setMyPasswordForm] = useState({ old: '', new: '', confirm: '' });
 
   const [confirmAction, setConfirmAction] = useState<{ title: string, onConfirm: () => void } | null>(null);
+  const userAddMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showUserAddMenu) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userAddMenuRef.current && !userAddMenuRef.current.contains(event.target as Node)) {
+        setShowUserAddMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showUserAddMenu]);
 
   useEffect(() => {
     // Load initial data from local storage
@@ -133,21 +152,6 @@ export default function SuperAdminDashboard() {
 
     return () => clearInterval(interval);
   }, []);
-
-  const bulkMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!showBulkMenu) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (bulkMenuRef.current && !bulkMenuRef.current.contains(event.target as Node)) {
-        setShowBulkMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showBulkMenu]);
 
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
   const [isAddingUser, setIsAddingUser] = useState(false);
@@ -735,23 +739,19 @@ export default function SuperAdminDashboard() {
           </div>
           <div className="relative flex flex-wrap gap-3 items-center">
             <button 
-              onClick={() => {
-                setShowBulkMenu(false);
-                setIsAddingUser(true);
-              }}
+              onClick={() => setIsAddingUser(true)}
               className="flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold text-base transition-all shadow-lg shadow-blue-900/20"
             >
               <UserPlus size={20} />
               Хэрэглэгч нэмэх
             </button>
             <button
-              onClick={() => setShowBulkMenu(prev => !prev)}
+              onClick={() => setShowUserAddMenu(prev => !prev)}
               className="flex items-center gap-2 bg-gray-900 border border-gray-700 hover:border-blue-500 text-white px-4 py-3 rounded-2xl font-bold transition-all"
-              aria-expanded={showBulkMenu}
+              aria-expanded={showUserAddMenu}
             >
-              <Plus size={18} />
-              Хүснэгттэй дэд цэс
-              <ChevronDown size={16} className={`${showBulkMenu ? 'rotate-180' : ''} transition-transform`} />
+              <ChevronDown size={18} className={`${showUserAddMenu ? 'rotate-180' : ''} transition-transform`} />
+              Нэгээр / Олноор
             </button>
             <button 
               onClick={exportToExcel}
@@ -761,34 +761,21 @@ export default function SuperAdminDashboard() {
               Excel Татах
             </button>
 
-            {showBulkMenu && (
-              <div ref={bulkMenuRef} className="absolute top-full right-0 z-50 mt-3 w-full max-w-2xl rounded-3xl border border-gray-800 bg-black/95 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl">
-                <div className="flex items-center justify-between gap-4 pb-4 border-b border-gray-800 mb-4">
-                  <div>
-                    <h4 className="text-lg font-black text-white">Олноор нэмэх</h4>
-                    <p className="text-sm text-gray-400">Excel/CSV файлыг импортлож, олон хэрэглэгчийг нэг дор оруулна.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowBulkMenu(false)}
-                    className="text-gray-400 hover:text-white"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-                <div className="grid grid-cols-4 gap-3 text-xs uppercase tracking-widest text-gray-500 border-b border-gray-800 pb-3 mb-3">
-                  <span>Нэр</span>
-                  <span>Email</span>
-                  <span>Эрх</span>
-                  <span>Сегмент</span>
-                </div>
-                <div className="rounded-3xl border border-dashed border-gray-800 bg-gray-950/90 p-4">
-                  <p className="text-sm text-gray-400 mb-4">Файл дотор дараах баганууд байх ёстой: Нэр, Email, Эрх, Сегмент.</p>
-                  <label className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 px-4 py-3 text-sm font-bold text-white hover:bg-purple-700 cursor-pointer transition-all">
-                    <Plus size={16} /> Файл сонгох
-                    <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={(e) => { handleBulkUpload(e); setShowBulkMenu(false); }} />
-                  </label>
-                </div>
+            {showUserAddMenu && (
+              <div ref={userAddMenuRef} className="absolute top-full right-0 z-50 mt-3 w-full max-w-xs rounded-3xl border border-gray-800 bg-black/95 p-3 shadow-2xl shadow-black/40 backdrop-blur-xl">
+                <button
+                  onClick={() => {
+                    setShowUserAddMenu(false);
+                    setIsAddingUser(true);
+                  }}
+                  className="w-full text-left rounded-2xl px-4 py-3 bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all"
+                >
+                  Нэгээр нэмэх
+                </button>
+                <label className="w-full mt-2 rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all cursor-pointer px-4 py-3 flex items-center justify-between gap-2">
+                  <span>Олноор нэмэх</span>
+                  <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={(e) => { handleBulkUpload(e); setShowUserAddMenu(false); }} />
+                </label>
               </div>
             )}
           </div>
@@ -797,17 +784,24 @@ export default function SuperAdminDashboard() {
         <div className="space-y-8">
           {groupedRoles.map(group => (
             <div key={group.key} className="space-y-4">
-              <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setCollapsedRoles(prev => ({ ...prev, [group.key]: !prev[group.key] }))}
+                className="w-full flex items-center justify-between gap-3 rounded-3xl border border-gray-800 bg-gray-900/60 px-5 py-4 hover:border-blue-500/50 transition-all"
+              >
                 <div>
                   <h3 className="text-xl font-black text-white">{group.title}</h3>
                   <p className="text-xs text-gray-500">{group.users.length} хэрэглэгч</p>
                 </div>
-                {group.users.length === 0 && (
-                  <span className="text-xs text-gray-400 uppercase tracking-widest">Одоогоор бүртгэлгүй</span>
-                )}
-              </div>
+                <ChevronDown size={20} className={`${collapsedRoles[group.key] ? '' : 'rotate-180'} transition-transform text-gray-400`} />
+              </button>
+              {group.users.length === 0 && (
+                <div className="rounded-3xl border border-dashed border-gray-800 bg-gray-900/40 p-5 text-center text-sm text-gray-400">
+                  Одоогоор бүртгэлгүй
+                </div>
+              )}
 
-              {group.users.length > 0 ? (
+              {!collapsedRoles[group.key] && group.users.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {group.users.map(user => (
                     <div key={user.id} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl space-y-4 hover:border-blue-500/30 transition-all">
@@ -855,10 +849,6 @@ export default function SuperAdminDashboard() {
                       </div>
                     </div>
                   ))}
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-gray-700 bg-gray-900/40 p-6 text-center text-sm text-gray-400">
-                  Энэ ангилалд одоогоор хэрэглэгч байхгүй.
                 </div>
               )}
             </div>
