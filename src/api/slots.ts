@@ -127,7 +127,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req, r
   const finalDeadline = booking_deadline || bookingDeadline || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const finalCapacity = Number(capacity);
 
-  if (!date || !finalStartTime || !finalEndTime || !Number.isFinite(finalCapacity) || finalCapacity < 1) {
+  if (!date || !finalStartTime || !finalEndTime || !finalCapacity || finalCapacity < 1) {
     return res.status(400).json({ error: 'Огноо, эхлэх/дуусах цаг, багтаамжийг зөв оруулна уу' });
   }
 

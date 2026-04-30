@@ -271,7 +271,7 @@ export default function SuperAdminDashboard() {
           name: editingUser.name,
           status: editingUser.status,
           role: editingUser.role,
-          employmentType: editingUser.employmentType || 'Full Time',
+          employmentType: editingUser.lineType,
           code: editingUser.code,
         });
         setCsrs(prev => prev.map(u => u.id === editingUser.id ? editingUser : u));
