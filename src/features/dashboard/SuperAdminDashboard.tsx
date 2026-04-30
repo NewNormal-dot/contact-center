@@ -167,8 +167,10 @@ export default function SuperAdminDashboard() {
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
   const [isAddingUser, setIsAddingUser] = useState(false);
   const [newUser, setNewUser] = useState<Partial<CSR>>({
+    code: '',
     role: 'csr',
     lineType: segments[0] || 'Postpaid',
+    employmentType: 'Full Time',
     status: 'offline',
     photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
   });
@@ -293,14 +295,15 @@ export default function SuperAdminDashboard() {
         name: newUser.name,
         role: newUser.role,
         status: 'active',
-        employmentType: newUser.lineType,
+        employmentType: newUser.employmentType || 'Full Time',
+        code: newUser.code,
       };
 
       try {
         const response = await apiClient.post('/users', payload);
         const createdUser = response.data;
 
-        setCsrs(prev => [...prev, { ...createdUser, lineType: newUser.lineType, photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUser.name}`, status: 'active' }]);
+        setCsrs(prev => [...prev, { ...createdUser, code: newUser.code, lineType: newUser.lineType, employmentType: newUser.employmentType, photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUser.name}`, status: 'active' }]);
         logAction('User Creation', `Created new user: ${newUser.name} (${newUser.role}). Password sent to ${newUser.email}`);
 
         console.log(`Sending email to ${newUser.email} with password: ${randomPassword}`);
@@ -309,8 +312,10 @@ export default function SuperAdminDashboard() {
         setIsAddingUser(false);
         setShowUserAddMenu(false);
         setNewUser({
+          code: '',
           role: 'csr',
           lineType: segments[0] || 'Postpaid',
+          employmentType: 'Full Time',
           status: 'offline',
           photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
         });
@@ -368,10 +373,12 @@ export default function SuperAdminDashboard() {
         const randomPassword = generateRandomPassword();
         newUsers.push({
           id: Math.random().toString(36).substr(2, 9),
+          code: row['Код'] || row['Code'] || '',
           name: row['Нэр'] || row['Name'] || 'Unknown',
           email: email,
           role: (row['Эрх'] || row['Role'] || 'csr').toLowerCase() as any,
           lineType: row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid',
+          employmentType: row['Цагийн төрөл'] || row['EmploymentType'] || row['Employment Type'] || 'Full Time',
           status: 'offline',
           photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${row['Нэр'] || row['Name'] || Math.random()}`,
           password: row['Нууц үг'] || row['Password'] || randomPassword
@@ -388,11 +395,14 @@ export default function SuperAdminDashboard() {
               name: rowUser.name,
               role: rowUser.role,
               status: rowUser.status,
-              employmentType: rowUser.lineType,
+              employmentType: rowUser.employmentType || 'Full Time',
+              code: rowUser.code,
             });
             createdUsers.push({
               ...response.data,
               lineType: rowUser.lineType,
+              employmentType: rowUser.employmentType || 'Full Time',
+              code: rowUser.code,
               photoUrl: rowUser.photoUrl,
               status: rowUser.status,
               password: rowUser.password,
@@ -734,7 +744,7 @@ export default function SuperAdminDashboard() {
     const filteredUsers = csrs.filter(u => {
       const q = userSearchQuery.trim().toLowerCase();
       if (!q) return true;
-      return [u.name, u.email, u.role, u.lineType]
+      return [u.code, u.name, u.email, u.role, u.lineType, u.employmentType]
         .filter(Boolean)
         .some(field => field!.toLowerCase().includes(q));
     });
@@ -792,6 +802,9 @@ export default function SuperAdminDashboard() {
                   <span>Олноор нэмэх</span>
                   <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={(e) => { handleBulkUpload(e); }} />
                 </label>
+                <p className="mt-3 text-xs text-gray-400 leading-relaxed">
+                  Формат: Код | Нэр | И-мэйл | Эрх | Сегмент | Цагийн төрөл (Full Time / Part Time)
+                </p>
               </div>
             )}
           </div>
@@ -1563,6 +1576,10 @@ export default function SuperAdminDashboard() {
               <h2 className="text-2xl font-black text-white mb-6">Шинэ хэрэглэгч нэмэх</h2>
               <form onSubmit={handleAddUser} className="space-y-4">
                 <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Код</label>
+                  <input type="text" value={newUser.code || ''} onChange={(e) => setNewUser({...newUser, code: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="Ажилтны код..." required />
+                </div>
+                <div>
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Нэр</label>
                   <input type="text" value={newUser.name || ''} onChange={(e) => setNewUser({...newUser, name: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="Ажилтны нэр..." required />
                 </div>
@@ -1575,13 +1592,20 @@ export default function SuperAdminDashboard() {
                   <select value={newUser.role} onChange={(e) => setNewUser({...newUser, role: e.target.value as any})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
                     <option value="csr">CSR</option>
                     <option value="admin">Admin</option>
-                    <option value="superadmin">Super Admin</option>
+                    <option value="superadmin">Superadmin</option>
                   </select>
                 </div>
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
                   <select value={newUser.lineType} onChange={(e) => setNewUser({...newUser, lineType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
                     {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Цагийн төрөл</label>
+                  <select value={newUser.employmentType || 'Full Time'} onChange={(e) => setNewUser({...newUser, employmentType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                    <option value="Full Time">Full Time</option>
+                    <option value="Part Time">Part Time</option>
                   </select>
                 </div>
                 <div className="flex gap-3 pt-4">
