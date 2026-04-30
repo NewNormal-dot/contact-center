@@ -38,6 +38,7 @@ import * as XLSX from 'xlsx';
 import { useAuth } from '../../contexts/AuthContext';
 import { CSR, ActivityLog, Notification, TrainingMaterial } from '../../types';
 import { logAction } from '../../utils/logger';
+import apiClient from '../../lib/api-client';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 
 export default function SuperAdminDashboard() {
@@ -77,6 +78,32 @@ export default function SuperAdminDashboard() {
   const [confirmAction, setConfirmAction] = useState<{ title: string, onConfirm: () => void } | null>(null);
   const userAddMenuRef = useRef<HTMLDivElement | null>(null);
 
+  const fetchUsers = async () => {
+    if (!profile?.role) return;
+
+    try {
+      const endpoint = profile.role === 'admin' ? '/users/csr' : '/users';
+      const response = await apiClient.get(endpoint);
+      const users = response.data.map((user: any) => ({
+        ...user,
+        lineType: user.lineType || user.employmentType || user.employment_type || 'Full Time',
+        status: user.status || 'active',
+      }));
+      setCsrs(users);
+    } catch (error) {
+      console.error('Error fetching users from API:', error);
+      const cachedUsers = getLocalData('users', []);
+      if (cachedUsers.length > 0) {
+        setCsrs(cachedUsers);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!profile) return;
+    fetchUsers();
+  }, [profile]);
+
   useEffect(() => {
     if (!showUserAddMenu) return;
 
@@ -91,20 +118,7 @@ export default function SuperAdminDashboard() {
   }, [showUserAddMenu]);
 
   useEffect(() => {
-    // Load initial data from local storage
-    const defaultUsers = [
-      { id: 'superadmin', name: 'Super Admin', email: 'superadmin@mobicom.mn', role: 'superadmin', status: 'online' },
-      { id: 'admin', name: 'Системийн админ', email: 'admin@mobicom.mn', role: 'admin', status: 'offline' },
-      { id: 'csr', name: 'Ажилтан', email: 'csr@mobicom.mn', role: 'csr', status: 'offline' }
-    ];
-    const initialUsers = getLocalData('users', defaultUsers);
-    
-    // Ensure defaults are saved if localStorage is empty
-    if (!localStorage.getItem('users')) {
-      setLocalData('users', defaultUsers);
-    }
-    setCsrs(initialUsers);
-
+    // User list is loaded from the backend via fetchUsers().
     setLogs(getLocalData('activityLogs', []));
     setNotifications(getLocalData('notifications', []));
     
@@ -119,14 +133,12 @@ export default function SuperAdminDashboard() {
 
     // Polling for "real-time" feel in test mode
     const interval = setInterval(() => {
-      const newUsers = getLocalData('users', []);
       const newLogs = getLocalData('activityLogs', []);
       const newNotifs = getLocalData('notifications', []);
       const newSegs = getLocalData('segments', []);
       const newMaterials = getLocalData('trainingMaterials', []);
 
       const dataHash = JSON.stringify({
-        newUsers,
         newLogs,
         newNotifs,
         newSegs,
@@ -143,7 +155,6 @@ export default function SuperAdminDashboard() {
         }));
       };
 
-      setCsrs(newUsers);
       setLogs(newLogs);
       setNotifications(deduplicateSeenBy(newNotifs));
       setSegments(newSegs);
@@ -218,11 +229,8 @@ export default function SuperAdminDashboard() {
   };
 
   // Handlers
-  const handleMyPasswordChange = (e: React.FormEvent) => {
+  const handleMyPasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
-    const profile = JSON.parse(localStorage.getItem('test_profile') || '{}');
-    if (!profile.id) return;
-
     if (myPasswordForm.new !== myPasswordForm.confirm) {
       alert('Шинэ нууц үгнүүд зөрүүтэй байна!');
       return;
@@ -233,45 +241,39 @@ export default function SuperAdminDashboard() {
       return;
     }
 
-    const users = getLocalData('users', []);
-    const currentUserIndex = users.findIndex((u: any) => u.id === profile.id);
-
-    if (currentUserIndex === -1) {
-      alert('Хэрэглэгч олдсонгүй!');
-      return;
+    try {
+      await apiClient.post('/auth/change-password', {
+        oldPassword: myPasswordForm.old,
+        newPassword: myPasswordForm.new,
+      });
+      logAction('Password Changed', `Changed password for ${profile?.name || 'current user'}`);
+      alert('Нууц үг амжилттай солигдлоо!');
+      setIsChangingMyPassword(false);
+      setMyPasswordForm({ old: '', new: '', confirm: '' });
+    } catch (error: any) {
+      console.error('Error changing password:', error);
+      alert(error.response?.data?.error || 'Нууц үг солихад алдаа гарлаа.');
     }
-
-    const currentUser = users[currentUserIndex];
-    if (currentUser.password && currentUser.password !== myPasswordForm.old) {
-      alert('Хуучин нууц үг буруу байна!');
-      return;
-    }
-
-    // Update password
-    users[currentUserIndex].password = myPasswordForm.new;
-    setLocalData('users', users);
-    
-    // Update local profile
-    profile.password = myPasswordForm.new;
-    localStorage.setItem('test_profile', JSON.stringify(profile));
-
-    logAction('Password Changed', `Changed password for ${profile.name}`);
-    alert('Нууц үг амжилттай солигдлоо!');
-    setIsChangingMyPassword(false);
-    setMyPasswordForm({ old: '', new: '', confirm: '' });
   };
 
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingUser) {
       try {
-        updateLocalItem('users', editingUser.id, { ...editingUser });
+        await apiClient.put(`/users/${editingUser.id}`, {
+          name: editingUser.name,
+          status: editingUser.status,
+          role: editingUser.role,
+          employmentType: editingUser.lineType,
+          code: editingUser.code,
+        });
+        setCsrs(prev => prev.map(u => u.id === editingUser.id ? editingUser : u));
         logAction('User Update', `Updated user ${editingUser.name} (${editingUser.role})`);
         setEditingUser(null);
         triggerSuccess();
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error updating user:', error);
-        alert('Хэрэглэгч шинэчлэхэд алдаа гарлаа.');
+        alert(error.response?.data?.error || 'Хэрэглэгч шинэчлэхэд алдаа гарлаа.');
       }
     }
   };
@@ -279,34 +281,33 @@ export default function SuperAdminDashboard() {
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newUser.name && newUser.role && newUser.lineType) {
-      // Check if email already exists
       if (newUser.email && csrs.some(u => u.email?.toLowerCase() === newUser.email?.toLowerCase())) {
         alert('Энэ и-мэйл хаяг аль хэдийн бүртгэгдсэн байна!');
         return;
       }
 
       const randomPassword = generateRandomPassword();
-      const userId = Math.random().toString(36).substr(2, 9);
-      const user: CSR = {
-        id: userId,
-        name: newUser.name,
+      const payload = {
         email: newUser.email,
-        role: newUser.role as any,
-        lineType: newUser.lineType,
-        status: 'offline',
-        photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUser.name}`,
-        password: randomPassword
+        password: randomPassword,
+        name: newUser.name,
+        role: newUser.role,
+        status: 'active',
+        employmentType: newUser.lineType,
       };
-      
+
       try {
-        addLocalItem('users', user);
-        logAction('User Creation', `Created new user: ${user.name} (${user.role}). Password sent to ${user.email}`);
-        
-        // Simulate sending email
-        console.log(`Sending email to ${user.email} with password: ${randomPassword}`);
-        alert(`Хэрэглэгч амжилттай үүсгэгдлээ. Нууц үг (${randomPassword}) ${user.email} хаяг руу илгээгдлээ.`);
+        const response = await apiClient.post('/users', payload);
+        const createdUser = response.data;
+
+        setCsrs(prev => [...prev, { ...createdUser, lineType: newUser.lineType, photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUser.name}`, status: 'active' }]);
+        logAction('User Creation', `Created new user: ${newUser.name} (${newUser.role}). Password sent to ${newUser.email}`);
+
+        console.log(`Sending email to ${newUser.email} with password: ${randomPassword}`);
+        alert(`Хэрэглэгч амжилттай үүсгэгдлээ. Нууц үг (${randomPassword}) ${newUser.email} хаяг руу илгээгдлээ.`);
 
         setIsAddingUser(false);
+        setShowUserAddMenu(false);
         setNewUser({
           role: 'csr',
           lineType: segments[0] || 'Postpaid',
@@ -314,9 +315,9 @@ export default function SuperAdminDashboard() {
           photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
         });
         triggerSuccess();
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error adding user:', error);
-        alert('Хэрэглэгч нэмэхэд алдаа гарлаа.');
+        alert(error.response?.data?.error || 'Хэрэглэгч нэмэхэд алдаа гарлаа.');
       }
     }
   };
@@ -329,15 +330,15 @@ export default function SuperAdminDashboard() {
     const user = csrs.find(u => u.id === userId);
     if (!user) return;
 
-    requestConfirmation(`'${user.name}' ажилтныг устгахдаа итгэлтэй байна уу?`, () => {
+    requestConfirmation(`'${user.name}' ажилтныг устгахдаа итгэлтэй байна уу?`, async () => {
       try {
-        const updated = deleteLocalItem('users', userId);
-        setCsrs(updated);
+        await apiClient.delete(`/users/${userId}`);
+        setCsrs(prev => prev.filter(u => u.id !== userId));
         logAction('User Deleted', `Deleted user: ${user.name} (${user.role})`);
         triggerSuccess();
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error deleting user:', error);
-        alert('Хэрэглэгч устгахад алдаа гарлаа.');
+        alert(error.response?.data?.error || 'Хэрэглэгч устгахад алдаа гарлаа.');
       }
     });
   };
@@ -347,7 +348,7 @@ export default function SuperAdminDashboard() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       const bstr = evt.target?.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
@@ -378,16 +379,37 @@ export default function SuperAdminDashboard() {
       });
 
       if (newUsers.length > 0) {
-        try {
-          const existingUsers = getLocalData('users', []);
-          setLocalData('users', [...existingUsers, ...newUsers]);
-          
-          logAction('Bulk User Creation', `Uploaded ${newUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
-          alert(`${newUsers.length} хэрэглэгч амжилттай нэмэгдлээ. ${duplicates} давхардсан и-мэйл алгасагдлаа.`);
+        const createdUsers: CSR[] = [];
+        for (const rowUser of newUsers) {
+          try {
+            const response = await apiClient.post('/users', {
+              email: rowUser.email,
+              password: rowUser.password,
+              name: rowUser.name,
+              role: rowUser.role,
+              status: rowUser.status,
+              employmentType: rowUser.lineType,
+            });
+            createdUsers.push({
+              ...response.data,
+              lineType: rowUser.lineType,
+              photoUrl: rowUser.photoUrl,
+              status: rowUser.status,
+              password: rowUser.password,
+            });
+          } catch (err: any) {
+            duplicates++;
+          }
+        }
+
+        if (createdUsers.length > 0) {
+          setCsrs(prev => [...prev, ...createdUsers]);
+          setShowUserAddMenu(false);
+          logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
+          alert(`${createdUsers.length} хэрэглэгч амжилттай нэмэгдлээ. ${duplicates} давхардсан болон алдаа гарсан мөрүүд алгасагдлаа.`);
           triggerSuccess();
-        } catch (err) {
-          console.error('Error in bulk upload:', err);
-          alert('Олон хэрэглэгч нэмэхэд алдаа гарлаа.');
+        } else {
+          alert(`Бүх хэрэглэгчид аль хэдийн бүртгэгдсэн байна (${duplicates} давхардал).`);
         }
       } else if (duplicates > 0) {
         alert(`Бүх хэрэглэгчид аль хэдийн бүртгэгдсэн байна (${duplicates} давхардал).`);
@@ -724,8 +746,8 @@ export default function SuperAdminDashboard() {
     ];
 
     return (
-      <div className="space-y-10">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div className="space-y-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="w-full lg:w-1/2">
             <div className="relative w-full max-w-lg">
               <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -738,20 +760,14 @@ export default function SuperAdminDashboard() {
             </div>
           </div>
           <div className="relative flex flex-wrap gap-3 items-center">
-            <button 
-              onClick={() => setIsAddingUser(true)}
+            <button
+              onClick={() => setShowUserAddMenu(prev => !prev)}
               className="flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold text-base transition-all shadow-lg shadow-blue-900/20"
+              aria-expanded={showUserAddMenu}
             >
               <UserPlus size={20} />
               Хэрэглэгч нэмэх
-            </button>
-            <button
-              onClick={() => setShowUserAddMenu(prev => !prev)}
-              className="flex items-center gap-2 bg-gray-900 border border-gray-700 hover:border-blue-500 text-white px-4 py-3 rounded-2xl font-bold transition-all"
-              aria-expanded={showUserAddMenu}
-            >
               <ChevronDown size={18} className={`${showUserAddMenu ? 'rotate-180' : ''} transition-transform`} />
-              Нэгээр / Олноор
             </button>
             <button 
               onClick={exportToExcel}
@@ -774,7 +790,7 @@ export default function SuperAdminDashboard() {
                 </button>
                 <label className="w-full mt-2 rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all cursor-pointer px-4 py-3 flex items-center justify-between gap-2">
                   <span>Олноор нэмэх</span>
-                  <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={(e) => { handleBulkUpload(e); setShowUserAddMenu(false); }} />
+                  <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={(e) => { handleBulkUpload(e); }} />
                 </label>
               </div>
             )}
