@@ -4,7 +4,7 @@ This project is a full-stack Node.js application (Express + React/Vite) designed
 
 ## Prerequisites
 - Azure account
-- Azure Database for PostgreSQL
+- Azure SQL Database or Microsoft SQL Server
 - Node.js environment
 
 ## Local Setup
@@ -18,7 +18,11 @@ When deploying to Azure App Service, configure the following **Application Setti
 - `NODE_ENV`: `production`
 - `PORT`: (Azure provides this automatically, don't hardcode it)
 - `JWT_SECRET`: A long random string for securing tokens
-- `DATABASE_URL`: `postgresql://user:password@host:5432/dbname`
+- `DB_SERVER`: Azure SQL server host name
+- `DB_NAME`: Database name
+- `DB_USER`: Database user
+- `DB_PASSWORD`: Database password
+- `DB_PORT`: Usually `1433`
 
 ## Deployment Steps
 1. **Build**: Run `npm run build` to build the Vite frontend.
@@ -39,4 +43,4 @@ The backend serves both the API and the React frontend.
 
 ## Database Note
 - **SQLite**: Used for local development (`database.sqlite`).
-- **PostgreSQL**: Used in production via the `DATABASE_URL` environment variable.
+- **Azure SQL / Microsoft SQL Server**: Used in production via the `DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_PORT` environment variables.

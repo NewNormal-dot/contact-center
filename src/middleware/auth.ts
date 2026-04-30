@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import db from '../database/db';
+import { getJwtSecret } from '../utils/jwtSecret';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-default-secret-change-this-in-prod';
+const JWT_SECRET = getJwtSecret();
 
 export async function authenticate(req: any, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
