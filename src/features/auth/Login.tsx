@@ -1,6 +1,6 @@
 import { useState, type FormEvent, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, User, Lock, ShieldCheck } from 'lucide-react';
+import { Eye, EyeOff, User, Lock } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../../contexts/AuthContext';
 import apiClient from '../../lib/api-client';
@@ -44,19 +44,6 @@ export default function Login() {
           err.message ||
           'Нэвтрэлт амжилтгүй. Дахин оролдоно уу.'
       );
-      setLoading(false);
-    }
-  };
-
-  const handleInitialSetup = async () => {
-    setLoading(true);
-
-    try {
-      const resp = await apiClient.post('/auth/register-initial');
-      alert(resp.data.message);
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Алдаа гарлаа');
-    } finally {
       setLoading(false);
     }
   };
@@ -206,14 +193,7 @@ export default function Login() {
               )}
 
               <div className="mt-8 pt-6 border-t border-white/5 flex flex-col items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleInitialSetup}
-                  className="text-[10px] text-gray-500 hover:text-blue-400 transition-colors flex items-center gap-1"
-                >
-                  <ShieldCheck size={12} />
-                  Initial Setup (Superadmin)
-                </button>
+                <p className="text-xs text-gray-500">Та нэвтрэн систем ашиглаж болно.</p>
               </div>
             </div>
           </div>

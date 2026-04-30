@@ -47,6 +47,7 @@ export default function SuperAdminDashboard() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [showBulkMenu, setShowBulkMenu] = useState(false);
   const [selectedActionFilter, setSelectedActionFilter] = useState('all');
   const [showSuccess, setShowSuccess] = useState(false);
 
@@ -132,6 +133,21 @@ export default function SuperAdminDashboard() {
 
     return () => clearInterval(interval);
   }, []);
+
+  const bulkMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showBulkMenu) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (bulkMenuRef.current && !bulkMenuRef.current.contains(event.target as Node)) {
+        setShowBulkMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showBulkMenu]);
 
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
   const [isAddingUser, setIsAddingUser] = useState(false);
@@ -705,14 +721,10 @@ export default function SuperAdminDashboard() {
 
     return (
       <div className="space-y-10">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-2xl font-black text-white">Хэрэглэгчдийн удирдлага</h2>
-            <p className="text-sm text-gray-400">Superadmin, Admin, CSR ангилалд хялбархан хуваадаг.</p>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="relative w-full sm:w-72">
-              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="w-full lg:w-1/2">
+            <div className="relative w-full max-w-lg">
+              <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
               <input
                 value={userSearchQuery}
                 onChange={(e) => setUserSearchQuery(e.target.value)}
@@ -720,27 +732,65 @@ export default function SuperAdminDashboard() {
                 className="w-full pl-11 pr-4 py-3 bg-gray-900/70 border border-gray-800 rounded-2xl text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500"
               />
             </div>
-            <div className="flex flex-wrap gap-3">
-              <label className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold transition-all cursor-pointer">
-                <Plus size={18} />
-                Олноор нэмэх
-                <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleBulkUpload} />
-              </label>
-              <button 
-                onClick={() => setIsAddingUser(true)}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
-              >
-                <UserPlus size={18} />
-                Хэрэглэгч нэмэх
-              </button>
-              <button 
-                onClick={exportToExcel}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
-              >
-                <Download size={18} />
-                Excel Татах
-              </button>
-            </div>
+          </div>
+          <div className="relative flex flex-wrap gap-3 items-center">
+            <button 
+              onClick={() => {
+                setShowBulkMenu(false);
+                setIsAddingUser(true);
+              }}
+              className="flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold text-base transition-all shadow-lg shadow-blue-900/20"
+            >
+              <UserPlus size={20} />
+              Хэрэглэгч нэмэх
+            </button>
+            <button
+              onClick={() => setShowBulkMenu(prev => !prev)}
+              className="flex items-center gap-2 bg-gray-900 border border-gray-700 hover:border-blue-500 text-white px-4 py-3 rounded-2xl font-bold transition-all"
+              aria-expanded={showBulkMenu}
+            >
+              <Plus size={18} />
+              Хүснэгттэй дэд цэс
+              <ChevronDown size={16} className={`${showBulkMenu ? 'rotate-180' : ''} transition-transform`} />
+            </button>
+            <button 
+              onClick={exportToExcel}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-3 rounded-2xl font-bold transition-all"
+            >
+              <Download size={18} />
+              Excel Татах
+            </button>
+
+            {showBulkMenu && (
+              <div ref={bulkMenuRef} className="absolute top-full right-0 z-50 mt-3 w-full max-w-2xl rounded-3xl border border-gray-800 bg-black/95 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl">
+                <div className="flex items-center justify-between gap-4 pb-4 border-b border-gray-800 mb-4">
+                  <div>
+                    <h4 className="text-lg font-black text-white">Олноор нэмэх</h4>
+                    <p className="text-sm text-gray-400">Excel/CSV файлыг импортлож, олон хэрэглэгчийг нэг дор оруулна.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkMenu(false)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-4 gap-3 text-xs uppercase tracking-widest text-gray-500 border-b border-gray-800 pb-3 mb-3">
+                  <span>Нэр</span>
+                  <span>Email</span>
+                  <span>Эрх</span>
+                  <span>Сегмент</span>
+                </div>
+                <div className="rounded-3xl border border-dashed border-gray-800 bg-gray-950/90 p-4">
+                  <p className="text-sm text-gray-400 mb-4">Файл дотор дараах баганууд байх ёстой: Нэр, Email, Эрх, Сегмент.</p>
+                  <label className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 px-4 py-3 text-sm font-bold text-white hover:bg-purple-700 cursor-pointer transition-all">
+                    <Plus size={16} /> Файл сонгох
+                    <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={(e) => { handleBulkUpload(e); setShowBulkMenu(false); }} />
+                  </label>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1114,18 +1164,8 @@ export default function SuperAdminDashboard() {
               </h2>
               <p className="text-xs sm:text-sm text-gray-500">Тавтай морил, {profile?.name || 'Super Admin'}. Системийн бүх үйл ажиллагааг эндээс хянана уу.</p>
             </div>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-6">
+            <div className="flex items-center gap-4">
               <DigitalClock />
-              <div className="relative w-full sm:w-72">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
-                <input 
-                  type="text" 
-                  placeholder="Хайх..." 
-                  className="w-full bg-gray-900/50 border border-gray-800 rounded-xl py-2.5 pl-11 pr-4 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
             </div>
           </div>
 
