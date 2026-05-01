@@ -8,7 +8,6 @@ import { logAction } from './audit';
 import { getJwtSecret } from '../utils/jwtSecret';
 
 const router = express.Router();
-const JWT_SECRET = getJwtSecret();
 
 router.post('/change-password', authenticate, async (req: any, res) => {
   const { oldPassword, newPassword } = req.body;
@@ -62,7 +61,7 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: user.name },
-      JWT_SECRET,
+      getJwtSecret(),
       { expiresIn: '24h' }
     );
 

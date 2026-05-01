@@ -3,8 +3,6 @@ import jwt from 'jsonwebtoken';
 import db from '../database/db';
 import { getJwtSecret } from '../utils/jwtSecret';
 
-const JWT_SECRET = getJwtSecret();
-
 export async function authenticate(req: any, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -13,7 +11,7 @@ export async function authenticate(req: any, res: Response, next: NextFunction) 
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, getJwtSecret()) as any;
     const dbUser = await db('users').where({ id: decoded.id }).first();
 
     if (!dbUser || dbUser.status === 'inactive') {
