@@ -13,6 +13,9 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  AZURE_WEBAPP_NAME: contact-center-app
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -55,10 +58,26 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_EBE50D08C8A44BADB847A830CA5526EA }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_E9377F2238F9487CA185C6686637F9A4 }}
 
+      - name: Ensure Azure Web App is running
+        shell: bash
+        run: |
+          resource_group="$(az webapp list --query "[?name=='${AZURE_WEBAPP_NAME}'].resourceGroup | [0]" -o tsv)"
+          if [ -z "$resource_group" ]; then
+            echo "Could not find Azure Web App: ${AZURE_WEBAPP_NAME}"
+            exit 1
+          fi
+
+          state="$(az webapp show --name "${AZURE_WEBAPP_NAME}" --resource-group "$resource_group" --query state -o tsv)"
+          echo "Azure Web App state: $state"
+
+          if [ "$state" != "Running" ]; then
+            az webapp start --name "${AZURE_WEBAPP_NAME}" --resource-group "$resource_group"
+          fi
+
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: contact-center-app
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           slot-name: Production
           package: .
