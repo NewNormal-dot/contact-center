@@ -216,25 +216,20 @@ router.delete('/:id', authenticate, async (req: any, res) => {
     const userToDelete = await db('users').where({ id }).first();
     if (!userToDelete) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
 
-    const isRoot = actingUser.email === 'enkhtur.a@mobicom.mn' || actingUser.email === 'Enkhtur040607@gmail.com';
+    const canDeleteUser =
+      actingUser.role === 'superadmin' ||
+      (actingUser.role === 'admin' && userToDelete.role === 'csr');
     
-    // ROLES DELETE RULES:
-    // 1. Root user can delete ANYONE.
-    // 2. Superadmin can delete Admin and CSR (but not other Superadmins).
-    // 3. Admin can delete CSR ONLY.
+    // Delete rules:
+    // 1. Superadmin can delete users with any role.
+    // 2. Admin can delete CSR users only.
     
-    if (!isRoot) {
+    if (!canDeleteUser) {
       if (actingUser.role === 'admin') {
-        if (userToDelete.role !== 'csr') {
-          return res.status(403).json({ error: 'Админ зөвхөн CSR хэрэглэгчийг устгах эрхтэй' });
-        }
-      } else if (actingUser.role === 'superadmin') {
-        if (userToDelete.role === 'superadmin') {
-          return res.status(403).json({ error: 'Супер админ өөр супер админыг устгах эрхгүй' });
-        }
-      } else {
-        return res.status(403).json({ error: 'Устгах эрхгүй' });
+        return res.status(403).json({ error: 'Админ зөвхөн CSR хэрэглэгчийг устгах эрхтэй' });
       }
+
+      return res.status(403).json({ error: 'Устгах эрхгүй' });
     }
 
     // Safety: Prevent deleting self (Optional, but usually good)

@@ -38,7 +38,7 @@ export async function logAction(userId: string, action: string, entityType: stri
       entity_type: entityType,
       entity_id: entityId,
       details,
-      created_at: new Date()
+      created_at: new Date().toISOString()
     });
 
     const cutoff = new Date();
