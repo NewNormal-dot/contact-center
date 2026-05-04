@@ -49,6 +49,7 @@ export default function SuperAdminDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [showUserAddMenu, setShowUserAddMenu] = useState(false);
+  const [showBulkAddMenu, setShowBulkAddMenu] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Record<string, boolean>>({
     superadmin: true,
     admin: true,
@@ -138,6 +139,7 @@ export default function SuperAdminDashboard() {
     const handleClickOutside = (event: MouseEvent) => {
       if (userAddMenuRef.current && !userAddMenuRef.current.contains(event.target as Node)) {
         setShowUserAddMenu(false);
+        setShowBulkAddMenu(false);
       }
     };
 
@@ -805,9 +807,9 @@ export default function SuperAdminDashboard() {
 
     return (
       <div className="space-y-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="w-full lg:w-1/2">
-            <div className="relative w-full max-w-lg">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="w-full xl:max-w-sm">
+            <div className="relative w-full">
               <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
               <input
                 value={userSearchQuery}
@@ -817,24 +819,18 @@ export default function SuperAdminDashboard() {
               />
             </div>
           </div>
-          <div className="relative flex flex-wrap gap-3 items-center">
+          <div className="relative flex flex-wrap sm:flex-nowrap gap-3 items-center">
             <button
+              type="button"
               onClick={() => {
-                setShowUserAddMenu(false);
-                setIsAddingUser(true);
+                setShowUserAddMenu(prev => !prev);
+                setShowBulkAddMenu(false);
               }}
-              className="flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold text-base transition-all shadow-lg shadow-blue-900/20"
-            >
-              <UserPlus size={20} />
-              Нэгээр нэмэх
-            </button>
-            <button
-              onClick={() => setShowUserAddMenu(prev => !prev)}
               className={`flex items-center gap-3 ${showUserAddMenu ? 'bg-white text-black border border-gray-300' : 'bg-gray-900/90 text-white border border-gray-800'} px-5 py-3 rounded-2xl font-bold text-base transition-all`}
               aria-expanded={showUserAddMenu}
             >
               <UserPlus size={20} />
-              Олноор нэмэх
+              Хэрэглэгч нэмэх
               <ChevronDown size={18} className={`${showUserAddMenu ? 'rotate-180' : ''} transition-transform`} />
             </button>
             <button 
@@ -846,27 +842,64 @@ export default function SuperAdminDashboard() {
             </button>
 
             {showUserAddMenu && (
-              <div ref={userAddMenuRef} className="absolute top-full right-0 z-50 mt-3 w-full max-w-xs rounded-3xl border border-gray-800 bg-black/95 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl space-y-3">
+              <div ref={userAddMenuRef} className="absolute top-full right-0 z-50 mt-3 w-80 rounded-3xl border border-gray-800 bg-black/95 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl space-y-4">
                 <button
                   type="button"
-                  onClick={downloadBulkUploadTemplate}
-                  className="w-full rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all px-4 py-3"
+                  onClick={() => {
+                    setShowUserAddMenu(false);
+                    setShowBulkAddMenu(false);
+                    setIsAddingUser(true);
+                  }}
+                  className="w-full rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all px-4 py-3 flex items-center justify-center gap-2"
                 >
-                  Template татах
+                  <UserPlus size={18} />
+                  Нэгээр нэмэх
                 </button>
-                <button
-                  type="button"
-                  onClick={() => bulkUploadRef.current?.click()}
-                  className="w-full rounded-2xl bg-gray-900/80 hover:bg-gray-800 text-white font-bold transition-all px-4 py-3"
-                >
-                  Файл upload хийх
-                </button>
+
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkAddMenu(prev => !prev)}
+                    className="relative w-full rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all px-4 py-3 flex items-center justify-center gap-2"
+                    aria-expanded={showBulkAddMenu}
+                  >
+                    <Users size={18} />
+                    Олноор нэмэх
+                    <ChevronDown size={16} className={`absolute right-4 ${showBulkAddMenu ? 'rotate-180' : ''} transition-transform`} />
+                  </button>
+
+                  {showBulkAddMenu && (
+                    <div className="space-y-2 pl-4">
+                      <button
+                        type="button"
+                        onClick={downloadBulkUploadTemplate}
+                        className="w-full rounded-2xl bg-green-600 hover:bg-green-700 text-white font-bold transition-all px-4 py-3 text-sm flex items-center justify-center gap-2"
+                      >
+                        <Download size={16} />
+                        Template татах
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => bulkUploadRef.current?.click()}
+                        className="w-full rounded-2xl bg-gray-800 hover:bg-gray-700 text-white font-bold transition-all px-4 py-3 text-sm flex items-center justify-center gap-2"
+                      >
+                        <UserPlus size={16} />
+                        Хэрэглэгч нэмэх
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <input
                   ref={bulkUploadRef}
                   type="file"
                   accept=".xlsx, .xls, .csv"
                   className="hidden"
-                  onChange={(e) => { handleBulkUpload(e); }}
+                  onChange={(e) => {
+                    setShowUserAddMenu(false);
+                    setShowBulkAddMenu(false);
+                    handleBulkUpload(e);
+                  }}
                 />
               </div>
             )}
