@@ -30,16 +30,52 @@ function mapTraining(row: any) {
 
 router.get('/notifications', authenticate, async (req: any, res) => {
   const userId = req.user.id;
+  const userRole = req.user.role;
   try {
-    const notifications = await db('notifications')
-      .leftJoin('notification_read_receipts', function () {
-        this.on('notifications.id', '=', 'notification_read_receipts.notification_id')
-          .andOn('notification_read_receipts.user_id', '=', db.raw('?', [userId]));
-      })
-      .leftJoin('users', 'notifications.author_id', '=', 'users.id')
-      .select('notifications.*', 'notification_read_receipts.read_at', 'users.name as author_name')
-      .orderBy('notifications.created_at', 'desc');
-    res.json(notifications.map(mapNotification));
+    if (userRole === 'admin' || userRole === 'superadmin') {
+      // For admin/superadmin, get all notifications with read receipts from all users
+      const notifications = await db('notifications')
+        .leftJoin('users', 'notifications.author_id', '=', 'users.id')
+        .select(
+          'notifications.id',
+          'notifications.title',
+          'notifications.content',
+          'notifications.image_url',
+          'notifications.deadline',
+          'notifications.created_at',
+          'notifications.author_id',
+          'users.name as author_name'
+        )
+        .orderBy('notifications.created_at', 'desc');
+
+      // Get read receipts for each notification
+      const result = await Promise.all(
+        notifications.map(async (notif: any) => {
+          const readReceipts = await db('notification_read_receipts')
+            .leftJoin('users', 'notification_read_receipts.user_id', '=', 'users.id')
+            .where({ notification_id: notif.id })
+            .select('notification_read_receipts.user_id', 'notification_read_receipts.read_at', 'users.name as user_name');
+          
+          return {
+            ...mapNotification(notif),
+            notification_read_receipts: readReceipts
+          };
+        })
+      );
+
+      res.json(result);
+    } else {
+      // For CSR, only get own read status
+      const notifications = await db('notifications')
+        .leftJoin('notification_read_receipts', function () {
+          this.on('notifications.id', '=', 'notification_read_receipts.notification_id')
+            .andOn('notification_read_receipts.user_id', '=', db.raw('?', [userId]));
+        })
+        .leftJoin('users', 'notifications.author_id', '=', 'users.id')
+        .select('notifications.*', 'notification_read_receipts.read_at', 'users.name as author_name')
+        .orderBy('notifications.created_at', 'desc');
+      res.json(notifications.map(mapNotification));
+    }
   } catch (err) {
     console.error('Get notifications error:', err);
     res.status(500).json({ error: 'Мэдэгдэл татахад алдаа гарлаа' });

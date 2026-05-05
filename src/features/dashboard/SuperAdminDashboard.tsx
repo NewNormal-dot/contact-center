@@ -166,6 +166,32 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const fetchNotifications = async () => {
+    try {
+      const response = await apiClient.get('/api/broadcasts/notifications');
+      const notificationsData = response.data.map((n: any) => ({
+        id: n.id,
+        title: n.title,
+        content: n.content,
+        imageUrl: n.image_url || n.imageUrl,
+        deadline: n.deadline,
+        createdAt: n.created_at || n.createdAt,
+        authorId: n.author_id || n.authorId,
+        authorName: n.author_name || n.authorName || 'Unknown',
+        type: n.type || 'general',
+        seenBy: n.notification_read_receipts ? n.notification_read_receipts.map((r: any) => ({
+          userId: r.user_id,
+          userName: r.user_name || 'Unknown',
+          seenAt: r.read_at
+        })) : (n.readAt ? [{ userId: profile?.id, userName: profile?.name, seenAt: n.readAt }] : [])
+      }));
+      setNotifications(notificationsData);
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      setNotifications([]);
+    }
+  };
+
   useEffect(() => {
     if (!profile) return;
     fetchUsers();
@@ -178,14 +204,15 @@ export default function SuperAdminDashboard() {
       setLocalData('segments', defaultSegments);
     }
     setSegments(initialSegments);
-    setNotifications(getLocalData('notifications', []));
     setTrainingMaterials(getLocalData('trainingMaterials', []));
 
     fetchLogs();
+    fetchNotifications();
 
     const interval = setInterval(() => {
       fetchUsers();
       fetchLogs();
+      fetchNotifications();
     }, 5000);
 
     return () => clearInterval(interval);
@@ -200,6 +227,7 @@ export default function SuperAdminDashboard() {
     deadline: new Date(Date.now() + 86400000).toISOString().slice(0, 16)
   });
   const [isAddingNotification, setIsAddingNotification] = useState(false);
+  const [isUploadingBulk, setIsUploadingBulk] = useState(false);
 
   const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => s.userId === 'superadmin')).length;
   const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === 'superadmin')).length;
@@ -230,29 +258,15 @@ export default function SuperAdminDashboard() {
     }
   };
 
-  const markNotificationAsRead = (notifId: string) => {
-    const notification = notifications.find(n => n.id === notifId);
-    if (notification) {
-      const alreadySeen = notification.seenBy?.some(s => s.userId === 'superadmin');
-      if (!alreadySeen) {
-        const newSeenBy = [...(notification.seenBy || []), {
-          userId: 'superadmin',
-          userName: 'Super Admin',
-          seenAt: new Date().toISOString()
-        }];
-
-        updateLocalItem('notifications', notifId, { seenBy: newSeenBy });
-
-        setNotifications(prev =>
-          prev.map(n =>
-            n.id === notifId
-              ? { ...n, seenBy: newSeenBy }
-              : n
-          )
-        );
-
-        logAction('Notification Viewed', `Viewed notification: ${notification.title}`);
-      }
+  const markNotificationAsRead = async (notifId: string) => {
+    try {
+      await apiClient.post('/api/broadcasts/notifications/read', {
+        notification_id: notifId,
+      });
+      fetchNotifications();
+      logAction('Notification Viewed', `Viewed notification: ${notifId}`);
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
     }
   };
 
@@ -690,25 +704,28 @@ export default function SuperAdminDashboard() {
     triggerSuccess();
   };
 
-  const handleSendNotification = (e: React.FormEvent) => {
+  const handleSendNotification = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newNotification.title && newNotification.content) {
-      const notification: Notification = {
-        id: Math.random().toString(36).substr(2, 9),
+    if (!newNotification.title || !newNotification.content) {
+      alert('Гарчиг болон агуулга шаардлагатай');
+      return;
+    }
+
+    try {
+      await apiClient.post('/api/broadcasts/notifications', {
         title: newNotification.title,
         content: newNotification.content,
         deadline: newNotification.deadline || '',
-        createdAt: new Date().toISOString(),
-        authorId: 'superadmin',
-        authorName: 'Super Admin',
-        type: newNotification.type as any,
-        seenBy: []
-      };
-      addLocalItem('notifications', notification);
-      logAction('Notification Sent', `Sent ${notification.type} notification: ${notification.title}`);
+        type: newNotification.type || 'general'
+      });
+      logAction('Notification Sent', `Sent ${newNotification.type} notification: ${newNotification.title}`);
       setIsAddingNotification(false);
       setNewNotification({ type: 'general', deadline: new Date(Date.now() + 86400000).toISOString().split('T')[0] });
+      fetchNotifications();
       triggerSuccess();
+    } catch (error: any) {
+      console.error('Error sending notification:', error);
+      alert(error.response?.data?.error || 'Мэдэгдэл явуулахад алдаа гарлаа.');
     }
   };
 
@@ -1710,7 +1727,7 @@ export default function SuperAdminDashboard() {
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl flex flex-col max-h-[80vh]">
               <div className="flex items-center justify-between mb-6">
                 <div>
-                  <h2 className="text-2xl font-black text-white">Үзсэн ажилтнууд</h2>
+                  <h2 className="text-2xl font-black text-white">Үзсэн / Үзээгүй ажилтнууд</h2>
                   <p className="text-gray-400 text-sm">{showSeenDetails.title}</p>
                 </div>
                 <button onClick={() => setShowSeenDetails(null)} className="text-gray-500 hover:text-white">
@@ -1718,52 +1735,121 @@ export default function SuperAdminDashboard() {
                 </button>
               </div>
 
+              <div className="flex gap-4 mb-4 border-b border-gray-800">
+                <button 
+                  onClick={() => setShowSeenDetails({ ...showSeenDetails, _view: 'seen' } as any)}
+                  className={`px-4 py-2 font-bold text-sm transition-all ${ 
+                    (showSeenDetails as any)._view !== 'unseen' 
+                      ? 'text-blue-400 border-b-2 border-blue-400' 
+                      : 'text-gray-500 hover:text-white'
+                  }`}
+                >
+                  Үзсэн ({(showSeenDetails.seenBy ?? []).length})
+                </button>
+                <button 
+                  onClick={() => setShowSeenDetails({ ...showSeenDetails, _view: 'unseen' } as any)}
+                  className={`px-4 py-2 font-bold text-sm transition-all ${
+                    (showSeenDetails as any)._view === 'unseen' 
+                      ? 'text-red-400 border-b-2 border-red-400' 
+                      : 'text-gray-500 hover:text-white'
+                  }`}
+                >
+                  Үзээгүй ({Math.max(csrs.filter(c => c.role === 'csr').length - (showSeenDetails.seenBy ?? []).length, 0)})
+                </button>
+              </div>
+
               <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
-                {(showSeenDetails.seenBy ?? []).length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-                    <AlertCircle size={48} className="mb-4 opacity-20" />
-                    <p className="font-bold">Одоогоор үзсэн хэрэглэгч байхгүй байна.</p>
-                  </div>
-                ) : (
-                  (showSeenDetails.seenBy ?? []).map((seen, idx) => {
-                    const user = csrs.find(u => u.id === seen.userId);
-                    return (
-                      <div key={`seen-detail-${seen.userId}-${idx}`} className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-800">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-xs font-bold text-blue-400">
-                            {seen.userName.charAt(0)}
-                          </div>
-                          <div>
-                            <p className="font-bold text-white">{seen.userName}</p>
-                            <div className="flex items-center gap-2">
-                              <p className="text-[10px] text-blue-500 uppercase font-black">
-                                {user?.role === 'superadmin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : 'CSR'}
-                              </p>
-                              <span className="w-1 h-1 bg-gray-700 rounded-full"></span>
-                              <p className="text-[10px] text-gray-500 uppercase font-black">{user?.lineType || 'N/A'}</p>
+                {(showSeenDetails as any)._view === 'unseen' ? (
+                  (() => {
+                    const seenUserIds = new Set((showSeenDetails.seenBy ?? []).map(s => String(s.userId)));
+                    const unseenUsers = csrs.filter(u => u.role === 'csr' && !seenUserIds.has(String(u.id)));
+                    
+                    return unseenUsers.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                        <CheckCircle2 size={48} className="mb-4 opacity-20" />
+                        <p className="font-bold">Бүх CSR ажилтнууд үзсэн байна!</p>
+                      </div>
+                    ) : (
+                      unseenUsers.map((user, idx) => (
+                        <div key={`unseen-detail-${user.id}-${idx}`} className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-800">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-xs font-bold text-red-400">
+                              {user.name.charAt(0)}
+                            </div>
+                            <div>
+                              <p className="font-bold text-white">{user.name}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="text-[10px] text-gray-500 uppercase font-black">{user.email}</p>
+                                <span className="w-1 h-1 bg-gray-700 rounded-full"></span>
+                                <p className="text-[10px] text-gray-500 uppercase font-black">{user.lineType || 'N/A'}</p>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="flex items-center gap-1.5 text-green-500 text-xs font-bold mb-0.5">
-                            <CheckCircle2 size={14} />
-                            Үзсэн
+                          <div className="text-right">
+                            <div className="flex items-center gap-1.5 text-red-500 text-xs font-bold mb-0.5">
+                              <XCircle size={14} />
+                              Үзээгүй
+                            </div>
+                            <p className="text-[10px] text-gray-500">Одоог хүртэл</p>
                           </div>
-                          <p className="text-[10px] text-gray-500">{new Date(seen.seenAt).toLocaleString()}</p>
                         </div>
-                      </div>
+                      ))
                     );
-                  })
+                  })()
+                ) : (
+                  (showSeenDetails.seenBy ?? []).length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                      <AlertCircle size={48} className="mb-4 opacity-20" />
+                      <p className="font-bold">Одоогоор үзсэн хэрэглэгч байхгүй байна.</p>
+                    </div>
+                  ) : (
+                    (showSeenDetails.seenBy ?? []).map((seen, idx) => {
+                      const user = csrs.find(u => u.id === seen.userId);
+                      return (
+                        <div key={`seen-detail-${seen.userId}-${idx}`} className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-800">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-xs font-bold text-blue-400">
+                              {seen.userName.charAt(0)}
+                            </div>
+                            <div>
+                              <p className="font-bold text-white">{seen.userName}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="text-[10px] text-blue-500 uppercase font-black">
+                                  {user?.role === 'superadmin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : 'CSR'}
+                                </p>
+                                <span className="w-1 h-1 bg-gray-700 rounded-full"></span>
+                                <p className="text-[10px] text-gray-500 uppercase font-black">{user?.lineType || 'N/A'}</p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="flex items-center gap-1.5 text-green-500 text-xs font-bold mb-0.5">
+                              <CheckCircle2 size={14} />
+                              Үзсэн
+                            </div>
+                            <p className="text-[10px] text-gray-500">{new Date(seen.seenAt).toLocaleString()}</p>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )
                 )}
               </div>
 
-              <div className="mt-6 pt-6 border-t border-gray-800">
+              <div className="mt-6 pt-6 border-t border-gray-800 flex gap-3">
                 <button 
                   onClick={() => exportNotificationSeenToExcel(showSeenDetails)}
-                  className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold flex items-center justify-center gap-2"
+                  className="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold flex items-center justify-center gap-2"
                 >
                   <Download size={20} />
-                  Excel Татах
+                  Үзсэнийг татах
+                </button>
+                <button 
+                  onClick={() => exportNotificationUnseenToExcel(showSeenDetails)}
+                  className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold flex items-center justify-center gap-2"
+                >
+                  <Download size={20} />
+                  Үзээгүйг татах
                 </button>
               </div>
             </motion.div>
