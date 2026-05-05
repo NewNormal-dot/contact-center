@@ -41,6 +41,20 @@ import { logAction } from '../../utils/logger';
 import apiClient from '../../lib/api-client';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 
+type NewUserFormRow = Partial<CSR> & { formId: string };
+
+const createNewUserFormRow = (): NewUserFormRow => ({
+  formId: Math.random().toString(36).slice(2, 11),
+  code: '',
+  name: '',
+  email: '',
+  role: undefined,
+  lineType: '',
+  employmentType: 'Full Time',
+  status: 'offline',
+  photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default',
+});
+
 export default function SuperAdminDashboard() {
   const navigate = useNavigate();
   const { logout, profile } = useAuth();
@@ -48,8 +62,6 @@ export default function SuperAdminDashboard() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [userSearchQuery, setUserSearchQuery] = useState('');
-  const [showUserAddMenu, setShowUserAddMenu] = useState(false);
-  const [showBulkAddMenu, setShowBulkAddMenu] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Record<string, boolean>>({
     superadmin: true,
     admin: true,
@@ -57,8 +69,6 @@ export default function SuperAdminDashboard() {
   });
   const [selectedActionFilter, setSelectedActionFilter] = useState('all');
   const [showSuccess, setShowSuccess] = useState(false);
-  const [isUploadingBulk, setIsUploadingBulk] = useState(false);
-  const bulkUploadRef = useRef<HTMLInputElement | null>(null);
 
   // States
   const [csrs, setCsrs] = useState<CSR[]>([]);
@@ -79,7 +89,26 @@ export default function SuperAdminDashboard() {
   const [myPasswordForm, setMyPasswordForm] = useState({ old: '', new: '', confirm: '' });
 
   const [confirmAction, setConfirmAction] = useState<{ title: string, onConfirm: () => void } | null>(null);
-  const userAddMenuRef = useRef<HTMLDivElement | null>(null);
+  const userAddModalScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const getDisplaySegment = (user: Partial<CSR>) => {
+    if (user.role === 'superadmin') return 'System Control';
+    if (user.lineType === 'Full Time' || user.lineType === 'Part Time') return '';
+    return user.lineType || '';
+  };
+
+  const getDisplayTimeType = (user: Partial<CSR>) => {
+    if (user.role === 'superadmin' || user.role === 'admin') return user.role || '';
+    return user.employmentType || 'Full Time';
+  };
+
+  const getSegmentForRole = (role?: CSR['role'], currentSegment = '') => {
+    if (role === 'superadmin') return 'System Control';
+    if (role === 'admin' || role === 'csr') {
+      return currentSegment && currentSegment !== 'System Control' ? currentSegment : '';
+    }
+    return '';
+  };
 
   const fetchUsers = async () => {
     if (!profile?.role) return;
@@ -87,15 +116,24 @@ export default function SuperAdminDashboard() {
     try {
       const endpoint = profile.role === 'admin' ? '/users/csr' : '/users';
       const response = await apiClient.get(endpoint);
-      const users = response.data.map((user: any) => ({
-        ...user,
-        lineType: user.lineType || user.employmentType || user.employment_type || 'Full Time',
-        status: user.status || 'active',
-      }));
+      const users = response.data.map((user: any) => {
+        const rawSegment = user.lineType || user.segment || (user.role === 'superadmin' ? 'System Control' : '');
+        return {
+          ...user,
+          lineType: rawSegment === 'Full Time' || rawSegment === 'Part Time' ? '' : rawSegment,
+          status: user.status || 'active',
+        };
+      });
       setCsrs(users);
     } catch (error) {
       console.error('Error fetching users from API:', error);
-      const cachedUsers = getLocalData('users', []);
+      const cachedUsers = getLocalData('users', []).map((user: any) => {
+        const rawSegment = user.lineType || user.segment || (user.role === 'superadmin' ? 'System Control' : '');
+        return {
+          ...user,
+          lineType: rawSegment === 'Full Time' || rawSegment === 'Part Time' ? '' : rawSegment,
+        };
+      });
       if (cachedUsers.length > 0) {
         setCsrs(cachedUsers);
       }
@@ -134,20 +172,6 @@ export default function SuperAdminDashboard() {
   }, [profile]);
 
   useEffect(() => {
-    if (!showUserAddMenu) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (userAddMenuRef.current && !userAddMenuRef.current.contains(event.target as Node)) {
-        setShowUserAddMenu(false);
-        setShowBulkAddMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showUserAddMenu]);
-
-  useEffect(() => {
     const defaultSegments = ['Postpaid', 'Prepaid', 'Hybrid', 'Corporate'];
     const initialSegments = getLocalData('segments', defaultSegments);
     if (!localStorage.getItem('segments')) {
@@ -169,14 +193,7 @@ export default function SuperAdminDashboard() {
 
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
   const [isAddingUser, setIsAddingUser] = useState(false);
-  const [newUser, setNewUser] = useState<Partial<CSR>>({
-    code: '',
-    role: 'csr',
-    lineType: segments[0] || 'Postpaid',
-    employmentType: 'Full Time',
-    status: 'offline',
-    photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
-  });
+  const [newUserRows, setNewUserRows] = useState<NewUserFormRow[]>([createNewUserFormRow()]);
   const [selectedMaterial, setSelectedMaterial] = useState<TrainingMaterial | null>(null);
   const [newNotification, setNewNotification] = useState<Partial<Notification>>({
     type: 'general',
@@ -257,6 +274,58 @@ export default function SuperAdminDashboard() {
     return retVal;
   };
 
+  const resetNewUserRows = () => {
+    setNewUserRows([createNewUserFormRow()]);
+  };
+
+  const openAddUserModal = () => {
+    resetNewUserRows();
+    setIsAddingUser(true);
+  };
+
+  const closeAddUserModal = () => {
+    setIsAddingUser(false);
+    resetNewUserRows();
+  };
+
+  const addNewUserRow = () => {
+    setNewUserRows(prev => (prev.length >= 5 ? prev : [...prev, createNewUserFormRow()]));
+    requestAnimationFrame(() => {
+      userAddModalScrollRef.current?.scrollTo({
+        top: userAddModalScrollRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    });
+  };
+
+  const removeLastNewUserRow = () => {
+    setNewUserRows(prev => (prev.length <= 1 ? prev : prev.slice(0, -1)));
+  };
+
+  const updateNewUserRow = (index: number, updates: Partial<CSR>) => {
+    setNewUserRows(prev => prev.map((row, rowIndex) => {
+      if (rowIndex !== index) return row;
+
+      const next = { ...row, ...updates };
+      if (updates.role !== undefined) {
+        next.lineType = getSegmentForRole(updates.role as CSR['role'], row.lineType);
+        next.employmentType = 'Full Time';
+      }
+
+      return next;
+    }));
+  };
+
+  const handleUserAddModalKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+
+    event.preventDefault();
+    event.currentTarget.scrollBy({
+      top: event.key === 'ArrowDown' ? 72 : -72,
+      behavior: 'smooth',
+    });
+  };
+
   // Handlers
   const handleMyPasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -288,15 +357,22 @@ export default function SuperAdminDashboard() {
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingUser) {
+      const segment = getSegmentForRole(editingUser.role, editingUser.lineType);
+      const employmentType = editingUser.role === 'csr'
+        ? (editingUser.employmentType || 'Full Time')
+        : 'Full Time';
+
       try {
         await apiClient.put(`/users/${editingUser.id}`, {
           name: editingUser.name,
           status: editingUser.status,
           role: editingUser.role,
-          employmentType: editingUser.employmentType || 'Full Time',
+          employmentType,
+          segment,
+          lineType: segment,
           code: editingUser.code,
         });
-        setCsrs(prev => prev.map(u => u.id === editingUser.id ? editingUser : u));
+        setCsrs(prev => prev.map(u => u.id === editingUser.id ? { ...editingUser, lineType: segment, employmentType } : u));
         logAction('User Update', `Updated user ${editingUser.name} (${editingUser.role})`);
         setEditingUser(null);
         triggerSuccess();
@@ -309,50 +385,86 @@ export default function SuperAdminDashboard() {
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newUser.name && newUser.role && newUser.lineType) {
-      if (newUser.email && csrs.some(u => u.email?.toLowerCase() === newUser.email?.toLowerCase())) {
-        alert('Энэ и-мэйл хаяг аль хэдийн бүртгэгдсэн байна!');
+
+    const preparedRows = newUserRows.map((row, index) => {
+      const role = row.role as CSR['role'] | undefined;
+      const code = String(row.code || '').trim();
+      const name = String(row.name || '').trim();
+      const email = String(row.email || '').trim();
+      const segment = getSegmentForRole(role, row.lineType);
+      const employmentType = role === 'csr' ? (row.employmentType || 'Full Time') : 'Full Time';
+
+      return { index, role, code, name, email, segment, employmentType, row };
+    });
+
+    for (const row of preparedRows) {
+      if (!row.code || !row.name || !row.email || !row.role) {
+        alert(`${row.index + 1}-р мөр дээр код, нэр, и-мэйл, эрхийг бүрэн бөглөнө үү.`);
         return;
       }
 
-      const randomPassword = generateRandomPassword();
-      const payload = {
-        email: newUser.email,
-        password: randomPassword,
-        name: newUser.name,
-        role: newUser.role,
-        status: 'active',
-        employmentType: newUser.employmentType || 'Full Time',
-        code: newUser.code,
-      };
-
-      try {
-        const response = await apiClient.post('/users', payload);
-        const createdUser = response.data;
-
-        setCsrs(prev => [...prev, { ...createdUser, code: newUser.code, lineType: newUser.lineType, employmentType: newUser.employmentType, photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUser.name}`, status: 'active' }]);
-        logAction('User Creation', `Created new user: ${newUser.name} (${newUser.role}). Password sent to ${newUser.email}`);
-
-        console.log(`Sending email to ${newUser.email} with password: ${randomPassword}`);
-        alert(`Хэрэглэгч амжилттай үүсгэгдлээ. Нууц үг (${randomPassword}) ${newUser.email} хаяг руу илгээгдлээ.`);
-
-        setIsAddingUser(false);
-        setShowUserAddMenu(false);
-        setNewUser({
-          code: '',
-          role: 'csr',
-          lineType: segments[0] || 'Postpaid',
-          employmentType: 'Full Time',
-          status: 'offline',
-          photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default'
-        });
-        await fetchUsers();
-        await fetchLogs();
-        triggerSuccess();
-      } catch (error: any) {
-        console.error('Error adding user:', error);
-        alert(error.response?.data?.error || 'Хэрэглэгч нэмэхэд алдаа гарлаа.');
+      if ((row.role === 'admin' || row.role === 'csr') && !row.segment) {
+        alert(`${row.index + 1}-р мөр дээр segment сонгоно уу.`);
+        return;
       }
+
+      if (row.role === 'csr' && !row.employmentType) {
+        alert(`${row.index + 1}-р мөр дээр цагийн төрөл сонгоно уу.`);
+        return;
+      }
+
+      if (csrs.some(u => u.email?.toLowerCase() === row.email.toLowerCase())) {
+        alert(`${row.email} и-мэйл аль хэдийн бүртгэлтэй байна.`);
+        return;
+      }
+    }
+
+    const formEmails = preparedRows.map(row => row.email.toLowerCase());
+    if (new Set(formEmails).size !== formEmails.length) {
+      alert('Нэг form дотор ижил и-мэйл давхардаж байна.');
+      return;
+    }
+
+    try {
+      const createdUsers: CSR[] = [];
+      const passwordLines: string[] = [];
+
+      for (const row of preparedRows) {
+        const randomPassword = generateRandomPassword();
+        const response = await apiClient.post('/users', {
+          email: row.email,
+          password: randomPassword,
+          name: row.name,
+          role: row.role,
+          status: 'active',
+          segment: row.segment,
+          lineType: row.segment,
+          employmentType: row.employmentType,
+          code: row.code,
+        });
+
+        createdUsers.push({
+          ...response.data,
+          code: row.code,
+          lineType: row.segment,
+          employmentType: row.employmentType,
+          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${row.name}`,
+          status: 'active',
+        });
+        passwordLines.push(`${row.email}: ${randomPassword}`);
+        logAction('User Creation', `Created new user: ${row.name} (${row.role}). Password sent to ${row.email}`);
+      }
+
+      setCsrs(prev => [...prev, ...createdUsers]);
+      alert(`Хэрэглэгч амжилттай үүсгэгдлээ.\n\n${passwordLines.join('\n')}`);
+
+      closeAddUserModal();
+      await fetchUsers();
+      await fetchLogs();
+      triggerSuccess();
+    } catch (error: any) {
+      console.error('Error adding users:', error);
+      alert(error.response?.data?.error || 'Хэрэглэгч нэмэхэд алдаа гарлаа.');
     }
   };
 
@@ -454,7 +566,6 @@ export default function SuperAdminDashboard() {
 
         if (createdUsers.length > 0) {
           setCsrs(prev => [...prev, ...createdUsers]);
-          setShowUserAddMenu(false);
           await fetchUsers();
           await fetchLogs();
           logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
@@ -603,16 +714,17 @@ export default function SuperAdminDashboard() {
 
   const exportToExcel = () => {
     const data = csrs.map(u => ({
-      'ID': u.id,
+      'Код': u.code || '',
       'Нэр': u.name,
-      'Email': u.email || 'N/A',
-      'Сегмент': u.lineType,
+      'И-мэйл': u.email || '',
       'Эрх': u.role,
-      'Төлөв': u.status,
-      'Нууц үг': u.password || 'N/A'
+      'Сегмент': getDisplaySegment(u),
+      'Цагийн төрөл': getDisplayTimeType(u)
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    const ws = XLSX.utils.json_to_sheet(data, {
+      header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Сегмент', 'Цагийн төрөл']
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Users");
     XLSX.writeFile(wb, "system_users_data.xlsx");
@@ -684,8 +796,8 @@ export default function SuperAdminDashboard() {
           'Нэр': user.name,
           'И-мэйл': user.email || '',
           'Эрх': user.role,
-          'Сегмент': user.lineType || '',
-          'Цагийн төрөл': user.employmentType || 'Full Time',
+          'Сегмент': getDisplaySegment(user),
+          'Цагийн төрөл': getDisplayTimeType(user),
           'Үзсэн эсэх': seen ? 'Тийм' : 'Үгүй',
           'Үзсэн хугацаа': seen ? new Date(seen.seenAt).toLocaleString() : '-',
           'Гарчиг': item.title,
@@ -927,19 +1039,14 @@ export default function SuperAdminDashboard() {
               />
             </div>
           </div>
-          <div className="relative flex flex-wrap sm:flex-nowrap gap-3 items-center">
+          <div className="flex flex-wrap sm:flex-nowrap gap-3 items-center">
             <button
               type="button"
-              onClick={() => {
-                setShowUserAddMenu(prev => !prev);
-                setShowBulkAddMenu(false);
-              }}
-              className={`flex items-center gap-3 ${showUserAddMenu ? 'bg-white text-black border border-gray-300' : 'bg-gray-900/90 text-white border border-gray-800'} px-5 py-3 rounded-2xl font-bold text-base transition-all`}
-              aria-expanded={showUserAddMenu}
+              onClick={openAddUserModal}
+              className="flex items-center gap-3 bg-white text-black border border-gray-300 px-5 py-3 rounded-2xl font-bold text-base transition-all hover:bg-gray-100"
             >
               <UserPlus size={20} />
               Хэрэглэгч нэмэх
-              <ChevronDown size={18} className={`${showUserAddMenu ? 'rotate-180' : ''} transition-transform`} />
             </button>
             <button 
               onClick={exportToExcel}
@@ -948,71 +1055,6 @@ export default function SuperAdminDashboard() {
               <Download size={18} />
               Excel Татах
             </button>
-
-            {showUserAddMenu && (
-              <div ref={userAddMenuRef} className="absolute top-full right-0 z-50 mt-3 w-80 rounded-3xl border border-gray-800 bg-black/95 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl space-y-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowUserAddMenu(false);
-                    setShowBulkAddMenu(false);
-                    setIsAddingUser(true);
-                  }}
-                  className="w-full rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all px-4 py-3 flex items-center justify-center gap-2"
-                >
-                  <UserPlus size={18} />
-                  Нэгээр нэмэх
-                </button>
-
-                <div className="space-y-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowBulkAddMenu(prev => !prev)}
-                    className={`w-full rounded-2xl ${showBulkAddMenu ? 'bg-blue-600/15 border-blue-500/40 text-blue-300' : 'bg-gray-900/90 border-gray-800 text-white'} border font-bold transition-all px-4 py-3 flex items-center justify-between gap-3`}
-                    aria-expanded={showBulkAddMenu}
-                  >
-                    <span className="flex items-center gap-3">
-                      <Users size={18} />
-                      Олноор нэмэх
-                    </span>
-                    <ChevronDown size={16} className={`${showBulkAddMenu ? 'rotate-180' : ''} transition-transform`} />
-                  </button>
-
-                  {showBulkAddMenu && (
-                    <div className="space-y-2 pl-4">
-                      <button
-                        type="button"
-                        onClick={downloadBulkUploadTemplate}
-                        className="w-full rounded-2xl bg-green-600 hover:bg-green-700 text-white font-bold transition-all px-4 py-3 text-sm flex items-center justify-center gap-2"
-                      >
-                        <Download size={16} />
-                        Template татах
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => bulkUploadRef.current?.click()}
-                        className="w-full rounded-2xl bg-gray-800 hover:bg-gray-700 text-white font-bold transition-all px-4 py-3 text-sm flex items-center justify-center gap-2"
-                      >
-                        <UserPlus size={16} />
-                        Хэрэглэгч нэмэх
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <input
-                  ref={bulkUploadRef}
-                  type="file"
-                  accept=".xlsx, .xls, .csv"
-                  className="hidden"
-                  onChange={(e) => {
-                    setShowUserAddMenu(false);
-                    setShowBulkAddMenu(false);
-                    handleBulkUpload(e);
-                  }}
-                />
-              </div>
-            )}
           </div>
         </div>
 
@@ -1096,7 +1138,7 @@ export default function SuperAdminDashboard() {
   const renderNotifications = () => (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-black text-white">Мэдэгдэлүүд</h2>
+        <h2 className="text-2xl font-black text-white">Мэдэгдэл</h2>
         <button 
           onClick={() => setIsAddingNotification(true)}
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/20"
@@ -1323,7 +1365,7 @@ export default function SuperAdminDashboard() {
             {[
               { id: 'logs', label: 'Үйлдэлүүд', icon: FileText },
               { id: 'users', label: 'Хэрэглэгчид', icon: Users },
-              { id: 'notifications', label: 'Мэдэгдэлүүд', icon: Bell, badge: unreadCount },
+              { id: 'notifications', label: 'Мэдэгдэл', icon: Bell, badge: unreadCount },
               { id: 'training', label: 'Сургалт', icon: BookOpen, badge: unreadTrainingCount },
             ].map(item => (
               <button
@@ -1389,7 +1431,7 @@ export default function SuperAdminDashboard() {
               <h2 className="text-2xl sm:text-4xl font-black text-white tracking-tight mb-2">
                 {activeTab === 'logs' ? 'Системийн бүртгэл' : 
                  activeTab === 'users' ? 'Хэрэглэгчийн удирдлага' : 
-                 activeTab === 'notifications' ? 'Мэдэгдэл & Сургалт' : 'Тохиргоо'}
+                 activeTab === 'notifications' ? 'Мэдэгдэл' : 'Тохиргоо'}
               </h2>
               <p className="text-xs sm:text-sm text-gray-500">Тавтай морил, {profile?.name || 'Super Admin'}. Системийн бүх үйл ажиллагааг эндээс хянана уу.</p>
             </div>
@@ -1781,46 +1823,154 @@ export default function SuperAdminDashboard() {
       <AnimatePresence>
         {isAddingUser && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAddingUser(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
-              <h2 className="text-2xl font-black text-white mb-6">Шинэ хэрэглэгч нэмэх</h2>
-              <form onSubmit={handleAddUser} className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Код</label>
-                  <input type="text" value={newUser.code || ''} onChange={(e) => setNewUser({...newUser, code: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="Ажилтны код..." required />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Нэр</label>
-                  <input type="text" value={newUser.name || ''} onChange={(e) => setNewUser({...newUser, name: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="Ажилтны нэр..." required />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">И-мэйл хаяг</label>
-                  <input type="email" value={newUser.email || ''} onChange={(e) => setNewUser({...newUser, email: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="example@mail.com" required />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эрх (Role)</label>
-                  <select value={newUser.role} onChange={(e) => setNewUser({...newUser, role: e.target.value as any})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
-                    <option value="csr">CSR</option>
-                    <option value="admin">Admin</option>
-                    <option value="superadmin">Superadmin</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
-                  <select value={newUser.lineType} onChange={(e) => setNewUser({...newUser, lineType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
-                    {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Цагийн төрөл</label>
-                  <select value={newUser.employmentType || 'Full Time'} onChange={(e) => setNewUser({...newUser, employmentType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
-                    <option value="Full Time">Full Time</option>
-                    <option value="Part Time">Part Time</option>
-                  </select>
-                </div>
-                <div className="flex gap-3 pt-4">
-                  <button type="button" onClick={() => setIsAddingUser(false)} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold">Цуцлах</button>
-                  <button type="submit" className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold">Нэмэх</button>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={closeAddUserModal} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div
+              ref={userAddModalScrollRef}
+              tabIndex={0}
+              onKeyDown={handleUserAddModalKeyDown}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-2xl max-h-[88vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-3xl p-6 sm:p-8 shadow-2xl focus:outline-none"
+            >
+              <div className="relative mb-6 flex items-center justify-center">
+                <h2 className="px-12 text-center text-2xl font-black text-white">Шинэ хэрэглэгч нэмэх</h2>
+              </div>
+
+              <form onSubmit={handleAddUser} className="space-y-5">
+                {newUserRows.map((row, index) => {
+                  const role = row.role as CSR['role'] | undefined;
+                  const showSegment = role === 'admin' || role === 'csr';
+                  const showEmploymentType = role === 'csr';
+                  const isLastRow = index === newUserRows.length - 1;
+
+                  return (
+                    <div key={row.formId} className="space-y-4 rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+                      {isLastRow && (
+                        <div className="flex items-center justify-between">
+                          {newUserRows.length < 5 ? (
+                            <button
+                              type="button"
+                              onClick={addNewUserRow}
+                              className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white transition-all hover:bg-blue-500"
+                              title="Мөр нэмэх"
+                              aria-label="Мөр нэмэх"
+                            >
+                              <Plus size={20} />
+                            </button>
+                          ) : (
+                            <span className="h-9 w-9" />
+                          )}
+
+                          {newUserRows.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={removeLastNewUserRow}
+                              className="flex h-9 w-9 items-center justify-center rounded-full bg-red-600 text-white transition-all hover:bg-red-500"
+                              title="Сүүлийн мөр хасах"
+                              aria-label="Сүүлийн мөр хасах"
+                            >
+                              <X size={20} />
+                            </button>
+                          ) : (
+                            <span className="h-9 w-9" />
+                          )}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Код</label>
+                          <input
+                            type="text"
+                            value={row.code || ''}
+                            onChange={(e) => updateNewUserRow(index, { code: e.target.value })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                            placeholder="Ажилтны код..."
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Нэр</label>
+                          <input
+                            type="text"
+                            value={row.name || ''}
+                            onChange={(e) => updateNewUserRow(index, { name: e.target.value })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                            placeholder="Ажилтны нэр..."
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">И-мэйл хаяг</label>
+                          <input
+                            type="email"
+                            value={row.email || ''}
+                            onChange={(e) => updateNewUserRow(index, { email: e.target.value })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                            placeholder="example@mail.com"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эрх (Role)</label>
+                          <select
+                            value={row.role || ''}
+                            onChange={(e) => updateNewUserRow(index, { role: (e.target.value || undefined) as CSR['role'] | undefined })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                            required
+                          >
+                            <option value="">Сонгох</option>
+                            <option value="superadmin">Superadmin</option>
+                            <option value="admin">Admin</option>
+                            <option value="csr">CSR</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {(showSegment || showEmploymentType) && (
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          {showSegment && (
+                            <div>
+                              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
+                              <select
+                                value={row.lineType || ''}
+                                onChange={(e) => updateNewUserRow(index, { lineType: e.target.value })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                                required
+                              >
+                                <option value="">Сонгох</option>
+                                {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
+                              </select>
+                            </div>
+                          )}
+
+                          {showEmploymentType && (
+                            <div>
+                              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Цагийн төрөл</label>
+                              <select
+                                value={row.employmentType || 'Full Time'}
+                                onChange={(e) => updateNewUserRow(index, { employmentType: e.target.value })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                                required
+                              >
+                                <option value="Full Time">Full Time</option>
+                                <option value="Part Time">Part Time</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                <div className="flex gap-3 pt-2">
+                  <button type="button" onClick={closeAddUserModal} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold hover:bg-gray-700 transition-all">Цуцлах</button>
+                  <button type="submit" className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-500 transition-all">Нэмэх</button>
                 </div>
               </form>
             </motion.div>
@@ -1854,18 +2004,42 @@ export default function SuperAdminDashboard() {
                 )}
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эрх (Role)</label>
-                  <select value={editingUser.role} onChange={(e) => setEditingUser({...editingUser, role: e.target.value as any})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                  <select
+                    value={editingUser.role}
+                    onChange={(e) => {
+                      const role = e.target.value as CSR['role'];
+                      setEditingUser({
+                        ...editingUser,
+                        role,
+                        lineType: getSegmentForRole(role, editingUser.lineType),
+                        employmentType: 'Full Time',
+                      });
+                    }}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                  >
                     <option value="csr">CSR</option>
                     <option value="admin">Admin</option>
                     <option value="superadmin">Super Admin</option>
                   </select>
                 </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
-                  <select value={editingUser.lineType} onChange={(e) => setEditingUser({...editingUser, lineType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
-                    {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
-                  </select>
-                </div>
+                {(editingUser.role === 'admin' || editingUser.role === 'csr') && (
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
+                    <select value={editingUser.lineType || ''} onChange={(e) => setEditingUser({...editingUser, lineType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                      <option value="">Сонгох</option>
+                      {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                )}
+                {editingUser.role === 'csr' && (
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Цагийн төрөл</label>
+                    <select value={editingUser.employmentType || 'Full Time'} onChange={(e) => setEditingUser({...editingUser, employmentType: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                      <option value="Full Time">Full Time</option>
+                      <option value="Part Time">Part Time</option>
+                    </select>
+                  </div>
+                )}
                 <div className="flex gap-3 pt-4">
                   <button type="button" onClick={() => setEditingUser(null)} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold">Цуцлах</button>
                   <button type="submit" className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold">Хадгалах</button>

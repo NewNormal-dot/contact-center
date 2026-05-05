@@ -77,7 +77,7 @@ router.post('/', authenticate, async (req: any, res) => {
   const finalRole = role || 'csr';
   const finalStatus = status || 'active';
   const finalEmploymentType = normalizeEmploymentType(employment_type ?? employmentType);
-  const finalSegment = segment ?? lineType ?? DEFAULT_SEGMENTS_BY_ROLE[finalRole] ?? '';
+  const requestedSegment = segment ?? lineType ?? DEFAULT_SEGMENTS_BY_ROLE[finalRole] ?? '';
 
   if (!email || !name) {
     return res.status(400).json({ error: 'И-мэйл болон нэр шаардлагатай' });
@@ -85,6 +85,14 @@ router.post('/', authenticate, async (req: any, res) => {
 
   if (!isValidRole(finalRole)) {
     return res.status(400).json({ error: 'Хэрэглэгчийн эрх буруу байна' });
+  }
+
+  const finalSegment = finalRole === 'superadmin'
+    ? DEFAULT_SEGMENTS_BY_ROLE.superadmin
+    : String(requestedSegment || '').trim();
+
+  if ((finalRole === 'admin' || finalRole === 'csr') && !finalSegment) {
+    return res.status(400).json({ error: 'Сегмент шаардлагатай' });
   }
 
   if (!isValidStatus(finalStatus)) {
@@ -138,7 +146,7 @@ router.put('/:id', authenticate, async (req: any, res) => {
   const actingUserRole = req.user.role;
   const requestedEmploymentType = employment_type ?? employmentType;
   const finalEmploymentType = requestedEmploymentType === undefined ? undefined : normalizeEmploymentType(requestedEmploymentType);
-  const finalSegment = segment ?? lineType;
+  const requestedSegment = segment ?? lineType;
 
   if (actingUserRole !== 'superadmin' && actingUserRole !== 'admin') {
     return res.status(403).json({ error: 'Хандах эрхгүй' });
@@ -151,6 +159,22 @@ router.put('/:id', authenticate, async (req: any, res) => {
     // Business Rule: Admin can only manage CSR
     if (actingUserRole === 'admin' && userToUpdate.role !== 'csr') {
       return res.status(403).json({ error: 'Зөвхөн CSR хэрэглэгчийг засах боломжтой' });
+    }
+
+    if (actingUserRole === 'superadmin' && role !== undefined && !isValidRole(role)) {
+      return res.status(400).json({ error: 'Хэрэглэгчийн эрх буруу байна' });
+    }
+
+    const effectiveRole = actingUserRole === 'superadmin' && role !== undefined ? role : userToUpdate.role;
+    const segmentSource = requestedSegment !== undefined ? requestedSegment : userToUpdate.segment;
+    const finalSegment = effectiveRole === 'superadmin'
+      ? DEFAULT_SEGMENTS_BY_ROLE.superadmin
+      : requestedSegment !== undefined
+        ? String(requestedSegment || '').trim()
+        : undefined;
+
+    if ((effectiveRole === 'admin' || effectiveRole === 'csr') && !String(segmentSource || '').trim()) {
+      return res.status(400).json({ error: 'Сегмент шаардлагатай' });
     }
 
     const updates: any = {};
@@ -179,7 +203,6 @@ router.put('/:id', authenticate, async (req: any, res) => {
     }
 
     if (actingUserRole === 'superadmin' && role !== undefined) {
-      if (!isValidRole(role)) return res.status(400).json({ error: 'Хэрэглэгчийн эрх буруу байна' });
       updates.role = role;
     }
 
