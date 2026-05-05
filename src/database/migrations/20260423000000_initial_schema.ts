@@ -11,6 +11,7 @@ export async function up(knex: Knex): Promise<void> {
       table.enum('status', ['active', 'inactive']).defaultTo('active');
       table.string('photo_url');
       table.string('code');
+      table.string('segment');
       table.enum('employment_type', ['Full Time', 'Part Time']).defaultTo('Full Time');
       table.uuid('weekly_rule_id');
       table.timestamps(true, true);

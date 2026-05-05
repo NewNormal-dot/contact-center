@@ -50,6 +50,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { CSR, Notification, TrainingMaterial, VacationRequest, HourlyLeaveRequest } from '../../types';
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
+import apiClient from '../../lib/api-client';
 
 const ENG_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
@@ -140,6 +141,43 @@ export default function AdminDashboard() {
   const [activeEmploymentView, setActiveEmploymentView] = useState<'Full Time' | 'Part Time'>('Full Time');
   const [activeSegmentView, setActiveSegmentView] = useState<string>('');
 
+  const mapCsrForUi = (raw: any): CSR => {
+    const name = raw.name || raw.email?.split('@')?.[0] || 'CSR';
+    return {
+      id: raw.id,
+      code: raw.code || '',
+      name,
+      email: raw.email || '',
+      lineType: raw.lineType || raw.segment || '',
+      employmentType: raw.employmentType || raw.employment_type || 'Full Time',
+      role: 'csr',
+      status: raw.status || 'active',
+      photoUrl: raw.photoUrl || raw.photo_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=2563eb&color=fff&size=128`,
+    };
+  };
+
+  const fetchCsrUsers = async () => {
+    try {
+      const response = await apiClient.get('/users/csr');
+      const users = (response.data || []).map(mapCsrForUi);
+      setCsrs(users);
+      setLocalData('users', users);
+      return users;
+    } catch (error) {
+      console.error('Error fetching CSR users:', error);
+      return getLocalData('users', []);
+    }
+  };
+
+  const generateRandomPassword = (length = 10) => {
+    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
+    let value = '';
+    for (let i = 0; i < length; i += 1) {
+      value += charset.charAt(Math.floor(Math.random() * charset.length));
+    }
+    return value;
+  };
+
   // Auto-adjust views when data changes (Initialize only)
   useEffect(() => {
     if (segments.length > 0) {
@@ -159,6 +197,8 @@ export default function AdminDashboard() {
     if (loadedSegments.length > 0 && !activeSegmentView) {
       setActiveSegmentView(loadedSegments[0]);
     }
+
+    fetchCsrUsers().catch(() => undefined);
     
     setNotifications(getLocalData('notifications', []));
     setTrainingMaterials(getLocalData('trainingMaterials', []));
@@ -253,7 +293,17 @@ export default function AdminDashboard() {
       }
     }, 2000);
 
-    return () => clearInterval(interval);
+    const handleStorageUpdate = (event: StorageEvent) => {
+      if (event.key === 'notifications') {
+        setNotifications(getLocalData('notifications', []));
+      }
+    };
+
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, []);
 
   const handleApproveHourlyLeave = (id: string) => {
@@ -592,14 +642,38 @@ export default function AdminDashboard() {
     logAction('Notification Deleted', `Deleted notification: ${id}`);
   };
 
-  const handleDeleteUser = (id: string) => {
+  const handleDeleteUser = async (id: string) => {
     const userToDelete = csrs.find(u => u.id === id);
     if (!userToDelete) return;
 
-    const updatedUsers = csrs.filter(u => u.id !== id);
-    setLocalData('users', updatedUsers);
-    setCsrs(updatedUsers);
-    logAction('Employee Deleted', `Deleted employee: ${userToDelete.name}`);
+    try {
+      await apiClient.delete(`/users/${id}`);
+      const updatedUsers = csrs.filter(u => u.id !== id);
+      setLocalData('users', updatedUsers);
+      setCsrs(updatedUsers);
+      logAction('Employee Deleted', `Deleted employee: ${userToDelete.name}`);
+    } catch (error: any) {
+      console.error('Error deleting CSR user:', error);
+      alert(error.response?.data?.error || 'Хэрэглэгч устгахад алдаа гарлаа.');
+    }
+  };
+
+  const handleResetUserPassword = async (user: CSR) => {
+    if (!user.id) {
+      alert('Хэрэглэгчийн ID олдсонгүй. Хуудсаа refresh хийгээд дахин оролдоно уу.');
+      return;
+    }
+
+    const newPass = generateRandomPassword();
+    try {
+      await apiClient.post(`/users/${user.id}/reset-password`, { password: newPass });
+      logAction('Password Reset', `Reset password for CSR ${user.name}. New password sent to ${user.email}`);
+      alert(`Шинэ нууц үг ${user.email || user.name} хэрэглэгчид үүсгэгдлээ: ${newPass}`);
+      await fetchCsrUsers();
+    } catch (error: any) {
+      console.error('Error resetting CSR password:', error);
+      alert(error.response?.data?.error || 'Нууц үг сэргээхэд алдаа гарлаа.');
+    }
   };
 
   const exportNotificationSeenList = (notif: Notification) => {
@@ -619,6 +693,24 @@ export default function AdminDashboard() {
     XLSX.utils.book_append_sheet(workbook, worksheet, "Seen Status");
     XLSX.writeFile(workbook, `Notification_Report_${notif.id}.xlsx`);
     logAction('Export Notification Report', `Exported seen report for: ${notif.title}`);
+  };
+
+  const exportNotificationUnseenList = (notif: Notification) => {
+    const unseenUsers = csrs.filter(u => !notif.seenBy?.some(s => s.userId === u.id));
+    const data = unseenUsers.map(csr => {
+      return {
+        'Ажилтан': csr.name,
+        'Имэйл': csr.email || '-',
+        'Сегмент': csr.lineType,
+        'Эрх': csr.role
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Unseen Users");
+    XLSX.writeFile(workbook, `Notification_Unseen_${notif.id}.xlsx`);
+    logAction('Export Unseen Users', `Exported unseen users for: ${notif.title}`);
   };
 
   const handleAddHoliday = () => {
@@ -672,18 +764,28 @@ export default function AdminDashboard() {
     photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + Math.random()
   });
 
-  const handleAddUser = () => {
-    if (newUser.name && newUser.lineType) {
-      const users = getLocalData('users', []);
-      const userToAdd = {
-        ...newUser,
-        id: Math.random().toString(36).substr(2, 9),
+  const handleAddUser = async () => {
+    if (!newUser.name || !newUser.email || !newUser.lineType) {
+      alert('Нэр, и-мэйл, сегмент шаардлагатай.');
+      return;
+    }
+
+    const randomPassword = generateRandomPassword();
+    try {
+      const response = await apiClient.post('/users', {
         code: newUser.code || `EMP${Math.floor(1000 + Math.random() * 9000)}`,
-        email: newUser.email || `${newUser.name?.toLowerCase().replace(/\s/g, '.')}@example.com`,
-        password: 'password123'
-      } as CSR;
-      setLocalData('users', [...users, userToAdd]);
-      setCsrs([...users, userToAdd]);
+        name: newUser.name,
+        email: newUser.email,
+        password: randomPassword,
+        role: 'csr',
+        status: 'active',
+        segment: newUser.lineType,
+        employmentType: newUser.employmentType || 'Full Time',
+      });
+      const userToAdd = mapCsrForUi({ ...response.data, segment: newUser.lineType, photoUrl: newUser.photoUrl });
+      const updatedUsers = [...csrs, userToAdd];
+      setLocalData('users', updatedUsers);
+      setCsrs(updatedUsers);
       setIsAddingUser(false);
       setNewUser({
         role: 'csr',
@@ -694,6 +796,11 @@ export default function AdminDashboard() {
         photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + Math.random()
       });
       logAction('Employee Added', `Added employee: ${newUser.name}`);
+      alert(`CSR амжилттай нэмэгдлээ. Нууц үг: ${randomPassword}`);
+      await fetchCsrUsers();
+    } catch (error: any) {
+      console.error('Error adding CSR user:', error);
+      alert(error.response?.data?.error || 'Хэрэглэгч нэмэхэд алдаа гарлаа.');
     }
   };
 
@@ -702,42 +809,64 @@ export default function AdminDashboard() {
     setIsEditingUser(true);
   };
 
-  const handleUpdateUser = () => {
+  const handleUpdateUser = async () => {
     if (editingUser) {
-      const users = getLocalData('users', []);
-      const updatedUsers = users.map((u: CSR) => u.id === editingUser.id ? editingUser : u);
-      setLocalData('users', updatedUsers);
-      setCsrs(updatedUsers);
-      setIsEditingUser(false);
-      setEditingUser(null);
-      logAction('User Updated', `Updated user: ${editingUser.name}`);
+      try {
+        await apiClient.put(`/users/${editingUser.id}`, {
+          code: editingUser.code,
+          name: editingUser.name,
+          status: editingUser.status || 'active',
+          segment: editingUser.lineType,
+          employmentType: editingUser.employmentType || 'Full Time',
+        });
+        const updatedUsers = csrs.map((u: CSR) => u.id === editingUser.id ? editingUser : u);
+        setLocalData('users', updatedUsers);
+        setCsrs(updatedUsers);
+        setIsEditingUser(false);
+        setEditingUser(null);
+        logAction('User Updated', `Updated user: ${editingUser.name}`);
+        await fetchCsrUsers();
+      } catch (error: any) {
+        console.error('Error updating CSR user:', error);
+        alert(error.response?.data?.error || 'Хэрэглэгч шинэчлэхэд алдаа гарлаа.');
+      }
     }
   };
 
-  const handleBulkAdd = () => {
+  const handleBulkAdd = async () => {
     const validUsers = bulkUsers.filter(u => u.name && u.lineType);
     if (validUsers.length === 0) return;
 
-    const existingUsers = getLocalData('users', []);
-    const usersToAdd: CSR[] = validUsers.map(u => ({
-      id: Math.random().toString(36).substr(2, 9),
-      code: u.code || `EMP${Math.floor(1000 + Math.random() * 9000)}`,
-      name: u.name!,
-      email: u.email || `${u.name!.toLowerCase().replace(/\s/g, '.')}@example.com`,
-      lineType: u.lineType!,
-      employmentType: (u.employmentType as any) || 'Full Time',
-      role: 'csr',
-      status: 'offline',
-      password: 'password123',
-      photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + Math.random()
-    }));
+    try {
+      const usersToAdd: CSR[] = [];
+      for (const user of validUsers) {
+        const name = user.name!;
+        const randomPassword = generateRandomPassword();
+        const response = await apiClient.post('/users', {
+          code: user.code || `EMP${Math.floor(1000 + Math.random() * 9000)}`,
+          name,
+          email: user.email || `${name.toLowerCase().replace(/\s/g, '.')}@example.com`,
+          password: randomPassword,
+          role: 'csr',
+          status: 'active',
+          segment: user.lineType,
+          employmentType: user.employmentType || 'Full Time',
+        });
+        usersToAdd.push(mapCsrForUi({ ...response.data, segment: user.lineType }));
+      }
 
-    const updatedUsers = [...existingUsers, ...usersToAdd];
-    setLocalData('users', updatedUsers);
-    setCsrs(updatedUsers);
-    setIsAddingUser(false);
-    setBulkUsers([{ code: '', name: '', email: '', lineType: '', employmentType: 'Full Time' }]);
-    logAction('Bulk Employees Added', `${usersToAdd.length} ажилтан олноор нэмэгдлээ.`);
+      const updatedUsers = [...csrs, ...usersToAdd];
+      setLocalData('users', updatedUsers);
+      setCsrs(updatedUsers);
+      setIsAddingUser(false);
+      setBulkUsers([{ code: '', name: '', email: '', lineType: '', employmentType: 'Full Time' }]);
+      logAction('Bulk Employees Added', `${usersToAdd.length} ажилтан олноор нэмэгдлээ.`);
+      await fetchCsrUsers();
+      alert(`${usersToAdd.length} CSR амжилттай нэмэгдлээ.`);
+    } catch (error: any) {
+      console.error('Error bulk adding CSR users:', error);
+      alert(error.response?.data?.error || 'Хэрэглэгч олноор нэмэхэд алдаа гарлаа.');
+    }
   };
 
   const addBulkRow = () => {
@@ -889,11 +1018,19 @@ export default function AdminDashboard() {
                           </div>
                         </td>
                         <td className="px-8 py-5 text-right flex items-center justify-end gap-1">
-                          <button 
+                          <button
                             onClick={() => handleEditUserClick(csr)}
                             className="p-2.5 text-gray-600 hover:text-blue-500 hover:bg-blue-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                            title="Засах"
                           >
                             <Edit size={20} />
+                          </button>
+                          <button
+                            onClick={() => handleResetUserPassword(csr)}
+                            className="p-2.5 text-gray-600 hover:text-green-500 hover:bg-green-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                            title="Нууц үг reset"
+                          >
+                            <RefreshCcw size={20} />
                           </button>
                           <button 
                             onClick={() => handleSecureConfirm(
@@ -1194,15 +1331,20 @@ export default function AdminDashboard() {
                           {isUnread && <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-glow shadow-blue-500" />}
                         </div>
                         <p className="text-sm text-gray-400 leading-relaxed">{notif.content}</p>
-                        <div className="flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-gray-500">
-                          <span className="flex items-center gap-1.5"><Clock size={12} /> {new Date(notif.createdAt).toLocaleTimeString()}</span>
-                          <span className="flex items-center gap-1.5"><Calendar size={12} /> {new Date(notif.createdAt).toLocaleDateString()}</span>
+                        <div className="flex items-center gap-3">
                           <button 
                             onClick={() => exportNotificationSeenList(notif)}
-                            className="flex items-center gap-1.5 text-blue-400/80 hover:text-blue-400 transition-colors"
+                            className="flex items-center gap-1.5 text-blue-400/80 hover:text-blue-400 transition-colors text-[10px] font-black uppercase tracking-widest"
                           >
                             <Download size={12} /> 
-                            {notif.seenBy?.length || 0} хүн үзсэн
+                            {notif.seenBy?.length || 0} үзсэн
+                          </button>
+                          <button 
+                            onClick={() => exportNotificationUnseenList(notif)}
+                            className="flex items-center gap-1.5 text-orange-400/80 hover:text-orange-400 transition-colors text-[10px] font-black uppercase tracking-widest"
+                          >
+                            <Download size={12} /> 
+                            {csrs.length - (notif.seenBy?.length || 0)} үзээгүй
                           </button>
                         </div>
                       </div>

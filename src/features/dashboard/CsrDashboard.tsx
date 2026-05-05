@@ -590,7 +590,18 @@ export default function CsrDashboard() {
 
     loadData();
     const interval = setInterval(loadData, 2000);
-    return () => clearInterval(interval);
+    
+    const handleStorageUpdate = (event: StorageEvent) => {
+      if (event.key === 'notifications') {
+        loadData();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, [csrProfile]);
 
   const [bookingModal, setBookingModal] = useState<{

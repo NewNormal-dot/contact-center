@@ -22,6 +22,9 @@ const AuthContext = createContext<AuthContextType>({
 function normalizeUser(raw: any): User {
   const role = raw?.role === 'superadmin' || raw?.role === 'admin' || raw?.role === 'csr' ? raw.role : 'csr';
   const name = raw?.name || raw?.displayName || raw?.email?.split('@')?.[0] || role.toUpperCase();
+  const defaultLineType = role === 'superadmin' ? 'System Control' : role === 'admin' ? 'Supervisor' : '';
+  const employmentType = raw?.employmentType || raw?.employment_type || 'Full Time';
+  const lineType = raw?.lineType || raw?.segment || defaultLineType;
 
   return {
     id: String(raw?.id || raw?.uid || role),
@@ -34,8 +37,8 @@ function normalizeUser(raw: any): User {
       raw?.photoURL ||
       `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=2563eb&color=fff&size=128`,
     code: raw?.code,
-    employmentType: raw?.employmentType || raw?.lineType || 'Full Time',
-    lineType: raw?.lineType || raw?.employmentType || (role === 'superadmin' ? 'System Control' : role === 'admin' ? 'Supervisor' : 'Full Time'),
+    employmentType,
+    lineType,
     createdAt: raw?.createdAt || new Date().toISOString(),
     updatedAt: raw?.updatedAt || new Date().toISOString(),
   };
@@ -46,7 +49,7 @@ function mapUserForUi(raw: any): any {
   return {
     ...normalized,
     photoUrl: normalized.photoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(normalized.name)}&background=2563eb&color=fff&size=128`,
-    lineType: normalized.lineType || normalized.employmentType || (normalized.role === 'admin' ? 'Supervisor' : normalized.role === 'superadmin' ? 'System Control' : 'Full Time'),
+    lineType: normalized.lineType,
     status: normalized.status === 'inactive' ? 'offline' : 'online',
   };
 }

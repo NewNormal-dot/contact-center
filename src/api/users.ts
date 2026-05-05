@@ -9,6 +9,11 @@ const router = express.Router();
 const VALID_ROLES = new Set(['superadmin', 'admin', 'csr']);
 const VALID_STATUSES = new Set(['active', 'inactive']);
 const VALID_EMPLOYMENT_TYPES = new Set(['Full Time', 'Part Time']);
+const DEFAULT_SEGMENTS_BY_ROLE: Record<string, string> = {
+  superadmin: 'System Control',
+  admin: 'Supervisor',
+  csr: '',
+};
 
 function isValidRole(value: unknown): value is 'superadmin' | 'admin' | 'csr' {
   return typeof value === 'string' && VALID_ROLES.has(value);
@@ -22,13 +27,20 @@ function isValidEmploymentType(value: unknown): value is 'Full Time' | 'Part Tim
   return typeof value === 'string' && VALID_EMPLOYMENT_TYPES.has(value);
 }
 
+function normalizeEmploymentType(value: unknown, fallback: 'Full Time' | 'Part Time' = 'Full Time') {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (value === 'admin' || value === 'superadmin') return 'Full Time';
+  return value;
+}
+
 // Get all users (Superadmin only)
 router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
-    const users = await db('users').select('id', 'email', 'name', 'role', 'status', 'photo_url', 'code', 'employment_type', 'weekly_rule_id', 'created_at');
+    const users = await db('users').select('id', 'email', 'name', 'role', 'status', 'photo_url', 'code', 'segment', 'employment_type', 'weekly_rule_id', 'created_at');
     const formattedUsers = users.map(u => ({
       ...u,
       photoUrl: u.photo_url,
+      lineType: u.segment || DEFAULT_SEGMENTS_BY_ROLE[u.role] || '',
       employmentType: u.employment_type,
       weeklyRuleId: u.weekly_rule_id,
       createdAt: u.created_at
@@ -44,10 +56,11 @@ router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req,
   try {
     const users = await db('users')
       .where({ role: 'csr' })
-      .select('id', 'email', 'name', 'role', 'status', 'photo_url', 'code', 'employment_type', 'weekly_rule_id');
+      .select('id', 'email', 'name', 'role', 'status', 'photo_url', 'code', 'segment', 'employment_type', 'weekly_rule_id');
     const formattedUsers = users.map(u => ({
       ...u,
       photoUrl: u.photo_url,
+      lineType: u.segment || '',
       employmentType: u.employment_type,
       weeklyRuleId: u.weekly_rule_id
     }));
@@ -59,11 +72,12 @@ router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req,
 
 // Create User
 router.post('/', authenticate, async (req: any, res) => {
-  const { email, password, name, role, status, employment_type, employmentType, code } = req.body;
+  const { email, password, name, role, status, employment_type, employmentType, code, segment, lineType } = req.body;
   const actingUserRole = req.user.role;
   const finalRole = role || 'csr';
   const finalStatus = status || 'active';
-  const finalEmploymentType = employment_type || employmentType || 'Full Time';
+  const finalEmploymentType = normalizeEmploymentType(employment_type ?? employmentType);
+  const finalSegment = segment ?? lineType ?? DEFAULT_SEGMENTS_BY_ROLE[finalRole] ?? '';
 
   if (!email || !name) {
     return res.status(400).json({ error: 'И-мэйл болон нэр шаардлагатай' });
@@ -105,11 +119,12 @@ router.post('/', authenticate, async (req: any, res) => {
       role: finalRole,
       status: finalStatus,
       employment_type: finalEmploymentType,
+      segment: finalSegment || null,
       code
     });
 
     await logAction(req.user.id, 'CREATE_USER', 'users', id, `Created user ${name} (${finalRole})`);
-    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, employmentType: finalEmploymentType });
+    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
@@ -119,9 +134,11 @@ router.post('/', authenticate, async (req: any, res) => {
 // Update User
 router.put('/:id', authenticate, async (req: any, res) => {
   const { id } = req.params;
-  const { name, status, employment_type, employmentType, code, role } = req.body;
+  const { name, status, employment_type, employmentType, code, role, segment, lineType } = req.body;
   const actingUserRole = req.user.role;
-  const finalEmploymentType = employment_type || employmentType;
+  const requestedEmploymentType = employment_type ?? employmentType;
+  const finalEmploymentType = requestedEmploymentType === undefined ? undefined : normalizeEmploymentType(requestedEmploymentType);
+  const finalSegment = segment ?? lineType;
 
   if (actingUserRole !== 'superadmin' && actingUserRole !== 'admin') {
     return res.status(403).json({ error: 'Хандах эрхгүй' });
@@ -157,6 +174,10 @@ router.put('/:id', authenticate, async (req: any, res) => {
       updates.code = code || null;
     }
 
+    if (finalSegment !== undefined) {
+      updates.segment = finalSegment || null;
+    }
+
     if (actingUserRole === 'superadmin' && role !== undefined) {
       if (!isValidRole(role)) return res.status(400).json({ error: 'Хэрэглэгчийн эрх буруу байна' });
       updates.role = role;
@@ -176,8 +197,8 @@ router.put('/:id', authenticate, async (req: any, res) => {
   }
 });
 
-// Reset Password (Superadmin/Root only)
-router.post('/:id/reset-password', authenticate, authorize(['superadmin']), async (req: any, res) => {
+// Reset Password: Superadmin can reset users; admin can reset CSR users only.
+router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin']), async (req: any, res) => {
   const { id } = req.params;
   const { password } = req.body;
   const actingUser = req.user;
@@ -187,6 +208,10 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin']), asyn
     if (!userToUpdate) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
 
     const isRoot = actingUser.email === 'enkhtur.a@mobicom.mn' || actingUser.email === 'Enkhtur040607@gmail.com';
+
+    if (actingUser.role === 'admin' && userToUpdate.role !== 'csr') {
+      return res.status(403).json({ error: 'Админ зөвхөн CSR хэрэглэгчийн нууц үгийг солих эрхтэй' });
+    }
     
     // Rule: Superadmin cannot reset other Superadmin's password unless they are Root
     if (userToUpdate.role === 'superadmin' && !isRoot && actingUser.id !== id) {
@@ -237,7 +262,23 @@ router.delete('/:id', authenticate, async (req: any, res) => {
       return res.status(400).json({ error: 'Өөрийгөө устгах боломжгүй' });
     }
 
-    await db('users').where({ id }).delete();
+    await db.transaction(async (trx) => {
+      await trx('audit_logs').where({ user_id: id }).update({ user_id: null });
+      await trx('notifications').where({ author_id: id }).update({ author_id: null });
+      await trx('trainings').where({ author_id: id }).update({ author_id: null });
+      await trx('leave_requests').where({ approved_by: id }).update({ approved_by: null });
+      await trx('vacation_requests').where({ approved_by: id }).update({ approved_by: null });
+      await trx('trade_requests')
+        .where({ sender_id: id })
+        .orWhere({ receiver_id: id })
+        .orWhere({ approved_by: id })
+        .update({
+          sender_id: trx.raw('case when sender_id = ? then null else sender_id end', [id]),
+          receiver_id: trx.raw('case when receiver_id = ? then null else receiver_id end', [id]),
+          approved_by: trx.raw('case when approved_by = ? then null else approved_by end', [id]),
+        });
+      await trx('users').where({ id }).delete();
+    });
     await logAction(actingUser.id, 'DELETE_USER', 'users', id, `Deleted user ${userToDelete.email || userToDelete.name}`);
     res.json({ message: 'Хэрэглэгч амжилттай устгагдлаа' });
   } catch (err) {
