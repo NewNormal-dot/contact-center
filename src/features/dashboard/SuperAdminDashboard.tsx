@@ -40,6 +40,7 @@ import { CSR, ActivityLog, Notification, TrainingMaterial } from '../../types';
 import { logAction } from '../../utils/logger';
 import apiClient from '../../lib/api-client';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
+import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
 
 type NewUserFormRow = Partial<CSR> & { formId: string };
 
@@ -169,7 +170,10 @@ export default function SuperAdminDashboard() {
   const fetchNotifications = async () => {
     try {
       const response = await apiClient.get('/api/broadcasts/notifications');
-      const notificationsData = response.data.map((n: any) => ({
+      const localNotifications: Notification[] = getLocalData('notifications', []);
+      const notificationsData: Notification[] = response.data.map((n: any) => {
+        const localMatch = localNotifications.find(local => String(local.id) === String(n.id));
+        return {
         id: n.id,
         title: n.title,
         content: n.content,
@@ -179,16 +183,20 @@ export default function SuperAdminDashboard() {
         authorId: n.author_id || n.authorId,
         authorName: n.author_name || n.authorName || 'Unknown',
         type: n.type || 'general',
-        seenBy: n.notification_read_receipts ? n.notification_read_receipts.map((r: any) => ({
+        seenBy: localMatch?.seenBy?.length ? localMatch.seenBy : n.notification_read_receipts ? n.notification_read_receipts.map((r: any) => ({
           userId: r.user_id,
           userName: r.user_name || 'Unknown',
           seenAt: r.read_at
         })) : (n.readAt ? [{ userId: profile?.id, userName: profile?.name, seenAt: n.readAt }] : [])
-      }));
-      setNotifications(notificationsData);
+      };
+      });
+      const localOnly = localNotifications.filter(local => (
+        !notificationsData.some(remote => String(remote.id) === String(local.id))
+      ));
+      setNotifications([...notificationsData, ...localOnly]);
     } catch (error) {
       console.error('Error fetching notifications:', error);
-      setNotifications([]);
+      setNotifications(getLocalData('notifications', []));
     }
   };
 
@@ -213,10 +221,26 @@ export default function SuperAdminDashboard() {
       fetchUsers();
       fetchLogs();
       fetchNotifications();
-    }, 5000);
+      setTrainingMaterials(getLocalData('trainingMaterials', []));
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [profile]);
+
+  useEffect(() => {
+    if (!showSeenDetails) return;
+
+    const currentView = (showSeenDetails as any)._view;
+    const source = 'authorId' in showSeenDetails ? notifications : trainingMaterials;
+    const latest = source.find(item => String(item.id) === String(showSeenDetails.id));
+
+    if (!latest) return;
+
+    setShowSeenDetails({
+      ...latest,
+      ...(currentView ? { _view: currentView } : {})
+    } as any);
+  }, [notifications, trainingMaterials, showSeenDetails?.id]);
 
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
   const [isAddingUser, setIsAddingUser] = useState(false);
@@ -252,6 +276,9 @@ export default function SuperAdminDashboard() {
               : m
           )
         );
+        setShowSeenDetails(prev => (
+          prev?.id === materialId ? { ...prev, seenBy: newSeenBy } as any : prev
+        ));
 
         logAction('Material Viewed', `Viewed training material: ${material.title}`);
       }
@@ -263,6 +290,21 @@ export default function SuperAdminDashboard() {
       await apiClient.post('/api/broadcasts/notifications/read', {
         notification_id: notifId,
       });
+      const notification = notifications.find(n => n.id === notifId);
+      if (notification) {
+        const seenBy = notification.seenBy?.some(seen => String(seen.userId) === 'superadmin')
+          ? notification.seenBy
+          : [...(notification.seenBy || []), {
+              userId: 'superadmin',
+              userName: profile?.name || 'Super Admin',
+              seenAt: new Date().toISOString()
+            }];
+        updateLocalItem('notifications', notifId, { seenBy });
+        setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, seenBy } : n));
+        setShowSeenDetails(prev => (
+          prev?.id === notifId ? { ...prev, seenBy } as any : prev
+        ));
+      }
       fetchNotifications();
       logAction('Notification Viewed', `Viewed notification: ${notifId}`);
     } catch (error) {
@@ -610,7 +652,8 @@ export default function SuperAdminDashboard() {
           deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
           seenBy: []
         };
-        updateLocalItem('trainingMaterials', editingMaterial.id, updates);
+        const updatedMaterials = updateLocalItem('trainingMaterials', editingMaterial.id, updates);
+        setTrainingMaterials(updatedMaterials);
         logAction('Material Updated', `Updated training material: ${newMaterial.title}`);
         setEditingMaterial(null);
       } else {
@@ -626,7 +669,9 @@ export default function SuperAdminDashboard() {
           deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
           seenBy: []
         };
-        addLocalItem('trainingMaterials', material);
+        const updatedMaterials = addLocalItem('trainingMaterials', material);
+        setTrainingMaterials(updatedMaterials);
+        setShowSeenDetails(material);
         
         // Create a notification for the new training material
         const notification: Notification = {
@@ -712,12 +757,25 @@ export default function SuperAdminDashboard() {
     }
 
     try {
-      await apiClient.post('/api/broadcasts/notifications', {
+      const response = await apiClient.post('/api/broadcasts/notifications', {
         title: newNotification.title,
         content: newNotification.content,
         deadline: newNotification.deadline || '',
         type: newNotification.type || 'general'
       });
+      const notification: Notification = {
+        id: response.data?.id || Math.random().toString(36).substr(2, 9),
+        title: newNotification.title,
+        content: newNotification.content,
+        deadline: newNotification.deadline || '',
+        createdAt: new Date().toISOString(),
+        authorId: profile?.id || 'superadmin',
+        authorName: profile?.name || 'Super Admin',
+        type: newNotification.type || 'general',
+        seenBy: []
+      };
+      addLocalItem('notifications', notification);
+      setShowSeenDetails(notification);
       logAction('Notification Sent', `Sent ${newNotification.type} notification: ${newNotification.title}`);
       setIsAddingNotification(false);
       setNewNotification({ type: 'general', deadline: new Date(Date.now() + 86400000).toISOString().split('T')[0] });
@@ -1152,207 +1210,254 @@ export default function SuperAdminDashboard() {
     );
   };
 
-  const renderNotifications = () => (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-black text-white">Мэдэгдэл</h2>
-        <button 
-          onClick={() => setIsAddingNotification(true)}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/20"
-        >
-          <Plus size={20} />
-          Шинэ мэдэгдэл
-        </button>
-      </div>
+  const renderNotifications = () => {
+    const notificationGroups = groupNotificationsByDay(
+      notifications.filter(n => n.type === 'general' || n.type === 'important')
+    );
 
-      <div className="space-y-4">
-        {notifications.filter(n => n.type === 'general' || n.type === 'important').map((notif, idx) => {
-          const isDeadlinePassed = notif.deadline && new Date(notif.deadline) < new Date();
-          const seenBy = notif.seenBy ?? [];
-          const seenUserIds = new Set(seenBy.map(seen => String(seen.userId)));
-          const seenCount = csrs.filter(user => seenUserIds.has(String(user.id))).length;
-          const unseenCount = Math.max(csrs.length - seenCount, 0);
-
-          return (
-            <div key={`notif-${notif.id}-${idx}`} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                  notif.type === 'training' ? 'bg-purple-500/10 text-purple-400' : 'bg-blue-500/10 text-blue-400'
-                }`}>
-                  {notif.type === 'training' ? <BookOpen size={20} /> : <Bell size={20} />}
-                </div>
-                <div>
-                  <h4 className="font-bold text-white">{notif.title}</h4>
-                  <p className="text-xs text-gray-500">Хугацаа: {notif.deadline}</p>
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-[10px] font-black text-gray-600 uppercase block mb-1">Уншсан байдал</span>
-                <span className="text-sm font-bold text-blue-400">{seenCount} / {csrs.length}</span>
-              </div>
-            </div>
-            
-            <p className="text-gray-400 text-sm mb-6 line-clamp-2">{notif.content}</p>
-            
-            <div className="flex items-center justify-between pt-4 border-t border-gray-800">
-              <div className="flex -space-x-2">
-                {seenBy.slice(0, 5).map((seen, idx) => (
-                  <div key={`seen-${notif.id}-${seen.userId}-${idx}`} className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400" title={seen.userName}>
-                    {seen.userName.charAt(0)}
-                  </div>
-                ))}
-                {seenBy.length > 5 && (
-                  <div className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400">
-                    +{seenBy.length - 5}
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-4">
-                <button 
-                  onClick={() => exportNotificationSeenToExcel(notif)}
-                  className="text-xs text-green-500 font-bold hover:underline flex items-center gap-1"
-                >
-                  <Download size={12} />
-                  Excel Татах
-                </button>
-                <button 
-                  onClick={() => setShowSeenDetails(notif)}
-                  className="text-xs text-blue-500 font-bold hover:underline"
-                >
-                  Дэлгэрэнгүй харах
-                </button>
-                {!notif.seenBy?.some(s => s.userId === 'superadmin') && !isDeadlinePassed && (
-                  <button 
-                    onClick={() => markNotificationAsRead(notif.id)}
-                    className="text-xs text-green-500 font-bold hover:underline flex items-center gap-1"
-                  >
-                    <CheckCircle2 size={12} />
-                    Би үзсэн
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )})}
-      </div>
-    </div>
-  );
-
-  const renderTraining = () => (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-black text-white">Сургалтын материалууд</h2>
-        <button 
-          onClick={() => {
-            setEditingMaterial(null);
-            setNewMaterial({ 
-              type: 'PDF',
-              deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
-            });
-            setIsAddingMaterial(true);
-          }}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold transition-all"
-        >
-          <Plus size={18} />
-          Материал нэмэх
-        </button>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {trainingMaterials.map((material, idx) => (
-          <div 
-            key={`training-${material.id}-${idx}`} 
-            onClick={() => setSelectedMaterial(material)}
-            className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl space-y-4 hover:border-blue-500/30 transition-all group cursor-pointer"
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-end">
+          <button 
+            onClick={() => setIsAddingNotification(true)}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/20"
           >
-            <div className="aspect-video bg-gray-800 rounded-xl overflow-hidden relative border border-gray-700/50">
-              {material.thumbnailUrl ? (
-                <LazyMedia 
-                  src={material.thumbnailUrl} 
-                  alt={material.title} 
-                  type="Image" 
-                  className="w-full h-full" 
-                />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 bg-gray-800/50">
-                  {material.type === 'Video' ? <Clock size={40} /> : material.type === 'PDF' ? <FileText size={40} /> : <BookOpen size={40} />}
-                  <span className="text-[10px] font-black uppercase mt-2">Зураггүй</span>
+            <Plus size={20} />
+            Мэдэгдэл илгээх
+          </button>
+        </div>
+
+        <div className="space-y-8">
+          {notificationGroups.length > 0 ? (
+            notificationGroups.map(group => (
+              <section key={group.key} className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-black text-gray-300 uppercase tracking-widest">{group.title}</h3>
+                  <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1 text-[10px] font-black text-gray-500">
+                    {group.notifications.length}
+                  </span>
                 </div>
-              )}
-              <div className="absolute top-3 right-3 px-2 py-1 bg-black/60 backdrop-blur-md rounded text-[10px] font-black text-white uppercase border border-white/10">
-                {material.type}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <h4 className="font-bold text-white text-lg group-hover:text-blue-400 transition-colors">{material.title}</h4>
-                <div className="text-right">
-                  <span className="text-[10px] font-black text-blue-400">{material.seenBy?.length || 0} / {csrs.length}</span>
+                <div className="space-y-4">
+                  {group.notifications.map((notif, idx) => {
+                    const isDeadlinePassed = notif.deadline && new Date(notif.deadline) < new Date();
+                    const seenBy = notif.seenBy ?? [];
+                    const seenUserIds = new Set(seenBy.map(seen => String(seen.userId)));
+                    const seenCount = csrs.filter(user => seenUserIds.has(String(user.id))).length;
+
+                    return (
+                      <div key={`notif-${notif.id}-${idx}`} className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                              notif.type === 'training' ? 'bg-purple-500/10 text-purple-400' : 'bg-blue-500/10 text-blue-400'
+                            }`}>
+                              {notif.type === 'training' ? <BookOpen size={20} /> : <Bell size={20} />}
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-white">{notif.title}</h4>
+                              <p className="text-xs text-gray-500">Хугацаа: {notif.deadline}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] font-black text-gray-600 uppercase block mb-1">Уншсан байдал</span>
+                            <span className="text-sm font-bold text-blue-400">{seenCount} / {csrs.length}</span>
+                          </div>
+                        </div>
+                        
+                        <p className="text-gray-400 text-sm mb-6 line-clamp-2">{notif.content}</p>
+                        
+                        <div className="flex items-center justify-between pt-4 border-t border-gray-800">
+                          <div className="flex -space-x-2">
+                            {seenBy.slice(0, 5).map((seen, idx) => (
+                              <div key={`seen-${notif.id}-${seen.userId}-${idx}`} className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400" title={seen.userName}>
+                                {seen.userName.charAt(0)}
+                              </div>
+                            ))}
+                            {seenBy.length > 5 && (
+                              <div className="w-8 h-8 rounded-full border-2 border-gray-900 bg-gray-800 flex items-center justify-center text-[10px] font-bold text-gray-400">
+                                +{seenBy.length - 5}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex gap-4">
+                            <button 
+                              onClick={() => exportNotificationSeenToExcel(notif)}
+                              className="text-xs text-green-500 font-bold hover:underline flex items-center gap-1"
+                            >
+                              <Download size={12} />
+                              Excel Татах
+                            </button>
+                            <button 
+                              onClick={() => setShowSeenDetails(notif)}
+                              className="text-xs text-blue-500 font-bold hover:underline"
+                            >
+                              Дэлгэрэнгүй харах
+                            </button>
+                            {!notif.seenBy?.some(s => s.userId === 'superadmin') && !isDeadlinePassed && (
+                              <button 
+                                onClick={() => markNotificationAsRead(notif.id)}
+                                className="text-xs text-green-500 font-bold hover:underline flex items-center gap-1"
+                              >
+                                <CheckCircle2 size={12} />
+                                Би үзсэн
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
-              <p className="text-sm text-gray-500 mt-1 line-clamp-2">{material.description}</p>
-              <div className="flex items-center justify-between mt-3">
-                <div className="flex flex-col gap-1">
-                  <p className="text-[10px] text-gray-600 font-bold uppercase">{material.date}</p>
-                  {material.deadline && (
-                    <p className={`text-[10px] font-bold uppercase ${new Date(material.deadline) < new Date() ? 'text-red-500' : 'text-gray-500'}`}>
-                      Хугацаа: {material.deadline}
-                    </p>
-                  )}
-                </div>
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowSeenDetails(material);
-                  }}
-                  className="text-[10px] text-blue-500 font-bold hover:underline"
-                >
-                  Дэлгэрэнгүй
-                </button>
-              </div>
+              </section>
+            ))
+          ) : (
+            <div className="text-center py-20 bg-gray-900/20 rounded-3xl border border-dashed border-gray-800">
+              <Bell size={48} className="mx-auto text-gray-800 mb-4 opacity-20" />
+              <p className="text-gray-500 font-bold uppercase tracking-widest text-xs">Мэдэгдэл байхгүй байна</p>
             </div>
-            <div className="pt-4 border-t border-gray-800 flex gap-2">
-              <button 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditingMaterial(material);
-                  setNewMaterial({
-                    title: material.title,
-                    description: material.description,
-                    type: material.type,
-                    url: material.url,
-                    thumbnailUrl: material.thumbnailUrl,
-                    deadline: material.deadline
-                  });
-                  setIsAddingMaterial(true);
-                }}
-                className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg transition-all"
-              >
-                Засах
-              </button>
-              <button 
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  try {
-                    const updatedMaterials = deleteLocalItem('trainingMaterials', material.id);
-                    setTrainingMaterials(updatedMaterials);
-                    logAction('Training Deleted', `Deleted material: ${material.title}`);
-                    triggerSuccess();
-                  } catch (error) {
-                    console.error('Error deleting material:', error);
-                    alert('Устгахад алдаа гарлаа.');
-                  }
-                }}
-                className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-          </div>
-        ))}
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
+
+  const renderTraining = () => {
+    const trainingGroups = groupTrainingMaterialsByDay(trainingMaterials);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-end">
+          <button 
+            onClick={() => {
+              setEditingMaterial(null);
+              setNewMaterial({ 
+                type: 'PDF',
+                deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
+              });
+              setIsAddingMaterial(true);
+            }}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/20"
+          >
+            <Plus size={20} />
+            Материал нэмэх
+          </button>
+        </div>
+
+        <div className="space-y-8">
+          {trainingGroups.length > 0 ? (
+            trainingGroups.map(group => (
+              <section key={group.key} className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-black text-gray-300 uppercase tracking-widest">{group.title}</h3>
+                  <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1 text-[10px] font-black text-gray-500">
+                    {group.materials.length}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {group.materials.map((material, idx) => (
+                    <div 
+                      key={`training-${material.id}-${idx}`} 
+                      onClick={() => setSelectedMaterial(material)}
+                      className="bg-gray-900/40 border border-gray-800 p-6 rounded-2xl space-y-4 hover:border-blue-500/30 transition-all group cursor-pointer"
+                    >
+                      <div className="aspect-video bg-gray-800 rounded-xl overflow-hidden relative border border-gray-700/50">
+                        {material.thumbnailUrl ? (
+                          <LazyMedia 
+                            src={material.thumbnailUrl} 
+                            alt={material.title} 
+                            type="Image" 
+                            className="w-full h-full" 
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 bg-gray-800/50">
+                            {material.type === 'Video' ? <Clock size={40} /> : material.type === 'PDF' ? <FileText size={40} /> : <BookOpen size={40} />}
+                            <span className="text-[10px] font-black uppercase mt-2">Зураггүй</span>
+                          </div>
+                        )}
+                        <div className="absolute top-3 right-3 px-2 py-1 bg-black/60 backdrop-blur-md rounded text-[10px] font-black text-white uppercase border border-white/10">
+                          {material.type}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <h4 className="font-bold text-white text-lg group-hover:text-blue-400 transition-colors">{material.title}</h4>
+                          <div className="text-right">
+                            <span className="text-[10px] font-black text-blue-400">{material.seenBy?.length || 0} / {csrs.length}</span>
+                          </div>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-1 line-clamp-2">{material.description}</p>
+                        <div className="flex items-center justify-between mt-3">
+                          <div className="flex flex-col gap-1">
+                            <p className="text-[10px] text-gray-600 font-bold uppercase">{material.date}</p>
+                            {material.deadline && (
+                              <p className={`text-[10px] font-bold uppercase ${new Date(material.deadline) < new Date() ? 'text-red-500' : 'text-gray-500'}`}>
+                                Хугацаа: {material.deadline}
+                              </p>
+                            )}
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowSeenDetails(material);
+                            }}
+                            className="text-[10px] text-blue-500 font-bold hover:underline"
+                          >
+                            Дэлгэрэнгүй
+                          </button>
+                        </div>
+                      </div>
+                      <div className="pt-4 border-t border-gray-800 flex gap-2">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingMaterial(material);
+                            setNewMaterial({
+                              title: material.title,
+                              description: material.description,
+                              type: material.type,
+                              url: material.url,
+                              thumbnailUrl: material.thumbnailUrl,
+                              deadline: material.deadline
+                            });
+                            setIsAddingMaterial(true);
+                          }}
+                          className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg transition-all"
+                        >
+                          Засах
+                        </button>
+                        <button 
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const updatedMaterials = deleteLocalItem('trainingMaterials', material.id);
+                              setTrainingMaterials(updatedMaterials);
+                              logAction('Training Deleted', `Deleted material: ${material.title}`);
+                              triggerSuccess();
+                            } catch (error) {
+                              console.error('Error deleting material:', error);
+                              alert('Устгахад алдаа гарлаа.');
+                            }
+                          }}
+                          className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))
+          ) : (
+            <div className="text-center py-20 bg-gray-900/20 rounded-3xl border border-dashed border-gray-800">
+              <BookOpen size={48} className="mx-auto text-gray-800 mb-4 opacity-20" />
+              <p className="text-gray-500 font-bold uppercase tracking-widest text-xs">Сургалтын материал байхгүй байна</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden font-sans">
@@ -1448,7 +1553,8 @@ export default function SuperAdminDashboard() {
               <h2 className="text-2xl sm:text-4xl font-black text-white tracking-tight mb-2">
                 {activeTab === 'logs' ? 'Системийн бүртгэл' : 
                  activeTab === 'users' ? 'Хэрэглэгчийн удирдлага' : 
-                 activeTab === 'notifications' ? 'Мэдэгдэл' : 'Тохиргоо'}
+                 activeTab === 'notifications' ? 'Мэдэгдэл' :
+                 activeTab === 'training' ? 'Сургалт' : 'Тохиргоо'}
               </h2>
               <p className="text-xs sm:text-sm text-gray-500">Тавтай морил, {profile?.name || 'Super Admin'}. Системийн бүх үйл ажиллагааг эндээс хянана уу.</p>
             </div>
@@ -1467,9 +1573,17 @@ export default function SuperAdminDashboard() {
       {/* Add/Edit Material Modal */}
       <AnimatePresence>
         {isAddingMaterial && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 overflow-hidden">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setIsAddingMaterial(false); setEditingMaterial(null); }} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+              }}
+              className="relative w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto overscroll-contain custom-scrollbar bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl"
+            >
               <h2 className="text-2xl font-black text-white mb-6">{editingMaterial ? 'Материал засах' : 'Сургалтын материал нэмэх'}</h2>
               <form onSubmit={handleAddMaterial} className="space-y-4">
                 <div className="space-y-2">
@@ -1549,22 +1663,6 @@ export default function SuperAdminDashboard() {
                       </span>
                     </div>
                   )}
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">URL эсвэл Зургийн URL (Заавал биш)</label>
-                  <input 
-                    type="text" 
-                    value={newMaterial.url && !newMaterial.url.startsWith('data:') ? newMaterial.url : (newMaterial.thumbnailUrl || '')}
-                    onChange={e => {
-                      if (newMaterial.type === 'Link') {
-                        setNewMaterial(prev => ({ ...prev, url: e.target.value }));
-                      } else {
-                        setNewMaterial(prev => ({ ...prev, thumbnailUrl: e.target.value }));
-                      }
-                    }}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
-                    placeholder="https://..."
-                  />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Дуусах хугацаа (Deadline)</label>
@@ -1729,6 +1827,10 @@ export default function SuperAdminDashboard() {
                 <div>
                   <h2 className="text-2xl font-black text-white">Үзсэн / Үзээгүй ажилтнууд</h2>
                   <p className="text-gray-400 text-sm">{showSeenDetails.title}</p>
+                  <div className="mt-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-green-400">
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                    Шууд шинэчлэгдэж байна
+                  </div>
                 </div>
                 <button onClick={() => setShowSeenDetails(null)} className="text-gray-500 hover:text-white">
                   <X size={24} />
@@ -2142,14 +2244,8 @@ export default function SuperAdminDashboard() {
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAddingNotification(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
-              <h2 className="text-2xl font-black text-white mb-6">Шинэ мэдэгдэл илгээх</h2>
+              <h2 className="text-2xl font-black text-white mb-6">Мэдэгдэл илгээх</h2>
               <form onSubmit={handleSendNotification} className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Төрөл</label>
-                  <div className="flex bg-gray-800 p-1 rounded-xl">
-                    <button type="button" onClick={() => setNewNotification({...newNotification, type: 'general'})} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${newNotification.type === 'general' ? 'bg-blue-600 text-white' : 'text-gray-500'}`}>Ерөнхий</button>
-                  </div>
-                </div>
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Гарчиг</label>
                   <input type="text" value={newNotification.title || ''} onChange={(e) => setNewNotification({...newNotification, title: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500" placeholder="Мэдэгдлийн гарчиг..." required />

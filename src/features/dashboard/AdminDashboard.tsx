@@ -51,6 +51,7 @@ import { CSR, Notification, TrainingMaterial, VacationRequest, HourlyLeaveReques
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import apiClient from '../../lib/api-client';
+import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
 
 const ENG_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
@@ -78,6 +79,7 @@ export default function AdminDashboard() {
 
   // UI States
   const [selectedMaterial, setSelectedMaterial] = useState<TrainingMaterial | null>(null);
+  const [showSeenDetails, setShowSeenDetails] = useState<Notification | TrainingMaterial | null>(null);
   const [isAddingMaterial, setIsAddingMaterial] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState<TrainingMaterial | null>(null);
   const [newMaterial, setNewMaterial] = useState<Partial<TrainingMaterial>>({ 
@@ -305,6 +307,21 @@ export default function AdminDashboard() {
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, []);
+
+  useEffect(() => {
+    if (!showSeenDetails) return;
+
+    const currentView = (showSeenDetails as any)._view;
+    const source = 'authorId' in showSeenDetails ? notifications : trainingMaterials;
+    const latest = source.find(item => String(item.id) === String(showSeenDetails.id));
+
+    if (!latest) return;
+
+    setShowSeenDetails({
+      ...latest,
+      ...(currentView ? { _view: currentView } : {})
+    } as any);
+  }, [notifications, trainingMaterials, showSeenDetails?.id]);
 
   const handleApproveHourlyLeave = (id: string) => {
     updateLocalItem('hourlyLeaveRequests', id, { status: 'approved' });
@@ -536,12 +553,13 @@ export default function AdminDashboard() {
     if (newMaterial.title) {
       const processSubmission = (url: string = '', type: string = 'Link') => {
         if (editingMaterial) {
-          updateLocalItem('trainingMaterials', editingMaterial.id, { 
+          const updatedMaterials = updateLocalItem('trainingMaterials', editingMaterial.id, { 
             ...newMaterial, 
             id: editingMaterial.id,
             url: url || newMaterial.url || '',
             type: type || newMaterial.type || 'Link'
           });
+          setTrainingMaterials(updatedMaterials);
           logAction('Material Updated', `Updated training material: ${newMaterial.title}`);
         } else {
           const material: TrainingMaterial = {
@@ -554,7 +572,9 @@ export default function AdminDashboard() {
             deadline: newMaterial.deadline,
             seenBy: []
           };
-          addLocalItem('trainingMaterials', material);
+          const updatedMaterials = addLocalItem('trainingMaterials', material);
+          setTrainingMaterials(updatedMaterials);
+          setShowSeenDetails(material);
           logAction('Material Added', `Added training material: ${material.title}`);
           
           const notification: Notification = {
@@ -568,7 +588,8 @@ export default function AdminDashboard() {
             type: 'training',
             seenBy: []
           };
-          addLocalItem('notifications', notification);
+          const updatedNotifications = addLocalItem('notifications', notification);
+          setNotifications(updatedNotifications);
         }
         setIsAddingMaterial(false);
         setEditingMaterial(null);
@@ -596,6 +617,7 @@ export default function AdminDashboard() {
   const handleDeleteMaterial = (id: string) => {
     const updatedMaterials = deleteLocalItem('trainingMaterials', id);
     setTrainingMaterials(updatedMaterials);
+    setShowSeenDetails(prev => (prev?.id === id ? null : prev));
     logAction('Material Deleted', `Deleted material with ID: ${id}`);
   };
 
@@ -613,7 +635,9 @@ export default function AdminDashboard() {
         authorName: 'Admin',
         seenBy: []
       };
-      addLocalItem('notifications', notification);
+      const updatedNotifications = addLocalItem('notifications', notification);
+      setNotifications(updatedNotifications);
+      setShowSeenDetails(notification);
       logAction('Notification Sent', `Sent notification: ${notification.title}`);
       setNewNotification({ type: 'general', deadline: new Date(Date.now() + 86400000).toISOString().slice(0, 16) });
       setNotifSubTab('inbox');
@@ -624,7 +648,11 @@ export default function AdminDashboard() {
     const mat = trainingMaterials.find(m => m.id === id);
     if (mat && !mat.seenBy?.some(s => s.userId === 'admin')) {
       const seenBy = [...(mat.seenBy || []), { userId: 'admin', userName: 'Admin', seenAt: new Date().toISOString() }];
-      updateLocalItem('trainingMaterials', id, { seenBy });
+      const updatedMaterials = updateLocalItem('trainingMaterials', id, { seenBy });
+      setTrainingMaterials(updatedMaterials);
+      setShowSeenDetails(prev => (
+        prev?.id === id ? { ...prev, seenBy } as any : prev
+      ));
     }
   };
 
@@ -632,7 +660,11 @@ export default function AdminDashboard() {
     const n = notifications.find(notif => notif.id === id);
     if (n && !n.seenBy?.some(s => s.userId === 'admin')) {
       const seenBy = [...(n.seenBy || []), { userId: 'admin', userName: 'Admin', seenAt: new Date().toISOString() }];
-      updateLocalItem('notifications', id, { seenBy });
+      const updatedNotifications = updateLocalItem('notifications', id, { seenBy });
+      setNotifications(updatedNotifications);
+      setShowSeenDetails(prev => (
+        prev?.id === id ? { ...prev, seenBy } as any : prev
+      ));
     }
   };
 
@@ -1285,8 +1317,13 @@ export default function AdminDashboard() {
     );
   };
 
-  const renderNotificationsView = () => (
-    <div className="space-y-6 max-w-4xl mx-auto">
+  const renderNotificationsView = () => {
+    const notificationGroups = groupNotificationsByDay(
+      notifications.filter(n => n.type === 'general' || n.type === 'important')
+    );
+
+    return (
+      <div className="space-y-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-black text-white tracking-tight">Мэдэгдэл</h2>
@@ -1311,60 +1348,79 @@ export default function AdminDashboard() {
       </div>
 
       {notifSubTab === 'inbox' ? (
-        <div className="space-y-4">
-          {notifications.filter(n => n.type === 'general' || n.type === 'important').length > 0 ? (
-            notifications.filter(n => n.type === 'general' || n.type === 'important').map((notif, idx) => {
-              const isUnread = !notif.seenBy?.some(s => s.userId === 'admin');
-              return (
-                <div 
-                  key={`notif-${notif.id}-${idx}`} 
-                  className={`relative p-6 rounded-3xl border transition-all ${isUnread ? 'bg-blue-600/5 border-blue-500/30 ring-1 ring-blue-500/20' : 'bg-gray-900/30 border-gray-800 hover:border-gray-700'}`}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex gap-4">
-                      <div className={`mt-1 p-3 rounded-2xl ${notif.type === 'important' ? 'bg-red-500/10 text-red-400' : 'bg-blue-500/10 text-blue-400'}`}>
-                        {notif.type === 'important' ? <AlertCircle size={20} /> : <Info size={20} />}
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-3">
-                          <h3 className="font-black text-white">{notif.title}</h3>
-                          {isUnread && <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-glow shadow-blue-500" />}
-                        </div>
-                        <p className="text-sm text-gray-400 leading-relaxed">{notif.content}</p>
-                        <div className="flex items-center gap-3">
-                          <button 
-                            onClick={() => exportNotificationSeenList(notif)}
-                            className="flex items-center gap-1.5 text-blue-400/80 hover:text-blue-400 transition-colors text-[10px] font-black uppercase tracking-widest"
-                          >
-                            <Download size={12} /> 
-                            {notif.seenBy?.length || 0} үзсэн
-                          </button>
-                          <button 
-                            onClick={() => exportNotificationUnseenList(notif)}
-                            className="flex items-center gap-1.5 text-orange-400/80 hover:text-orange-400 transition-colors text-[10px] font-black uppercase tracking-widest"
-                          >
-                            <Download size={12} /> 
-                            {csrs.length - (notif.seenBy?.length || 0)} үзээгүй
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {!isUnread && (
-                        <button onClick={() => handleDeleteNotification(notif.id)} className="p-2 text-gray-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all">
-                          <Trash2 size={20} />
-                        </button>
-                      )}
-                      {isUnread && (
-                        <button onClick={() => markNotificationAsRead(notif.id)} className="p-2 text-blue-400 hover:bg-blue-500/10 rounded-xl transition-all">
-                          <CheckCircle2 size={24} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
+        <div className="space-y-8">
+          {notificationGroups.length > 0 ? (
+            notificationGroups.map(group => (
+              <section key={group.key} className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-black text-gray-300 uppercase tracking-widest">{group.title}</h3>
+                  <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1 text-[10px] font-black text-gray-500">
+                    {group.notifications.length}
+                  </span>
                 </div>
-              );
-            })
+                <div className="space-y-4">
+                  {group.notifications.map((notif, idx) => {
+                    const isUnread = !notif.seenBy?.some(s => s.userId === 'admin');
+                    return (
+                      <div 
+                        key={`notif-${notif.id}-${idx}`} 
+                        className={`relative p-6 rounded-3xl border transition-all ${isUnread ? 'bg-blue-600/5 border-blue-500/30 ring-1 ring-blue-500/20' : 'bg-gray-900/30 border-gray-800 hover:border-gray-700'}`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex gap-4">
+                            <div className={`mt-1 p-3 rounded-2xl ${notif.type === 'important' ? 'bg-red-500/10 text-red-400' : 'bg-blue-500/10 text-blue-400'}`}>
+                              {notif.type === 'important' ? <AlertCircle size={20} /> : <Info size={20} />}
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-3">
+                                <h3 className="font-black text-white">{notif.title}</h3>
+                                {isUnread && <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-glow shadow-blue-500" />}
+                              </div>
+                              <p className="text-sm text-gray-400 leading-relaxed">{notif.content}</p>
+                              <div className="flex items-center gap-3">
+                                <button 
+                                  onClick={() => exportNotificationSeenList(notif)}
+                                  className="flex items-center gap-1.5 text-blue-400/80 hover:text-blue-400 transition-colors text-[10px] font-black uppercase tracking-widest"
+                                >
+                                  <Download size={12} /> 
+                                  {notif.seenBy?.length || 0} үзсэн
+                                </button>
+                                <button 
+                                  onClick={() => exportNotificationUnseenList(notif)}
+                                  className="flex items-center gap-1.5 text-orange-400/80 hover:text-orange-400 transition-colors text-[10px] font-black uppercase tracking-widest"
+                                >
+                                  <Download size={12} /> 
+                                  {csrs.length - (notif.seenBy?.length || 0)} үзээгүй
+                                </button>
+                                <button 
+                                  onClick={() => setShowSeenDetails(notif)}
+                                  className="flex items-center gap-1.5 text-green-400/80 hover:text-green-400 transition-colors text-[10px] font-black uppercase tracking-widest"
+                                >
+                                  <Eye size={12} /> 
+                                  Дэлгэрэнгүй
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {!isUnread && (
+                              <button onClick={() => handleDeleteNotification(notif.id)} className="p-2 text-gray-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all">
+                                <Trash2 size={20} />
+                              </button>
+                            )}
+                            {isUnread && (
+                              <button onClick={() => markNotificationAsRead(notif.id)} className="p-2 text-blue-400 hover:bg-blue-500/10 rounded-xl transition-all">
+                                <CheckCircle2 size={24} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))
           ) : (
             <div className="text-center py-20 bg-gray-900/20 rounded-3xl border border-dashed border-gray-800">
               <Mail size={48} className="mx-auto text-gray-800 mb-4 opacity-20" />
@@ -1379,7 +1435,7 @@ export default function AdminDashboard() {
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Мэдэгдэлийн төрөл</label>
                 <div className="flex p-1 bg-gray-800 rounded-2xl border border-gray-700">
-                  <button type="button" onClick={() => setNewNotification(prev => ({ ...prev, type: 'general' }))} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${newNotification.type === 'general' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-gray-500 hover:text-gray-300'}`}>Ерөнхий</button>
+                  <button type="button" onClick={() => setNewNotification(prev => ({ ...prev, type: 'general' }))} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${newNotification.type === 'general' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-gray-500 hover:text-gray-300'}`}>Энгийн</button>
                   <button type="button" onClick={() => setNewNotification(prev => ({ ...prev, type: 'important' }))} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${newNotification.type === 'important' ? 'bg-red-600 text-white shadow-lg shadow-red-900/40' : 'text-gray-500 hover:text-gray-300'}`}>Чухал</button>
                 </div>
               </div>
@@ -1424,92 +1480,114 @@ export default function AdminDashboard() {
           </form>
         </motion.div>
       )}
-    </div>
-  );
+      </div>
+    );
+  };
 
-  const renderTrainingView = () => (
-    <div className="space-y-8 max-w-6xl mx-auto py-8">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h2 className="text-3xl font-black text-white tracking-tight">Сургалтын материалууд</h2>
-          <p className="text-gray-400 mt-1">Ажилтнуудад зориулсан сургалтын материалууд.</p>
+  const renderTrainingView = () => {
+    const trainingGroups = groupTrainingMaterialsByDay(trainingMaterials);
+
+    return (
+      <div className="space-y-8 max-w-6xl mx-auto py-8">
+        <div className="flex items-center justify-end">
+          <button 
+            onClick={() => {
+              setEditingMaterial(null);
+              setNewMaterial({ 
+                type: 'PDF',
+                deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
+              });
+              setIsAddingMaterial(true);
+            }}
+            className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center gap-2 transition-all shadow-lg shadow-blue-500/20 active:scale-95"
+          >
+            <Plus size={20} />
+            Материал нэмэх
+          </button>
         </div>
-        <button 
-          onClick={() => {
-            setEditingMaterial(null);
-            setNewMaterial({ 
-              type: 'PDF',
-              deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
-            });
-            setIsAddingMaterial(true);
-          }}
-          className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center gap-2 transition-all shadow-lg shadow-blue-500/20 active:scale-95"
-        >
-          <Plus size={20} />
-          Материал нэмэх
-        </button>
+
+        {trainingGroups.length > 0 ? (
+          trainingGroups.map(group => (
+            <section key={group.key} className="space-y-4">
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-black text-gray-300 uppercase tracking-widest">{group.title}</h3>
+                <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1 text-[10px] font-black text-gray-500">
+                  {group.materials.length}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                {group.materials.map((material, idx) => (
+                  <div key={`training-${material.id}-${idx}`} className="bg-gray-900/40 border border-gray-800 p-6 rounded-3xl space-y-4 hover:border-blue-500/30 transition-all group relative">
+                    <div 
+                      onClick={() => setSelectedMaterial(material)}
+                      className="aspect-video bg-gray-800 rounded-2xl overflow-hidden relative cursor-pointer"
+                    >
+                      {material.thumbnailUrl ? (
+                        <LazyMedia src={material.thumbnailUrl} alt={material.title} type="Image" className="w-full h-full" />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-gray-600">
+                          <BookOpen size={40} />
+                          <span className="text-[10px] font-black uppercase mt-2">Зураггүй</span>
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <span className="text-white text-xs font-black uppercase tracking-widest bg-blue-600 px-4 py-2 rounded-full">Нээх</span>
+                      </div>
+                    </div>
+
+                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setEditingMaterial(material); setNewMaterial(material); setIsAddingMaterial(true); }}
+                        className="p-2 bg-gray-800/80 backdrop-blur-md text-blue-400 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-xl"
+                      >
+                        <Edit size={16} />
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleConfirm('Устгах уу?', () => handleDeleteMaterial(material.id || '')); }}
+                        className="p-2 bg-gray-800/80 backdrop-blur-md text-red-400 rounded-xl hover:bg-red-600 hover:text-white transition-all shadow-xl"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="px-2 py-0.5 bg-blue-600/10 text-blue-400 text-[10px] font-black uppercase border border-blue-500/20 rounded-md">{material.type}</span>
+                        <span className="text-[10px] font-bold text-gray-500">{new Date(material.date).toLocaleDateString()}</span>
+                      </div>
+                      <h3 className="text-lg font-black text-white truncate">{material.title}</h3>
+                      <p className="text-sm text-gray-400 line-clamp-2 h-10">{material.description}</p>
+                      <div className="pt-4 border-t border-gray-800 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowSeenDetails(material);
+                          }}
+                          className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-blue-400 transition-colors"
+                        >
+                          <Eye size={14} className="text-blue-500" />
+                          <span className="font-bold">{material.seenBy?.length || 0} үзсэн</span>
+                        </button>
+                        <div className={`text-[10px] font-black uppercase ${new Date(material.deadline || '') < new Date() ? 'text-red-500' : 'text-gray-500'}`}>
+                          Хугацаа: {material.deadline ? new Date(material.deadline).toLocaleDateString() : 'Байхгүй'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))
+        ) : (
+          <div className="text-center py-20 bg-gray-900/20 rounded-3xl border border-dashed border-gray-800">
+            <BookOpen size={48} className="mx-auto text-gray-800 mb-4 opacity-20" />
+            <p className="text-gray-500 font-bold uppercase tracking-widest text-xs">Сургалтын материал байхгүй байна</p>
+          </div>
+        )}
       </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {trainingMaterials.map((material, idx) => {
-          const alreadySeen = material.seenBy?.some(s => s.userId === 'admin');
-          return (
-            <div key={`training-${material.id}-${idx}`} className="bg-gray-900/40 border border-gray-800 p-6 rounded-3xl space-y-4 hover:border-blue-500/30 transition-all group relative">
-              <div 
-                onClick={() => setSelectedMaterial(material)}
-                className="aspect-video bg-gray-800 rounded-2xl overflow-hidden relative cursor-pointer"
-              >
-                {material.thumbnailUrl ? (
-                  <LazyMedia src={material.thumbnailUrl} alt={material.title} type="Image" className="w-full h-full" />
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-gray-600">
-                    <BookOpen size={40} />
-                    <span className="text-[10px] font-black uppercase mt-2">Зураггүй</span>
-                  </div>
-                )}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                  <span className="text-white text-xs font-black uppercase tracking-widest bg-blue-600 px-4 py-2 rounded-full">Нээх</span>
-                </div>
-              </div>
-
-              <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); setEditingMaterial(material); setNewMaterial(material); setIsAddingMaterial(true); }}
-                  className="p-2 bg-gray-800/80 backdrop-blur-md text-blue-400 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-xl"
-                >
-                  <Edit size={16} />
-                </button>
-                <button 
-                  onClick={(e) => { e.stopPropagation(); handleConfirm('Устгах уу?', () => handleDeleteMaterial(material.id || '')); }}
-                  className="p-2 bg-gray-800/80 backdrop-blur-md text-red-400 rounded-xl hover:bg-red-600 hover:text-white transition-all shadow-xl"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="px-2 py-0.5 bg-blue-600/10 text-blue-400 text-[10px] font-black uppercase border border-blue-500/20 rounded-md">{material.type}</span>
-                  <span className="text-[10px] font-bold text-gray-500">{new Date(material.date).toLocaleDateString()}</span>
-                </div>
-                <h3 className="text-lg font-black text-white truncate">{material.title}</h3>
-                <p className="text-sm text-gray-400 line-clamp-2 h-10">{material.description}</p>
-                <div className="pt-4 border-t border-gray-800 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <Eye size={14} className="text-blue-500" />
-                    <span className="font-bold">{material.seenBy?.length || 0} үзсэн</span>
-                  </div>
-                  <div className={`text-[10px] font-black uppercase ${new Date(material.deadline || '') < new Date() ? 'text-red-500' : 'text-gray-500'}`}>
-                    Хугацаа: {material.deadline ? new Date(material.deadline).toLocaleDateString() : 'Байхгүй'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+    );
+  };
 
   const SHIFT_HOURS_MAP: Record<string, number> = {
     '09:00 - 14:00': 5, '09--14': 5, '09:00 - 15:00': 6, '09--15': 6,
@@ -2692,10 +2770,137 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {isAddingMaterial && (
+          {showSeenDetails && (
             <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowSeenDetails(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl flex flex-col max-h-[80vh]">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-2xl font-black text-white">Үзсэн / Үзээгүй ажилтнууд</h2>
+                    <p className="text-gray-400 text-sm">{showSeenDetails.title}</p>
+                    <div className="mt-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-green-400">
+                      <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                      Шууд шинэчлэгдэж байна
+                    </div>
+                  </div>
+                  <button onClick={() => setShowSeenDetails(null)} className="text-gray-500 hover:text-white">
+                    <X size={24} />
+                  </button>
+                </div>
+
+                {(() => {
+                  const targetUsers = csrs.filter(user => user.role === 'csr' || !user.role);
+                  const seenBy = showSeenDetails.seenBy ?? [];
+                  const seenUserIds = new Set(seenBy.map(seen => String(seen.userId)));
+                  const unseenUsers = targetUsers.filter(user => !seenUserIds.has(String(user.id)));
+                  const activeView = (showSeenDetails as any)._view === 'unseen' ? 'unseen' : 'seen';
+
+                  return (
+                    <>
+                      <div className="flex gap-4 mb-4 border-b border-gray-800">
+                        <button 
+                          onClick={() => setShowSeenDetails({ ...showSeenDetails, _view: 'seen' } as any)}
+                          className={`px-4 py-2 font-bold text-sm transition-all ${activeView === 'seen' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-500 hover:text-white'}`}
+                        >
+                          Үзсэн ({seenBy.length})
+                        </button>
+                        <button 
+                          onClick={() => setShowSeenDetails({ ...showSeenDetails, _view: 'unseen' } as any)}
+                          className={`px-4 py-2 font-bold text-sm transition-all ${activeView === 'unseen' ? 'text-red-400 border-b-2 border-red-400' : 'text-gray-500 hover:text-white'}`}
+                        >
+                          Үзээгүй ({unseenUsers.length})
+                        </button>
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                        {activeView === 'unseen' ? (
+                          unseenUsers.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                              <CheckCircle2 size={48} className="mb-4 opacity-20" />
+                              <p className="font-bold">Бүх ажилтан үзсэн байна.</p>
+                            </div>
+                          ) : (
+                            unseenUsers.map((user, idx) => (
+                              <div key={`admin-unseen-detail-${user.id}-${idx}`} className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-800">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-xs font-bold text-red-400">
+                                    {user.name.charAt(0)}
+                                  </div>
+                                  <div>
+                                    <p className="font-bold text-white">{user.name}</p>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-[10px] text-gray-500 uppercase font-black">{user.email || '-'}</p>
+                                      <span className="w-1 h-1 bg-gray-700 rounded-full" />
+                                      <p className="text-[10px] text-gray-500 uppercase font-black">{user.lineType || 'N/A'}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="flex items-center gap-1.5 text-red-500 text-xs font-bold mb-0.5">
+                                    <XCircle size={14} />
+                                    Үзээгүй
+                                  </div>
+                                  <p className="text-[10px] text-gray-500">Одоог хүртэл</p>
+                                </div>
+                              </div>
+                            ))
+                          )
+                        ) : (
+                          seenBy.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                              <AlertCircle size={48} className="mb-4 opacity-20" />
+                              <p className="font-bold">Одоогоор үзсэн хэрэглэгч байхгүй байна.</p>
+                            </div>
+                          ) : (
+                            seenBy.map((seen, idx) => {
+                              const user = csrs.find(item => String(item.id) === String(seen.userId));
+                              return (
+                                <div key={`admin-seen-detail-${seen.userId}-${idx}`} className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-800">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-xs font-bold text-blue-400">
+                                      {(seen.userName || '?').charAt(0)}
+                                    </div>
+                                    <div>
+                                      <p className="font-bold text-white">{seen.userName}</p>
+                                      <div className="flex items-center gap-2">
+                                        <p className="text-[10px] text-blue-500 uppercase font-black">{user?.role || 'CSR'}</p>
+                                        <span className="w-1 h-1 bg-gray-700 rounded-full" />
+                                        <p className="text-[10px] text-gray-500 uppercase font-black">{user?.lineType || 'N/A'}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="flex items-center gap-1.5 text-green-500 text-xs font-bold mb-0.5">
+                                      <CheckCircle2 size={14} />
+                                      Үзсэн
+                                    </div>
+                                    <p className="text-[10px] text-gray-500">{new Date(seen.seenAt).toLocaleString()}</p>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
+              </motion.div>
+            </div>
+          )}
+
+          {isAddingMaterial && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 overflow-hidden">
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setIsAddingMaterial(false); setEditingMaterial(null); }} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl overflow-hidden">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+                }}
+                className="relative w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto overscroll-contain custom-scrollbar bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl"
+              >
                 <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
                   <BookOpen size={120} className="text-blue-500" />
                 </div>
