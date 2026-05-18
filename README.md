@@ -18,6 +18,8 @@ When deploying to Azure App Service, configure the following **Application Setti
 - `NODE_ENV`: `production`
 - `PORT`: (Azure provides this automatically, don't hardcode it)
 - `JWT_SECRET`: A long random string for securing tokens
+- `INITIAL_SUPERADMIN_EMAIL`: Initial superadmin email for `/api/auth/register-initial`
+- `INITIAL_SUPERADMIN_PASSWORD`: Strong initial superadmin password
 - `DB_SERVER`: Azure SQL server host name
 - `DB_NAME`: Database name
 - `DB_USER`: Database user

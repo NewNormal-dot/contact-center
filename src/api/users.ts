@@ -83,6 +83,10 @@ router.post('/', authenticate, async (req: any, res) => {
     return res.status(400).json({ error: 'И-мэйл болон нэр шаардлагатай' });
   }
 
+  if (!password || String(password).length < 8) {
+    return res.status(400).json({ error: 'Нууц үг хамгийн багадаа 8 тэмдэгт байх ёстой' });
+  }
+
   if (!isValidRole(finalRole)) {
     return res.status(400).json({ error: 'Хэрэглэгчийн эрх буруу байна' });
   }
@@ -117,7 +121,7 @@ router.post('/', authenticate, async (req: any, res) => {
     if (existing) return res.status(400).json({ error: 'Имэйл бүртгэлтэй байна' });
 
     const id = uuidv4();
-    const hashedPassword = await bcrypt.hash(password || 'Password@123', 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     await db('users').insert({
       id,
@@ -226,6 +230,10 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
   const { password } = req.body;
   const actingUser = req.user;
 
+  if (!password || String(password).length < 8) {
+    return res.status(400).json({ error: 'Нууц үг хамгийн багадаа 8 тэмдэгт байх ёстой' });
+  }
+
   try {
     const userToUpdate = await db('users').where({ id }).first();
     if (!userToUpdate) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
@@ -241,7 +249,7 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
       return res.status(403).json({ error: 'Та өөр супер админы нууц үгийг солих эрхгүй' });
     }
 
-    const hashedPassword = await bcrypt.hash(password || 'Password@123', 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
     await db('users').where({ id }).update({ 
       password_hash: hashedPassword,
       updated_at: db.fn.now()

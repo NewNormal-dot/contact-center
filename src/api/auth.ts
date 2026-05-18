@@ -85,17 +85,26 @@ router.post('/login', async (req, res) => {
 router.post('/register-initial', async (req, res) => {
   // Only use this for initial superadmin creation if none exists
   try {
+    const initialEmail = process.env.INITIAL_SUPERADMIN_EMAIL;
+    const initialPassword = process.env.INITIAL_SUPERADMIN_PASSWORD;
+
+    if (!initialEmail || !initialPassword || initialPassword.length < 10) {
+      return res.status(400).json({
+        error: 'INITIAL_SUPERADMIN_EMAIL болон хамгийн багадаа 10 тэмдэгттэй INITIAL_SUPERADMIN_PASSWORD тохируулах шаардлагатай'
+      });
+    }
+
     const count = await db('users').count('id as count').first();
     if (count && Number(count.count) > 0) {
        return res.status(403).json({ error: 'Уучлаарай, систем аль хэдийн бүртгэлтэй байна' });
     }
 
     const id = uuidv4();
-    const hashedPassword = await bcrypt.hash('Admin@123', 10);
+    const hashedPassword = await bcrypt.hash(initialPassword, 10);
     
     await db('users').insert({
       id,
-      email: 'superadmin@example.com',
+      email: initialEmail,
       password_hash: hashedPassword,
       name: 'Super Admin',
       role: 'superadmin',
@@ -103,7 +112,7 @@ router.post('/register-initial', async (req, res) => {
       employment_type: 'Full Time'
     });
 
-    res.json({ message: 'Superadmin created successfully. Use email: superadmin@example.com and password: Admin@123' });
+    res.json({ message: 'Superadmin created successfully.' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
