@@ -18,7 +18,7 @@ const __dirname = dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 8080;
 
   // Basic security and middleware
   app.use(helmet({
@@ -74,7 +74,7 @@ async function startServer() {
     });
   }) as express.ErrorRequestHandler);
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   });
