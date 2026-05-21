@@ -13,8 +13,8 @@
     "start": "tsx server.ts",
     "clean": "node -e \"import('node:fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\"",
     "lint": "tsc --noEmit",
-    "migrate": "knex migrate:latest",
-    "seed": "knex seed:run"
+    "migrate": "tsx ./node_modules/knex/bin/cli.js migrate:latest --knexfile knexfile.ts",
+    "seed": "tsx ./node_modules/knex/bin/cli.js seed:run --knexfile knexfile.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -30,7 +30,7 @@
     "firebase": "^12.11.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
-    "knex": "^3.2.9",
+    "knex": "2.5.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "mssql": "^12.5.0",
@@ -40,8 +40,9 @@
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.14.0",
     "sqlite3": "^6.0.1",
-    "tsx": "^4.21.0",
-    "typescript": "~5.8.2",
+    "tedious": "19.2.1",
+    "tsx": "4.22.3",
+    "typescript": "5.8.3",
     "uuid": "^14.0.0",
     "vite": "^6.2.0",
     "xlsx": "^0.18.5",
