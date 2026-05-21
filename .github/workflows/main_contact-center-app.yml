@@ -40,6 +40,11 @@ jobs:
           cd release
           zip -rq ../release.zip .
 
+      - name: Verify deployment package
+        run: |
+          test -f release/node_modules/tsx/dist/cli.mjs
+          unzip -l release.zip | grep "node_modules/tsx/dist/cli.mjs"
+
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:

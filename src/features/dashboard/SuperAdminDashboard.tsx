@@ -169,7 +169,7 @@ export default function SuperAdminDashboard() {
 
   const fetchNotifications = async () => {
     try {
-      const response = await apiClient.get('/api/broadcasts/notifications');
+      const response = await apiClient.get('/broadcasts/notifications');
       const localNotifications: Notification[] = getLocalData('notifications', []);
       const notificationsData: Notification[] = response.data.map((n: any) => {
         const localMatch = localNotifications.find(local => String(local.id) === String(n.id));
@@ -287,7 +287,7 @@ export default function SuperAdminDashboard() {
 
   const markNotificationAsRead = async (notifId: string) => {
     try {
-      await apiClient.post('/api/broadcasts/notifications/read', {
+      await apiClient.post('/broadcasts/notifications/read', {
         notification_id: notifId,
       });
       const notification = notifications.find(n => n.id === notifId);
@@ -757,7 +757,7 @@ export default function SuperAdminDashboard() {
     }
 
     try {
-      const response = await apiClient.post('/api/broadcasts/notifications', {
+      const response = await apiClient.post('/broadcasts/notifications', {
         title: newNotification.title,
         content: newNotification.content,
         deadline: newNotification.deadline || '',
