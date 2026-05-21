@@ -1,7 +1,6 @@
 import type { Knex } from 'knex';
 import path from 'path';
 import dotenv from 'dotenv';
-import { TYPES } from 'tedious';
 
 dotenv.config();
 
@@ -17,21 +16,6 @@ function requireEnv(name: string): string {
 
   return value;
 }
-
-const mssqlOptions = {
-  encrypt: true,
-  trustServerCertificate: false,
-  enableArithAbort: true,
-  mapBinding: (value: unknown) => {
-    if (typeof value === 'string') return { type: TYPES.NVarChar, value };
-    if (typeof value === 'number') {
-      return { type: Number.isInteger(value) ? TYPES.Int : TYPES.Float, value };
-    }
-    if (typeof value === 'boolean') return { type: TYPES.Bit, value };
-    if (value instanceof Date) return { type: TYPES.DateTime2, value };
-    return undefined;
-  },
-};
 
 const config: { [key: string]: Knex.Config } = {
   development: {
@@ -50,14 +34,17 @@ const config: { [key: string]: Knex.Config } = {
 
   production: {
     client: 'mssql',
-    connection: {
+    connection: () => ({
       server: requireEnv('DB_SERVER'),
       database: requireEnv('DB_NAME'),
       user: requireEnv('DB_USER'),
       password: requireEnv('DB_PASSWORD'),
       port: Number(process.env.DB_PORT || 1433),
-      options: mssqlOptions as any,
-    } as any,
+      options: {
+        encrypt: true,
+        trustServerCertificate: false,
+      },
+    }),
     migrations: {
       directory: migrationDir,
     },
