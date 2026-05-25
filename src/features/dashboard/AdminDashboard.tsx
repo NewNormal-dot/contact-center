@@ -2304,7 +2304,9 @@ export default function AdminDashboard() {
           <SidebarItem id="users" icon={Users} label="Ажилтны удирдлага" />
           <SidebarItem id="schedule" icon={Calendar} label="Хуваарь удирдлага" />
           <SidebarItem id="vacation" icon={Palmtree} label="Ээлжийн амралт" />
+          <SidebarItem id="hourlyLeave" icon={Clock} label="Чөлөө" />
           <SidebarItem id="forecast" icon={BarChart3} label="Forecast" />
+          <SidebarItem id="notifications" icon={Bell} label="Мэдэгдэл" badge={unreadCount} />
           <SidebarItem id="training" icon={BookOpen} label="Сургалт" />
         </nav>
 
@@ -2334,7 +2336,9 @@ export default function AdminDashboard() {
               {activeTab === 'users' ? 'Ажилтны удирдлага' : 
                activeTab === 'schedule' ? 'Хуваарь удирдлага' : 
                activeTab === 'vacation' ? 'Ээлжийн амралт' : 
+               activeTab === 'hourlyLeave' ? 'Чөлөөний хүсэлт' :
                activeTab === 'forecast' ? 'Дуудлагын Forecast' :
+               activeTab === 'notifications' ? 'Мэдэгдэл' :
                activeTab === 'training' ? 'Сургалт' :
                'Мэдэгдэл'}
             </h1>

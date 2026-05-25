@@ -1487,8 +1487,6 @@ export default function SuperAdminDashboard() {
             {[
               { id: 'logs', label: 'Үйлдэлүүд', icon: FileText },
               { id: 'users', label: 'Хэрэглэгчид', icon: Users },
-              { id: 'notifications', label: 'Мэдэгдэл', icon: Bell, badge: unreadCount },
-              { id: 'training', label: 'Сургалт', icon: BookOpen, badge: unreadTrainingCount },
             ].map(item => (
               <button
                 key={item.id}
@@ -1552,9 +1550,7 @@ export default function SuperAdminDashboard() {
             <div>
               <h2 className="text-2xl sm:text-4xl font-black text-white tracking-tight mb-2">
                 {activeTab === 'logs' ? 'Системийн бүртгэл' : 
-                 activeTab === 'users' ? 'Хэрэглэгчийн удирдлага' : 
-                 activeTab === 'notifications' ? 'Мэдэгдэл' :
-                 activeTab === 'training' ? 'Сургалт' : 'Тохиргоо'}
+                 activeTab === 'users' ? 'Хэрэглэгчийн удирдлага' : 'Тохиргоо'}
               </h2>
               <p className="text-xs sm:text-sm text-gray-500">Тавтай морил, {profile?.name || 'Super Admin'}. Системийн бүх үйл ажиллагааг эндээс хянана уу.</p>
             </div>
@@ -1565,8 +1561,6 @@ export default function SuperAdminDashboard() {
 
           {activeTab === 'logs' && renderLogs()}
           {activeTab === 'users' && renderUsers()}
-          {activeTab === 'notifications' && renderNotifications()}
-          {activeTab === 'training' && renderTraining()}
         </div>
       </div>
 
