@@ -12,6 +12,9 @@ function mapNotification(row: any) {
     ...row,
     imageUrl: row.image_url,
     authorId: row.author_id,
+    targetUserId: row.target_user_id,
+    relatedEntityType: row.related_entity_type,
+    relatedEntityId: row.related_entity_id,
     createdAt: row.created_at,
     readAt: row.read_at,
   };
@@ -42,6 +45,10 @@ router.get('/notifications', authenticate, async (req: any, res) => {
           'notifications.content',
           'notifications.image_url',
           'notifications.deadline',
+          'notifications.type',
+          'notifications.target_user_id',
+          'notifications.related_entity_type',
+          'notifications.related_entity_id',
           'notifications.created_at',
           'notifications.author_id',
           'users.name as author_name'
@@ -67,6 +74,10 @@ router.get('/notifications', authenticate, async (req: any, res) => {
     } else {
       // For CSR, only get own read status
       const notifications = await db('notifications')
+        .where(function () {
+          this.whereNull('notifications.target_user_id')
+            .orWhere('notifications.target_user_id', userId);
+        })
         .leftJoin('notification_read_receipts', function () {
           this.on('notifications.id', '=', 'notification_read_receipts.notification_id')
             .andOn('notification_read_receipts.user_id', '=', db.raw('?', [userId]));
@@ -83,7 +94,20 @@ router.get('/notifications', authenticate, async (req: any, res) => {
 });
 
 router.post('/notifications', authenticate, authorize(['admin']), async (req: any, res) => {
-  const { title, content, imageUrl, image_url, deadline } = req.body;
+  const {
+    title,
+    content,
+    imageUrl,
+    image_url,
+    deadline,
+    type,
+    targetUserId,
+    target_user_id,
+    relatedEntityType,
+    related_entity_type,
+    relatedEntityId,
+    related_entity_id,
+  } = req.body;
 
   if (!title || !content) {
     return res.status(400).json({ error: 'Гарчиг болон агуулга шаардлагатай' });
@@ -97,6 +121,10 @@ router.post('/notifications', authenticate, authorize(['admin']), async (req: an
       content,
       image_url: image_url || imageUrl || null,
       deadline: toSqlDateTime(deadline),
+      type: type || 'general',
+      target_user_id: target_user_id || targetUserId || null,
+      related_entity_type: related_entity_type || relatedEntityType || null,
+      related_entity_id: related_entity_id || relatedEntityId || null,
       author_id: req.user.id,
     });
     await logAction(req.user.id, 'CREATE_NOTIFICATION', 'notifications', id, title);
