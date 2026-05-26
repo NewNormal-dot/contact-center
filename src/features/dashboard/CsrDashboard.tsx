@@ -518,6 +518,43 @@ export default function CsrDashboard() {
     return days;
   }, [selectedMonth]);
 
+
+  const mapNotificationForUi = (raw: any): AppNotification => {
+    const readAt = raw.readAt || raw.read_at;
+    return {
+      id: String(raw.id),
+      title: raw.title || '',
+      content: raw.content || '',
+      type: raw.type || 'general',
+      imageUrl: raw.imageUrl || raw.image_url || '',
+      deadline: raw.deadline || '',
+      createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
+      authorId: raw.authorId || raw.author_id || '',
+      authorName: raw.authorName || raw.author_name || 'System',
+      seenBy: readAt && csrProfile
+        ? [{ userId: csrProfile.id, userName: csrProfile.name, seenAt: readAt }]
+        : [],
+    } as AppNotification;
+  };
+
+  const fetchNotifications = async () => {
+    if (!csrProfile) return [];
+
+    try {
+      const response = await apiClient.get('/broadcasts/notifications');
+      const data = (response.data || []).map(mapNotificationForUi);
+      setNotifications(data);
+      setLocalData('notifications', data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching CSR notifications:', error);
+      const local = getLocalData('notifications', []);
+      const filtered = local.filter((n: any) => !n.targetUserId || n.targetUserId === csrProfile.id);
+      setNotifications(filtered);
+      return filtered;
+    }
+  };
+
   // Real-time listeners (Mocked with Polling)
   useEffect(() => {
     if (!csrProfile) return;
@@ -579,7 +616,7 @@ export default function CsrDashboard() {
       });
       
       setSchedule(filteredSchedule);
-      setNotifications(allNotifs.filter((n: any) => !n.targetUserId || n.targetUserId === csrProfile.id));
+      // Notifications are loaded from DB by fetchNotifications().
       setTradeRequests(allTradeRequests.filter((r: any) => r.senderId === csrProfile.id || r.receiverId === csrProfile.id));
       setVacationRequests(allVacationRequests.filter((r: any) => r.csrId === csrProfile.id));
       setHourlyLeaveRequests(allHourlyLeave.filter((r: any) => r.csrId === csrProfile.id));
@@ -590,7 +627,9 @@ export default function CsrDashboard() {
     };
 
     loadData();
+    fetchNotifications();
     const interval = setInterval(loadData, 2000);
+    const notificationInterval = setInterval(fetchNotifications, 10000);
     
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
@@ -601,6 +640,7 @@ export default function CsrDashboard() {
     window.addEventListener('storage', handleStorageUpdate);
     return () => {
       clearInterval(interval);
+      clearInterval(notificationInterval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);
@@ -897,25 +937,24 @@ export default function CsrDashboard() {
     return () => clearTimeout(timer);
   }, [activeTab]);
 
-  const markAsRead = (id: string) => {
+  const markAsRead = async (id: string) => {
     const notif = notifications.find(n => n.id === id);
     if (!notif || !csrProfile) return;
 
     const alreadySeen = notif.seenBy?.some(s => s.userId === csrProfile.id);
     if (!alreadySeen) {
       try {
+        await apiClient.post('/broadcasts/notifications/read', { notification_id: id });
+
         const updatedSeenBy = [...(notif.seenBy || []), {
           userId: csrProfile.id,
           userName: csrProfile.name,
           seenAt: new Date().toISOString()
         }];
-        
-        // Update local storage
+
         updateLocalItem('notifications', id, { seenBy: updatedSeenBy });
-        
-        // Update local state immediately for better UX
         setNotifications(prev => prev.map(n => n.id === id ? { ...n, seenBy: updatedSeenBy } : n));
-        
+
         logAction('Notification Read', `Read notification: ${notif.title}`);
       } catch (error) {
         console.error('Error marking as read:', error);
