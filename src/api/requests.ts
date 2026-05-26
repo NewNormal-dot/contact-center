@@ -6,14 +6,67 @@ import { toSqlDate, toSqlTime, displayDate, displayTime } from '../utils/sqlDate
 
 const router = express.Router();
 
+async function createNotificationForUser(params: {
+  userId: string;
+  title: string;
+  content: string;
+  type: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  authorId?: string;
+}) {
+  await db('notifications').insert({
+    id: uuidv4(),
+    title: params.title,
+    content: params.content,
+    type: params.type,
+    target_user_id: params.userId,
+    related_entity_type: params.relatedEntityType || null,
+    related_entity_id: params.relatedEntityId || null,
+    author_id: params.authorId || null,
+  });
+}
+
+async function createNotificationForAdmins(params: {
+  title: string;
+  content: string;
+  type: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  authorId?: string;
+}) {
+  const admins = await db('users')
+    .where({ role: 'admin', status: 'active' })
+    .select('id');
+
+  if (admins.length === 0) return;
+
+  await db('notifications').insert(
+    admins.map((admin: any) => ({
+      id: uuidv4(),
+      title: params.title,
+      content: params.content,
+      type: params.type,
+      target_user_id: admin.id,
+      related_entity_type: params.relatedEntityType || null,
+      related_entity_id: params.relatedEntityId || null,
+      author_id: params.authorId || null,
+    }))
+  );
+}
+
+
 function mapLeave(row: any) {
   return {
     ...row,
     userId: row.user_id,
     userName: row.user_name,
     date: displayDate(row.date),
+    endDate: row.end_date ? displayDate(row.end_date) : undefined,
     startTime: displayTime(row.start_time),
     endTime: displayTime(row.end_time),
+    type: row.type || 'hourly',
+    comment: row.comment || '',
     createdAt: row.created_at,
     approvedBy: row.approved_by,
   };
@@ -49,11 +102,13 @@ router.get('/leave', authenticate, async (req: any, res) => {
 });
 
 router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) => {
-  const { date, start_time, end_time, startTime, endTime, reason } = req.body;
+  const { date, end_date, endDate, start_time, end_time, startTime, endTime, reason, type } = req.body;
   const userId = req.user.id;
+  const leaveType = type === 'daily' ? 'daily' : 'hourly';
   const finalDate = toSqlDate(date);
-  const finalStartTime = toSqlTime(start_time || startTime);
-  const finalEndTime = toSqlTime(end_time || endTime);
+  const finalEndDate = toSqlDate(end_date || endDate || date);
+  const finalStartTime = toSqlTime(start_time || startTime || (leaveType === 'daily' ? '09:00' : ''));
+  const finalEndTime = toSqlTime(end_time || endTime || (leaveType === 'daily' ? '18:00' : ''));
 
   if (!finalDate || !finalStartTime || !finalEndTime || !reason) {
     return res.status(400).json({ error: 'Огноо, цаг болон шалтгааныг зөв оруулна уу' });
@@ -61,15 +116,30 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
 
   try {
     const id = uuidv4();
+
     await db('leave_requests').insert({
       id,
       user_id: userId,
       date: finalDate,
+      end_date: finalEndDate,
       start_time: finalStartTime,
       end_time: finalEndTime,
+      type: leaveType,
       reason,
       status: 'pending',
     });
+
+    const user = await db('users').where({ id: userId }).first();
+
+    await createNotificationForAdmins({
+      title: 'Шинэ чөлөөний хүсэлт',
+      content: `${user?.name || 'CSR'} ${leaveType === 'daily' ? 'өдрийн' : 'цагийн'} чөлөө хүссэн байна. Огноо: ${finalDate}${leaveType === 'daily' && finalEndDate && finalEndDate !== finalDate ? ` - ${finalEndDate}` : ''}.`,
+      type: 'leave_request',
+      relatedEntityType: 'leave_request',
+      relatedEntityId: id,
+      authorId: userId,
+    });
+
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create leave request error:', err);
@@ -77,9 +147,9 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
   }
 });
 
-router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+router.patch('/leave/:id', authenticate, authorize(['admin']), async (req: any, res) => {
   const { id } = req.params;
-  const { status } = req.body;
+  const { status, comment } = req.body;
   const actingUserId = req.user.id;
 
   if (!['approved', 'rejected'].includes(status)) {
@@ -87,11 +157,37 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
   }
 
   try {
+    const request = await db('leave_requests')
+      .join('users', 'leave_requests.user_id', '=', 'users.id')
+      .where({ 'leave_requests.id': id })
+      .select('leave_requests.*', 'users.name as user_name')
+      .first();
+
+    if (!request) {
+      return res.status(404).json({ error: 'Хүсэлт олдсонгүй' });
+    }
+
     await db('leave_requests').where({ id }).update({
       status,
+      comment: comment || null,
       approved_by: actingUserId,
       updated_at: db.fn.now(),
     });
+
+    const isApproved = status === 'approved';
+
+    await createNotificationForUser({
+      userId: request.user_id,
+      title: isApproved ? 'Чөлөөний хүсэлт зөвшөөрөгдлөө' : 'Чөлөөний хүсэлт татгалзагдлаа',
+      content: isApproved
+        ? `Таны ${request.type === 'daily' ? 'өдрийн' : 'цагийн'} чөлөөний хүсэлт зөвшөөрөгдлөө.`
+        : `Таны ${request.type === 'daily' ? 'өдрийн' : 'цагийн'} чөлөөний хүсэлт татгалзагдлаа.${comment ? ` Шалтгаан: ${comment}` : ''}`,
+      type: 'leave_decision',
+      relatedEntityType: 'leave_request',
+      relatedEntityId: id,
+      authorId: actingUserId,
+    });
+
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
     console.error('Update leave request error:', err);

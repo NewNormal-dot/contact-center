@@ -171,6 +171,37 @@ export default function AdminDashboard() {
     }
   };
 
+
+  const mapLeaveRequestForUi = (raw: any): HourlyLeaveRequest => ({
+    id: String(raw.id),
+    csrId: raw.userId || raw.user_id,
+    csrName: raw.userName || raw.user_name || 'CSR',
+    type: raw.type === 'daily' ? 'daily' : 'hourly',
+    date: raw.date,
+    endDate: raw.endDate || raw.end_date || raw.date,
+    startTime: raw.startTime || raw.start_time || '',
+    endTime: raw.endTime || raw.end_time || '',
+    reason: raw.reason || '',
+    status: raw.status || 'pending',
+    createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
+    comment: raw.comment || '',
+  });
+
+  const fetchLeaveRequests = async () => {
+    try {
+      const response = await apiClient.get('/requests/leave');
+      const data = (response.data || []).map(mapLeaveRequestForUi);
+      setHourlyLeaveRequests(data);
+      setLocalData('hourlyLeaveRequests', data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching leave requests:', error);
+      const local = getLocalData('hourlyLeaveRequests', []);
+      setHourlyLeaveRequests(local);
+      return local;
+    }
+  };
+
   const generateRandomPassword = (length = 10) => {
     const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
     let value = '';
@@ -210,7 +241,7 @@ export default function AdminDashboard() {
       0: 5, 1: 5, 2: 5, 3: 5, 4: 5, 5: 5, 6: 5, 7: 5, 8: 5, 9: 5, 10: 5, 11: 5
     }));
     setSchedules(getLocalData('schedules', {}));
-    setHourlyLeaveRequests(getLocalData('hourlyLeaveRequests', []));
+    fetchLeaveRequests().catch(() => setHourlyLeaveRequests(getLocalData('hourlyLeaveRequests', [])));
     setHolidays(getLocalData('holidays', []).map((h: any) => ({
       ...h,
       id: h.id || Math.random().toString(36).substr(2, 9)
@@ -290,7 +321,7 @@ export default function AdminDashboard() {
         setSegments(segs);
         setMonthlyQuotas(mq);
         setSchedules(sanitizedSd);
-        setHourlyLeaveRequests(hl);
+        fetchLeaveRequests().catch(() => setHourlyLeaveRequests(hl));
         setHolidays(hls);
       }
     }, 2000);
@@ -323,14 +354,30 @@ export default function AdminDashboard() {
     } as any);
   }, [notifications, trainingMaterials, showSeenDetails?.id]);
 
-  const handleApproveHourlyLeave = (id: string) => {
-    updateLocalItem('hourlyLeaveRequests', id, { status: 'approved' });
-    logAction('Hourly Leave Approved', `Approved request ${id}`);
+  const handleApproveHourlyLeave = async (id: string) => {
+    try {
+      await apiClient.patch(`/requests/leave/${id}`, { status: 'approved' });
+      const updated = updateLocalItem('hourlyLeaveRequests', id, { status: 'approved' });
+      setHourlyLeaveRequests(updated);
+      await fetchLeaveRequests();
+      logAction('Hourly Leave Approved', `Approved request ${id}`);
+    } catch (error: any) {
+      console.error('Error approving leave request:', error);
+      alert(error.response?.data?.error || 'Чөлөөний хүсэлт зөвшөөрөхөд алдаа гарлаа.');
+    }
   };
 
-  const handleRejectHourlyLeave = (id: string, comment: string) => {
-    updateLocalItem('hourlyLeaveRequests', id, { status: 'rejected', comment });
-    logAction('Hourly Leave Rejected', `Rejected request ${id}`);
+  const handleRejectHourlyLeave = async (id: string, comment: string) => {
+    try {
+      await apiClient.patch(`/requests/leave/${id}`, { status: 'rejected', comment });
+      const updated = updateLocalItem('hourlyLeaveRequests', id, { status: 'rejected', comment });
+      setHourlyLeaveRequests(updated);
+      await fetchLeaveRequests();
+      logAction('Hourly Leave Rejected', `Rejected request ${id}`);
+    } catch (error: any) {
+      console.error('Error rejecting leave request:', error);
+      alert(error.response?.data?.error || 'Чөлөөний хүсэлт татгалзахад алдаа гарлаа.');
+    }
   };
 
   const handleRemoveUserFromShift = (dateKey: string, shiftId: string, userId: string) => {

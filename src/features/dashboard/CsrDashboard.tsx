@@ -9,6 +9,7 @@ import { Notification as AppNotification, TrainingMaterial, VacationQuota, Vacat
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import { useAuth } from '../../contexts/AuthContext';
+import apiClient from '../../lib/api-client';
 
 const WEEKDAYS = ['Ням', 'Даваа', 'Мягмар', 'Лхагва', 'Пүрэв', 'Баасан', 'Бямба'];
 const MONTHS = [
@@ -1435,39 +1436,50 @@ export default function CsrDashboard() {
     reason: ''
   });
 
-  const handleRequestHourlyLeave = (e: React.FormEvent) => {
+  const handleRequestHourlyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csrProfile) return;
 
-    const newRequest: HourlyLeaveRequest = {
-      id: Math.random().toString(36).substr(2, 9),
-      csrId: csrProfile.id,
-      csrName: csrProfile.name,
-      type: hourlyLeaveForm.type as 'hourly' | 'daily',
-      date: hourlyLeaveForm.date,
-      endDate: hourlyLeaveForm.endDate,
-      startTime: hourlyLeaveForm.startTime,
-      endTime: hourlyLeaveForm.endTime,
-      reason: hourlyLeaveForm.reason,
-      status: 'pending',
-      createdAt: new Date().toISOString()
-    };
-
     try {
-      addLocalItem('hourlyLeaveRequests', newRequest);
+      const response = await apiClient.post('/requests/leave', {
+        type: hourlyLeaveForm.type,
+        date: hourlyLeaveForm.date,
+        endDate: hourlyLeaveForm.endDate || hourlyLeaveForm.date,
+        startTime: hourlyLeaveForm.startTime,
+        endTime: hourlyLeaveForm.endTime,
+        reason: hourlyLeaveForm.reason,
+      });
+
+      const newRequest: HourlyLeaveRequest = {
+        id: response.data?.id || Math.random().toString(36).substr(2, 9),
+        csrId: csrProfile.id,
+        csrName: csrProfile.name,
+        type: hourlyLeaveForm.type as 'hourly' | 'daily',
+        date: hourlyLeaveForm.date,
+        endDate: hourlyLeaveForm.endDate,
+        startTime: hourlyLeaveForm.startTime,
+        endTime: hourlyLeaveForm.endTime,
+        reason: hourlyLeaveForm.reason,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      };
+
+      const updated = addLocalItem('hourlyLeaveRequests', newRequest);
+      setHourlyLeaveRequests(updated);
       logAction('Leave Requested', `Requested ${hourlyLeaveForm.type} leave for ${hourlyLeaveForm.date}`);
       setIsRequestingHourlyLeave(false);
-      setHourlyLeaveForm({ 
+      setHourlyLeaveForm({
         type: 'hourly',
-        date: '', 
+        date: '',
         endDate: '',
-        startTime: '', 
-        endTime: '', 
-        reason: '' 
+        startTime: '',
+        endTime: '',
+        reason: ''
       });
       triggerSuccess();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error requesting hourly leave:', error);
+      alert(error.response?.data?.error || 'Чөлөөний хүсэлт илгээхэд алдаа гарлаа.');
     }
   };
 
