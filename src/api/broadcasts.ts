@@ -82,7 +82,7 @@ router.get('/notifications', authenticate, async (req: any, res) => {
   }
 });
 
-router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+router.post('/notifications', authenticate, authorize(['admin']), async (req: any, res) => {
   const { title, content, imageUrl, image_url, deadline } = req.body;
 
   if (!title || !content) {
@@ -107,7 +107,7 @@ router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), 
   }
 });
 
-router.delete('/notifications/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+router.delete('/notifications/:id', authenticate, authorize(['admin']), async (req: any, res) => {
   const { id } = req.params;
   try {
     await db('notification_read_receipts').where({ notification_id: id }).delete();
@@ -165,7 +165,7 @@ router.get('/trainings', authenticate, async (req: any, res) => {
   }
 });
 
-router.post('/trainings', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+router.post('/trainings', authenticate, authorize(['admin']), async (req: any, res) => {
   const { title, description, attachmentUrl, attachment_url, attachmentName, attachment_name, deadline } = req.body;
 
   if (!title || !description) {
@@ -191,7 +191,7 @@ router.post('/trainings', authenticate, authorize(['admin', 'superadmin']), asyn
   }
 });
 
-router.delete('/trainings/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+router.delete('/trainings/:id', authenticate, authorize(['admin']), async (req: any, res) => {
   const { id } = req.params;
   try {
     await db('training_completions').where({ training_id: id }).delete();
