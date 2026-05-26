@@ -1502,18 +1502,18 @@ export default function SuperAdminDashboard() {
                   <item.icon size={20} />
                   {!isSidebarCollapsed && <span>{item.label}</span>}
                 </div>
-                {!isSidebarCollapsed && item.badge !== undefined && item.badge > 0 && (
+                {!isSidebarCollapsed && (item as any).badge !== undefined && (item as any).badge > 0 && (
                   <span className={`text-[10px] font-black px-2 py-0.5 rounded-full min-w-[20px] text-center ${
                     item.id === 'notifications' ? 'bg-red-500 text-white' : 'bg-purple-500 text-white'
                   }`}>
-                    {item.badge}
+                    {(item as any).badge}
                   </span>
                 )}
-                {isSidebarCollapsed && item.badge !== undefined && item.badge > 0 && (
+                {isSidebarCollapsed && (item as any).badge !== undefined && (item as any).badge > 0 && (
                   <span className={`absolute top-1 right-1 w-4 h-4 text-[8px] font-black flex items-center justify-center rounded-full border-2 border-[#0a0a0a] ${
                     item.id === 'notifications' ? 'bg-red-500 text-white' : 'bg-purple-500 text-white'
                   }`}>
-                    {item.badge}
+                    {(item as any).badge}
                   </span>
                 )}
               </button>
