@@ -1936,17 +1936,17 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        <div className="flex gap-8 items-start">
+        <div className="flex flex-col 2xl:flex-row gap-8 items-start w-full">
           {/* Calendar Grid */}
-          <div className="w-full max-w-[480px] bg-black/40 rounded-[2rem] border border-white/5 p-5">
-            <div className="grid grid-cols-7 gap-1">
+          <div className="w-full flex-1 min-w-0 bg-black/40 rounded-[2rem] border border-white/5 p-5 lg:p-6">
+            <div className="grid grid-cols-7 gap-2 lg:gap-3">
               {dayNames.map((day, idx) => (
-                <div key={day} className={`text-center text-[9px] font-outfit font-black uppercase tracking-[0.2em] mb-4 ${idx >= 5 ? 'text-red-500' : 'text-gray-500'}`}>
+                <div key={day} className={`text-center text-[10px] lg:text-[11px] font-outfit font-black uppercase tracking-[0.2em] mb-2 lg:mb-3 ${idx >= 5 ? 'text-red-500' : 'text-gray-500'}`}>
                   {day}
                 </div>
               ))}
               {monthDates.map((date, idx) => {
-                if (!date) return <div key={`empty-${idx}`} className="aspect-square" />;
+                if (!date) return <div key={`empty-${idx}`} className="min-h-[76px] sm:min-h-[92px] xl:min-h-[108px] 2xl:min-h-[124px]" />;
                 
                 const dateKey = formatDateKey(date);
                 const holiday = holidays.find(h => h.date === dateKey);
@@ -1964,13 +1964,13 @@ export default function AdminDashboard() {
                   <button
                     key={dateKey}
                     onClick={() => setSelectedDateSchedule(dateKey)}
-                    className={`group aspect-square relative rounded-2xl border-2 transition-all duration-300 flex flex-col items-center justify-center ${
+                    className={`group min-h-[76px] sm:min-h-[92px] xl:min-h-[108px] 2xl:min-h-[124px] relative rounded-2xl border-2 transition-all duration-300 flex flex-col items-start justify-start p-3 lg:p-4 ${
                       isSelected 
-                        ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_20px_rgba(37,99,235,0.3)] z-10 scale-105' 
+                        ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_20px_rgba(37,99,235,0.3)] z-10 scale-[1.02]'
                         : holiday
                           ? 'bg-red-500 border-red-400 text-white shadow-[0_5px_15px_rgba(239,68,68,0.2)] z-10'
                           : isPast
-                            ? 'bg-white/[0.03] border-white/5 text-gray-700 opacity-40 grayscale-[0.5] scale-95'
+                            ? 'bg-white/[0.03] border-white/5 text-gray-700 opacity-40 grayscale-[0.5]'
                             : hasShifts 
                               ? 'bg-blue-600/60 border-blue-500/50 text-white hover:bg-blue-600/80 shadow-lg shadow-blue-500/10' 
                               : isWeekend
@@ -1978,7 +1978,7 @@ export default function AdminDashboard() {
                                 : 'bg-[#111] border-white/5 text-gray-400 hover:bg-white/5'
                     }`}
                   >
-                    <span className={`text-xl font-outfit font-black tracking-tighter transition-transform group-hover:scale-110 ${
+                    <span className={`text-2xl lg:text-3xl font-outfit font-black tracking-tighter transition-transform group-hover:scale-110 ${
                       isSelected 
                         ? 'text-white' 
                         : holiday 
