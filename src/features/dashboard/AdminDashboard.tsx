@@ -202,6 +202,41 @@ export default function AdminDashboard() {
     }
   };
 
+  const mapVacationRequestForUi = (raw: any): VacationRequest => {
+    const startDate = raw.startDate || raw.start_date || '';
+    const endDate = raw.endDate || raw.end_date || startDate;
+    return {
+      id: String(raw.id),
+      userId: raw.userId || raw.user_id,
+      csrId: raw.userId || raw.user_id,
+      csrName: raw.userName || raw.user_name || 'CSR',
+      csrPhoto: '',
+      month: String(startDate).slice(0, 7),
+      startDate,
+      endDate,
+      reason: raw.reason || '',
+      type: 'vacation',
+      status: raw.status || 'pending',
+      createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
+      approvedBy: raw.approvedBy || raw.approved_by,
+    };
+  };
+
+  const fetchVacationRequests = async () => {
+    try {
+      const response = await apiClient.get('/requests/vacation');
+      const data = (response.data || []).map(mapVacationRequestForUi);
+      setVacationRequests(data);
+      setLocalData('vacationRequests', data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching vacation requests:', error);
+      const local = getLocalData('vacationRequests', []);
+      setVacationRequests(local);
+      return local;
+    }
+  };
+
   const generateRandomPassword = (length = 10) => {
     const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
     let value = '';
@@ -242,6 +277,7 @@ export default function AdminDashboard() {
     }));
     setSchedules(getLocalData('schedules', {}));
     fetchLeaveRequests().catch(() => setHourlyLeaveRequests(getLocalData('hourlyLeaveRequests', [])));
+    fetchVacationRequests().catch(() => setVacationRequests(getLocalData('vacationRequests', [])));
     setHolidays(getLocalData('holidays', []).map((h: any) => ({
       ...h,
       id: h.id || Math.random().toString(36).substr(2, 9)
@@ -326,6 +362,11 @@ export default function AdminDashboard() {
       }
     }, 2000);
 
+    const apiRefreshInterval = setInterval(() => {
+      fetchLeaveRequests().catch(() => undefined);
+      fetchVacationRequests().catch(() => undefined);
+    }, 10000);
+
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
         setNotifications(getLocalData('notifications', []));
@@ -335,6 +376,7 @@ export default function AdminDashboard() {
     window.addEventListener('storage', handleStorageUpdate);
     return () => {
       clearInterval(interval);
+      clearInterval(apiRefreshInterval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, []);
@@ -442,11 +484,20 @@ export default function AdminDashboard() {
     setSecureConfirmAction({ title, description, onConfirm, username: 'admin', password: '' });
   };
 
-  const handleApproveVacation = (requestId: string) => {
+  const handleApproveVacation = async (requestId: string) => {
     const request = vacationRequests.find(r => r.id === requestId);
     if (!request) return;
 
-    updateLocalItem('vacationRequests', requestId, { status: 'approved' });
+    try {
+      await apiClient.patch(`/requests/vacation/${requestId}`, { status: 'approved' });
+    } catch (error: any) {
+      console.error('Error approving vacation request:', error);
+      alert(error.response?.data?.error || 'Амралтын хүсэлт зөвшөөрөхөд алдаа гарлаа.');
+      return;
+    }
+
+    const updatedVacationRequests = updateLocalItem('vacationRequests', requestId, { status: 'approved' });
+    setVacationRequests(updatedVacationRequests);
     logAction('Vacation Approved', `Approved vacation for ${request.csrName}: ${request.startDate} - ${request.endDate}`);
     
     // Auto-Notification
@@ -465,11 +516,20 @@ export default function AdminDashboard() {
     addLocalItem('notifications', notification);
   };
 
-  const handleRejectVacation = (requestId: string) => {
+  const handleRejectVacation = async (requestId: string) => {
     const request = vacationRequests.find(r => r.id === requestId);
     if (!request) return;
 
-    updateLocalItem('vacationRequests', requestId, { status: 'rejected' });
+    try {
+      await apiClient.patch(`/requests/vacation/${requestId}`, { status: 'rejected' });
+    } catch (error: any) {
+      console.error('Error rejecting vacation request:', error);
+      alert(error.response?.data?.error || 'Амралтын хүсэлт татгалзахад алдаа гарлаа.');
+      return;
+    }
+
+    const updatedVacationRequests = updateLocalItem('vacationRequests', requestId, { status: 'rejected' });
+    setVacationRequests(updatedVacationRequests);
     logAction('Vacation Rejected', `Rejected vacation for ${request.csrName}`);
     
     // Auto-Notification
@@ -550,7 +610,7 @@ export default function AdminDashboard() {
     logAction('Export Employees', `Exported ${filteredCsrs.length} employees to Excel`);
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profile) return;
 
@@ -564,35 +624,22 @@ export default function AdminDashboard() {
       return;
     }
 
-    const users = getLocalData('users', []);
-    const currentUserIndex = users.findIndex((u: any) => u.id === profile.id);
+    try {
+      await apiClient.post('/auth/change-password', {
+        oldPassword: passwordForm.old,
+        newPassword: passwordForm.new,
+      });
 
-    if (currentUserIndex === -1) {
-      alert('Хэрэглэгч олдсонгүй!');
+      logAction('Password Changed', `Changed password for ${profile.name}`);
+      alert('Нууц үг амжилттай солигдлоо!');
+      setIsChangingPassword(false);
+      setPasswordForm({ old: '', new: '', confirm: '' });
+      return;
+    } catch (error: any) {
+      console.error('Error changing password:', error);
+      alert(error.response?.data?.error || 'Нууц үг солиход алдаа гарлаа.');
       return;
     }
-
-    const currentUser = users[currentUserIndex];
-    if (currentUser.password && currentUser.password !== passwordForm.old) {
-      alert('Хуучин нууц үг буруу байна!');
-      return;
-    }
-
-    // Update password
-    users[currentUserIndex].password = passwordForm.new;
-    setLocalData('users', users);
-    
-    // Update local profile
-    const savedProfile = JSON.parse(localStorage.getItem('test_profile') || '{}');
-    if (savedProfile.id === profile.id) {
-       savedProfile.password = passwordForm.new;
-       localStorage.setItem('test_profile', JSON.stringify(savedProfile));
-    }
-
-    logAction('Password Changed', `Changed password for ${profile.name}`);
-    alert('Нууц үг амжилттай солигдлоо!');
-    setIsChangingPassword(false);
-    setPasswordForm({ old: '', new: '', confirm: '' });
   };
 
   const handleAddMaterial = (e: React.FormEvent) => {

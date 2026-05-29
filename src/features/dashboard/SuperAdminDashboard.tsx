@@ -736,17 +736,27 @@ export default function SuperAdminDashboard() {
     }
   };
 
-  const handleChangeMyPassword = (e: React.FormEvent) => {
+  const handleChangeMyPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (myPasswordForm.new !== myPasswordForm.confirm) {
       alert('Нууц үг зөрүүтэй байна!');
       return;
     }
-    updateLocalItem('users', 'superadmin', { password: myPasswordForm.new });
-    logAction('Admin Password Change', 'Super Admin changed their own password');
-    setIsChangingMyPassword(false);
-    setMyPasswordForm({ old: '', new: '', confirm: '' });
-    triggerSuccess();
+    try {
+      await apiClient.post('/auth/change-password', {
+        oldPassword: myPasswordForm.old,
+        newPassword: myPasswordForm.new,
+      });
+      logAction('Admin Password Change', 'Super Admin changed their own password');
+      setIsChangingMyPassword(false);
+      setMyPasswordForm({ old: '', new: '', confirm: '' });
+      triggerSuccess();
+      return;
+    } catch (error: any) {
+      console.error('Error changing password:', error);
+      alert(error.response?.data?.error || 'Нууц үг солиход алдаа гарлаа.');
+      return;
+    }
   };
 
   const handleSendNotification = async (e: React.FormEvent) => {

@@ -555,6 +555,42 @@ export default function CsrDashboard() {
     }
   };
 
+  const mapVacationRequestForUi = (raw: any): VacationRequest => {
+    const startDate = raw.startDate || raw.start_date || '';
+    const endDate = raw.endDate || raw.end_date || startDate;
+    return {
+      id: String(raw.id),
+      csrId: raw.userId || raw.user_id || csrProfile?.id || '',
+      csrName: raw.userName || raw.user_name || csrProfile?.name || 'CSR',
+      csrPhoto: csrProfile?.photoUrl || '',
+      month: String(startDate).slice(0, 7),
+      startDate,
+      endDate,
+      reason: raw.reason || '',
+      type: 'vacation',
+      status: raw.status || 'pending',
+      createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
+      approvedBy: raw.approvedBy || raw.approved_by,
+    };
+  };
+
+  const fetchVacationRequests = async () => {
+    if (!csrProfile) return [];
+
+    try {
+      const response = await apiClient.get('/requests/vacation');
+      const data = (response.data || []).map(mapVacationRequestForUi);
+      setVacationRequests(data);
+      setLocalData('vacationRequests', data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching CSR vacation requests:', error);
+      const local = getLocalData('vacationRequests', []).filter((r: any) => r.csrId === csrProfile.id);
+      setVacationRequests(local);
+      return local;
+    }
+  };
+
   // Real-time listeners (Mocked with Polling)
   useEffect(() => {
     if (!csrProfile) return;
@@ -628,8 +664,10 @@ export default function CsrDashboard() {
 
     loadData();
     fetchNotifications();
+    fetchVacationRequests();
     const interval = setInterval(loadData, 2000);
     const notificationInterval = setInterval(fetchNotifications, 10000);
+    const vacationInterval = setInterval(fetchVacationRequests, 10000);
     
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
@@ -641,6 +679,7 @@ export default function CsrDashboard() {
     return () => {
       clearInterval(interval);
       clearInterval(notificationInterval);
+      clearInterval(vacationInterval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);
@@ -668,7 +707,7 @@ export default function CsrDashboard() {
     setTimeout(() => setShowSuccess(false), 3000);
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csrProfile) return;
 
@@ -682,35 +721,22 @@ export default function CsrDashboard() {
       return;
     }
 
-    const users = getLocalData('users', []);
-    const currentUserIndex = users.findIndex((u: any) => u.id === csrProfile.id);
+    try {
+      await apiClient.post('/auth/change-password', {
+        oldPassword: passwordForm.old,
+        newPassword: passwordForm.new,
+      });
 
-    if (currentUserIndex === -1) {
-      alert('Хэрэглэгч олдсонгүй!');
+      logAction('Password Changed', `Changed password for ${csrProfile.name}`);
+      alert('Нууц үг амжилттай солигдлоо!');
+      setIsChangingPassword(false);
+      setPasswordForm({ old: '', new: '', confirm: '' });
+      return;
+    } catch (error: any) {
+      console.error('Error changing password:', error);
+      alert(error.response?.data?.error || 'Нууц үг солиход алдаа гарлаа.');
       return;
     }
-
-    const currentUser = users[currentUserIndex];
-    if (currentUser.password && currentUser.password !== passwordForm.old) {
-      alert('Хуучин нууц үг буруу байна!');
-      return;
-    }
-
-    // Update password
-    users[currentUserIndex].password = passwordForm.new;
-    setLocalData('users', users);
-    
-    // Update local profile
-    const savedProfile = JSON.parse(localStorage.getItem('test_profile') || '{}');
-    if (savedProfile.id === csrProfile.id) {
-       savedProfile.password = passwordForm.new;
-       localStorage.setItem('test_profile', JSON.stringify(savedProfile));
-    }
-
-    logAction('Password Changed', `Changed password for ${csrProfile.name}`);
-    alert('Нууц үг амжилттай солигдлоо!');
-    setIsChangingPassword(false);
-    setPasswordForm({ old: '', new: '', confirm: '' });
   };
 
   const handleSendTradeRequest = (receiverId: string, receiverName: string, receiverShiftId: string, receiverShiftTime: string, dateKey: string) => {
@@ -1430,7 +1456,7 @@ export default function CsrDashboard() {
     type: 'vacation' | 'sick' | 'leave';
   }>({ month: new Date().toISOString().slice(0, 7), startDate: '', endDate: '', reason: '', type: 'vacation' });
 
-  const handleRequestVacation = (e: React.FormEvent) => {
+  const handleRequestVacation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csrProfile) return;
     
@@ -1442,8 +1468,23 @@ export default function CsrDashboard() {
       return;
     }
 
+    let requestId = Math.random().toString(36).substr(2, 9);
+
+    try {
+      const response = await apiClient.post('/requests/vacation', {
+        startDate: vacationForm.startDate,
+        endDate: vacationForm.endDate,
+        reason: vacationForm.reason,
+      });
+      requestId = response.data?.id || requestId;
+    } catch (error: any) {
+      console.error('Error requesting vacation:', error);
+      alert(error.response?.data?.error || 'Амралтын хүсэлт илгээхэд алдаа гарлаа.');
+      return;
+    }
+
     const newRequest: VacationRequest = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: requestId,
       csrId: csrProfile.id,
       csrName: csrProfile.name,
       csrPhoto: csrProfile.photoUrl || '',

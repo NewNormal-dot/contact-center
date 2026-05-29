@@ -249,11 +249,35 @@ router.patch('/vacation/:id', authenticate, authorize(['admin', 'superadmin']), 
   }
 
   try {
+    const request = await db('vacation_requests')
+      .join('users', 'vacation_requests.user_id', '=', 'users.id')
+      .where({ 'vacation_requests.id': id })
+      .select('vacation_requests.*', 'users.name as user_name')
+      .first();
+
+    if (!request) {
+      return res.status(404).json({ error: 'Хүсэлт олдсонгүй' });
+    }
+
     await db('vacation_requests').where({ id }).update({
       status,
       approved_by: actingUserId,
       updated_at: db.fn.now(),
     });
+    const isApproved = status === 'approved';
+
+    await createNotificationForUser({
+      userId: request.user_id,
+      title: isApproved ? 'Амралтын хүсэлт зөвшөөрөгдлөө' : 'Амралтын хүсэлт татгалзагдлаа',
+      content: isApproved
+        ? `Таны амралтын хүсэлт (${displayDate(request.start_date)} - ${displayDate(request.end_date)}) зөвшөөрөгдлөө.`
+        : `Таны амралтын хүсэлт (${displayDate(request.start_date)} - ${displayDate(request.end_date)}) татгалзагдлаа.`,
+      type: 'vacation_decision',
+      relatedEntityType: 'vacation_request',
+      relatedEntityId: id,
+      authorId: actingUserId,
+    });
+
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
     console.error('Update vacation request error:', err);
