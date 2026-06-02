@@ -3,6 +3,7 @@ import { Home, Calendar, PlusCircle, Palmtree, Settings, LogOut, Bell, Camera, B
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../contexts/AuthContext';
+import { SHOW_VACATION_FEATURE } from '../config/features';
 import { updateLocalItem } from '../utils/localStorage';
 
 interface SidebarProps {
@@ -126,18 +127,20 @@ export default function Sidebar({
           {!isCollapsed && <span className="text-lg font-black tracking-tight">Ажлын хуваарь</span>}
         </button>
 
-        <button 
-          onClick={() => setActiveTab?.('vacation')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
-            activeTab === 'vacation' 
-              ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' 
-              : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
-          } ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Ээлжийн амралт' : ''}
-        >
-          <Palmtree size={20} />
-          {!isCollapsed && <span>Ээлжийн амралт</span>}
-        </button>
+        {SHOW_VACATION_FEATURE && (
+          <button
+            onClick={() => setActiveTab?.('vacation')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
+              activeTab === 'vacation'
+                ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20'
+                : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
+            } ${isCollapsed ? 'justify-center' : ''}`}
+            title={isCollapsed ? 'Ээлжийн амралт' : ''}
+          >
+            <Palmtree size={20} />
+            {!isCollapsed && <span>Ээлжийн амралт</span>}
+          </button>
+        )}
 
         <button 
           onClick={() => setActiveTab?.('hourlyLeave')}

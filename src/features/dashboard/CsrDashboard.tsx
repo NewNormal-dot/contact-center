@@ -10,6 +10,7 @@ import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import { useAuth } from '../../contexts/AuthContext';
 import apiClient from '../../lib/api-client';
+import { SHOW_VACATION_FEATURE } from '../../config/features';
 
 const WEEKDAYS = ['Ням', 'Даваа', 'Мягмар', 'Лхагва', 'Пүрэв', 'Баасан', 'Бямба'];
 const MONTHS = [
@@ -1448,6 +1449,16 @@ export default function CsrDashboard() {
 
   const [isRequestingVacation, setIsRequestingVacation] = useState(false);
   const [isRequestingHourlyLeave, setIsRequestingHourlyLeave] = useState(false);
+
+  useEffect(() => {
+    if (!SHOW_VACATION_FEATURE && activeTab === 'vacation') {
+      setActiveTab('schedule');
+    }
+    if (!SHOW_VACATION_FEATURE && isRequestingVacation) {
+      setIsRequestingVacation(false);
+    }
+  }, [activeTab, isRequestingVacation]);
+
   const [vacationForm, setVacationForm] = useState<{
     month: string;
     startDate: string;
@@ -1898,7 +1909,7 @@ export default function CsrDashboard() {
       <main className="flex-1 flex flex-col relative overflow-hidden">
         <header className="h-16 sm:h-20 border-b border-gray-800 flex items-center justify-between px-4 sm:px-8 bg-gray-900/30 backdrop-blur-md z-40 relative">
           <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-            {activeTab === 'schedule' ? 'Ажлын хуваарь' : activeTab === 'vacation' ? 'Ээлжийн амралт' : activeTab === 'hourlyLeave' ? 'Чөлөө' : activeTab === 'training' ? 'Сургалт' : 'Мэдэгдэл'}
+            {activeTab === 'schedule' ? 'Ажлын хуваарь' : SHOW_VACATION_FEATURE && activeTab === 'vacation' ? 'Ээлжийн амралт' : activeTab === 'hourlyLeave' ? 'Чөлөө' : activeTab === 'training' ? 'Сургалт' : 'Мэдэгдэл'}
           </h1>
           
           <div className="flex items-center gap-6">
@@ -2006,7 +2017,7 @@ export default function CsrDashboard() {
         <div className="flex-1 p-4 sm:p-8 overflow-y-auto">
           {activeTab === 'schedule' && renderScheduleView()}
           {activeTab === 'notifications' && renderNotificationsView()}
-          {activeTab === 'vacation' && renderVacationView()}
+          {SHOW_VACATION_FEATURE && activeTab === 'vacation' && renderVacationView()}
           {activeTab === 'hourlyLeave' && renderHourlyLeaveView()}
           {activeTab === 'training' && renderTrainingView()}
         </div>
@@ -2023,7 +2034,7 @@ export default function CsrDashboard() {
 
       {/* Vacation Request Modal */}
       <AnimatePresence>
-        {isRequestingVacation && (
+        {SHOW_VACATION_FEATURE && isRequestingVacation && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsRequestingVacation(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">

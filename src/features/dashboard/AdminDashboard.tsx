@@ -51,6 +51,7 @@ import { CSR, Notification, TrainingMaterial, VacationRequest, HourlyLeaveReques
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import apiClient from '../../lib/api-client';
+import { SHOW_VACATION_FEATURE } from '../../config/features';
 import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
 
 const ENG_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -139,6 +140,12 @@ export default function AdminDashboard() {
   // Notifications Count
   const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => s.userId === 'admin')).length;
   const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === 'admin')).length;
+
+  useEffect(() => {
+    if (!SHOW_VACATION_FEATURE && activeTab === 'vacation') {
+      setActiveTab('schedule');
+    }
+  }, [activeTab]);
 
   const [activeEmploymentView, setActiveEmploymentView] = useState<'Full Time' | 'Part Time'>('Full Time');
   const [activeSegmentView, setActiveSegmentView] = useState<string>('');
@@ -2397,7 +2404,7 @@ export default function AdminDashboard() {
       <nav className="flex-1 px-6 space-y-3 overflow-y-auto custom-scrollbar pt-8">
           <SidebarItem id="users" icon={Users} label="Ажилтны удирдлага" />
           <SidebarItem id="schedule" icon={Calendar} label="Хуваарь удирдлага" />
-          <SidebarItem id="vacation" icon={Palmtree} label="Ээлжийн амралт" />
+          {SHOW_VACATION_FEATURE && <SidebarItem id="vacation" icon={Palmtree} label="Ээлжийн амралт" />}
           <SidebarItem id="hourlyLeave" icon={Clock} label="Чөлөө" />
           <SidebarItem id="forecast" icon={BarChart3} label="Forecast" />
           <SidebarItem id="notifications" icon={Bell} label="Мэдэгдэл" badge={unreadCount} />
@@ -2429,7 +2436,7 @@ export default function AdminDashboard() {
             <h1 className="text-3xl font-black text-white tracking-tighter capitalize mb-1">
               {activeTab === 'users' ? 'Ажилтны удирдлага' : 
                activeTab === 'schedule' ? 'Хуваарь удирдлага' : 
-               activeTab === 'vacation' ? 'Ээлжийн амралт' : 
+               SHOW_VACATION_FEATURE && activeTab === 'vacation' ? 'Ээлжийн амралт' :
                activeTab === 'hourlyLeave' ? 'Чөлөөний хүсэлт' :
                activeTab === 'forecast' ? 'Дуудлагын Forecast' :
                activeTab === 'notifications' ? 'Мэдэгдэл' :
@@ -2536,7 +2543,7 @@ export default function AdminDashboard() {
               transition={{ duration: 0.2 }}
             >
               {activeTab === 'users' && renderUsersView()}
-              {activeTab === 'vacation' && renderVacationView()}
+              {SHOW_VACATION_FEATURE && activeTab === 'vacation' && renderVacationView()}
               {activeTab === 'hourlyLeave' && renderHourlyLeaveView()}
               {activeTab === 'schedule' && renderScheduleView()}
               {activeTab === 'notifications' && renderNotificationsView()}
