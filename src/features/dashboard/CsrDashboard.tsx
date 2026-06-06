@@ -4,7 +4,7 @@ import { LazyMedia } from '../../components/LazyMedia';
 import Sidebar from '../../components/Sidebar';
 import ChatWindow from '../chat/ChatWindow';
 import { DigitalClock } from '../../components/DigitalClock';
-import { MessageCircle, Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter } from 'lucide-react';
+import { MessageCircle, Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
 import { Notification as AppNotification, TrainingMaterial, VacationQuota, VacationRequest, TradeRequest, HourlyLeaveRequest } from '../../types';
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
@@ -70,15 +70,95 @@ interface Shift {
   totalSlots: number;
   bookedSlots: number;
   isBookedByMe: boolean;
-  bookedBy?: { userId: string, userName: string, bookedByAdmin?: string }[];
+  bookedBy?: { userId: string, userName: string, userCode?: string, bookedAt?: string, bookedByAdmin?: string, bookingWaveId?: string, bookingWaveName?: string }[];
   segment: string;
   employmentType?: string;
+  bookingWaves?: BookingWave[];
+}
+
+interface BookingWave {
+  id: string;
+  name: string;
+  slotLimit: number;
+  bookingOpen: boolean;
+  bookingOpenAt?: string;
 }
 
 interface DayData {
   shifts: Shift[];
   holidayName?: string;
+  bookingOpen?: boolean;
+  bookingOpenAt?: string;
 }
+
+
+const getBookingWavesForShift = (shift: Shift | any, dayBookingOpen = false, dayBookingOpenAt = ''): BookingWave[] => {
+  const existing = Array.isArray(shift?.bookingWaves) ? shift.bookingWaves : [];
+  const normalized = existing
+    .map((wave: any, index: number) => ({
+      id: String(wave.id || `wave-${index + 1}`),
+      name: String(wave.name || `Эрх ${index + 1}`),
+      slotLimit: Math.max(0, Number(wave.slotLimit ?? wave.slots ?? wave.capacity ?? 0) || 0),
+      bookingOpen: Boolean(wave.bookingOpen),
+      bookingOpenAt: wave.bookingOpenAt || '',
+    }))
+    .filter((wave: BookingWave) => wave.slotLimit > 0);
+
+  if (normalized.length > 0) return normalized;
+
+  return [{
+    id: 'default',
+    name: 'Нийт захиалах эрх',
+    slotLimit: Math.max(1, Number(shift?.totalSlots) || 1),
+    bookingOpen: Boolean(dayBookingOpen),
+    bookingOpenAt: dayBookingOpenAt || '',
+  }];
+};
+
+const isWaveCurrentlyOpen = (wave: BookingWave) => {
+  if (!wave.bookingOpen) return false;
+  if (!wave.bookingOpenAt) return true;
+  const openAt = new Date(wave.bookingOpenAt).getTime();
+  return Number.isNaN(openAt) || openAt <= Date.now();
+};
+
+const getWaveBookedCount = (shift: Shift | any, waveId: string) => {
+  const bookedBy = Array.isArray(shift?.bookedBy) ? shift.bookedBy : [];
+  if (waveId === 'default') return bookedBy.length;
+  return bookedBy.filter((booking: any) => booking.bookingWaveId === waveId).length;
+};
+
+const getOpenBookingWaves = (shift: Shift | any, dayData?: DayData) =>
+  getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '')
+    .filter(wave => isWaveCurrentlyOpen(wave) && getWaveBookedCount(shift, wave.id) < wave.slotLimit);
+
+const isBookingAvailable = (dayData?: DayData) => {
+  if (!dayData?.bookingOpen) return false;
+  if (!dayData.bookingOpenAt) return true;
+  const openAtTime = new Date(dayData.bookingOpenAt).getTime();
+  return Number.isNaN(openAtTime) || openAtTime <= Date.now();
+};
+
+const formatShiftTimeForDisplay = (timeStr?: string) => {
+  if (!timeStr) return '';
+  const compactMatch = timeStr.trim().match(/^(\d{1,2})-+(\d{1,2})$/);
+  if (!compactMatch) return timeStr;
+  return `${compactMatch[1].padStart(2, '0')}-${compactMatch[2].padStart(2, '0')}`;
+};
+
+const getShiftEndTime = (timeStr: string) => {
+  const regularMatch = timeStr.match(/\d{1,2}:\d{2}\s*-\s*(\d{1,2}):(\d{2})/);
+  if (regularMatch) {
+    return { hours: Number(regularMatch[1]), minutes: Number(regularMatch[2]) };
+  }
+
+  const compactMatch = formatShiftTimeForDisplay(timeStr).match(/^\d{2}-(\d{2})$/);
+  if (compactMatch) {
+    return { hours: Number(compactMatch[1]), minutes: 0 };
+  }
+
+  return null;
+};
 
 // Function to generate mock schedule based on a reference date
 function generateInitialSchedule(referenceDate: Date) {
@@ -187,6 +267,7 @@ const DayRow = React.memo(({
   const isWeekend = date.getDay() === 0 || date.getDay() === 6;
   const shouldBeRed = isHoliday || isWeekend;
   const hasData = dayData.shifts.length > 0;
+  const isBookingOpen = isBookingAvailable(dayData);
 
   return (
     <div 
@@ -262,15 +343,17 @@ const DayRow = React.memo(({
                 ? 'Ажиллаж дууссан' 
                 : !hasData 
                   ? 'Уучлаарай, хуваарь одоогоор ороогүй байна' 
+                  : !isBookingOpen && !myBookedShift
+                    ? 'Захиалга хараахан нээгдээгүй байна'
                   : isToday 
                     ? (() => {
                         if (!myBookedShift) return 'Батлагдсан хуваарь';
-                        const endTimeStr = myBookedShift.time.split(' - ')[1];
-                        const [hours, minutes] = endTimeStr.split(':').map(Number);
+                        const endTime = getShiftEndTime(myBookedShift.time);
+                        if (!endTime) return 'Батлагдсан хуваарь';
                         const now = new Date();
-                        const endTime = new Date(now);
-                        endTime.setHours(hours, minutes, 0, 0);
-                        return now > endTime ? 'Ажиллаж дууссан' : 'Батлагдсан хуваарь';
+                        const shiftEndDate = new Date(now);
+                        shiftEndDate.setHours(endTime.hours, endTime.minutes, 0, 0);
+                        return now > shiftEndDate ? 'Ажиллаж дууссан' : 'Батлагдсан хуваарь';
                       })()
                     : 'Батлагдсан хуваарь'}
             </p>
@@ -299,7 +382,7 @@ const DayRow = React.memo(({
                           </span>
                         )}
                       </div>
-                      <p className="text-xs font-bold text-white">{myBookedShift.time}</p>
+                      <p className="text-xs font-bold text-white">{formatShiftTimeForDisplay(myBookedShift.time)}</p>
                     </div>
                   </div>
                 )
@@ -324,10 +407,10 @@ const DayRow = React.memo(({
                               </span>
                             )}
                           </div>
-                          <p className="text-xs font-bold text-white">{myBookedShift.time}</p>
+                          <p className="text-xs font-bold text-white">{formatShiftTimeForDisplay(myBookedShift.time)}</p>
                         </div>
                       </div>
-                      {!isSubmitted && (
+                      {!isSubmitted && isBookingOpen && (
                         <button 
                           onClick={() => onTradeShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
@@ -339,13 +422,23 @@ const DayRow = React.memo(({
                     </>
                   ) : (
                     !isSubmitted && (
-                      <button 
-                        onClick={() => onBookShift(dateKey)}
-                        className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
-                      >
-                        <Calendar size={18} />
-                        Захиалах
-                      </button>
+                      isBookingOpen ? (
+                        <button
+                          onClick={() => onBookShift(dateKey)}
+                          className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
+                        >
+                          <Calendar size={18} />
+                          Захиалах
+                        </button>
+                      ) : (
+                        <button
+                          disabled
+                          className="px-6 py-2.5 rounded-xl bg-gray-800/50 text-gray-600 font-bold border border-gray-800 flex items-center gap-2 cursor-not-allowed opacity-60"
+                        >
+                          <Lock size={18} />
+                          Нээгдээгүй
+                        </button>
+                      )
                     )
                   )}
                 </>
@@ -410,7 +503,7 @@ export default function CsrDashboard() {
       return diff / 60;
     }
 
-    // Custom format like 09--17 or 09-17 or 09--01
+    // Custom compact format like 09-17 or 09-01
     const parts = timeStr.split(/[-:]+/).filter(Boolean);
     if (parts.length >= 2) {
       const sH = parseInt(parts[0]);
@@ -428,14 +521,12 @@ export default function CsrDashboard() {
 
   const currentMonthKey = selectedMonth;
   const monthlyFontTime = csrProfile?.monthlyFontTime?.[currentMonthKey] || 0;
-  
-  const holidayHours = React.useMemo(() => {
-    return (holidays as any[])
-      .filter(h => h.date.startsWith(currentMonthKey))
-      .reduce((sum, h) => sum + (Number(h.hours) || 0), 0);
-  }, [holidays, currentMonthKey]);
 
-  const effectiveMonthlyFontTime = Math.max(0, monthlyFontTime - holidayHours);
+  const holidayDates = React.useMemo(() => {
+    return new Set((holidays as any[]).filter(h => h?.date).map(h => h.date));
+  }, [holidays]);
+
+  const effectiveMonthlyFontTime = monthlyFontTime;
 
   const { monthlyBookedHours, regularWorkedHours, holidayWorkedHours, totalAvailableHours } = React.useMemo(() => {
     let monthlyBookedHours = 0;
@@ -448,17 +539,19 @@ export default function CsrDashboard() {
         const now = new Date();
         now.setHours(0, 0, 0, 0);
         const isPastDate = new Date(dateKey) < now;
-        const isHoliday = (holidays as any[]).some(h => h.date === dateKey);
+        const isHoliday = holidayDates.has(dateKey);
         
         dayData.shifts.forEach(shift => {
-          totalAvailableHours += calculateHours(shift.time);
+          const hours = calculateHours(shift.time);
+          totalAvailableHours += isHoliday ? 0 : hours;
           if (shift.bookedBy?.some(b => b.userId === csrProfile?.id)) {
-            const hours = calculateHours(shift.time);
-            monthlyBookedHours += hours;
-            if (isPastDate) {
-              if (isHoliday) {
+            if (isHoliday) {
+              if (isPastDate) {
                 holidayWorkedHours += hours;
-              } else {
+              }
+            } else {
+              monthlyBookedHours += hours;
+              if (isPastDate) {
                 regularWorkedHours += hours;
               }
             }
@@ -467,7 +560,7 @@ export default function CsrDashboard() {
       }
     });
     return { monthlyBookedHours, regularWorkedHours, holidayWorkedHours, totalAvailableHours };
-  }, [schedule, currentMonthKey, csrProfile?.id, holidays]);
+  }, [schedule, currentMonthKey, csrProfile?.id, holidayDates]);
 
   const { sickHours, leaveHours } = React.useMemo(() => {
     const approvedVacations = vacationRequests.filter(r => r.month === currentMonthKey && r.status === 'approved');
@@ -640,6 +733,8 @@ export default function CsrDashboard() {
         filteredSchedule[dateKey] = {
           ...dayData,
           holidayName: holiday ? holiday.name : dayData.holidayName,
+          bookingOpen: !!dayData.bookingOpen,
+          bookingOpenAt: dayData.bookingOpenAt || '',
           shifts: (dayData.shifts || []).filter((s: any) => {
             const matchesSegment = (s.segment === 'All') || 
                                   (s.segment === csrProfile.lineType) || 
@@ -1031,17 +1126,27 @@ export default function CsrDashboard() {
     }
   }, [activeTab]);
 
-  const handleBookShift = React.useCallback((dateKey: string, shiftId?: string) => {
+  const handleBookShift = React.useCallback((dateKey: string, shiftId?: string, bookingWaveId?: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
 
-    if (!shiftId) {
-      setBookingModal({ isOpen: true, dateKey });
+    if (submittedMonths.includes(currentMonthKey)) {
+      alert('Таны энэ сарын хуваарь баталгаажсан тул өөрчлөх боломжгүй.');
       return;
     }
 
-    if (submittedMonths.includes(currentMonthKey)) {
-      alert('Таны энэ сарын хуваарь баталгаажсан тул өөрчлөх боломжгүй.');
+    if (!isBookingAvailable(dayData)) {
+      alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
+      return;
+    }
+
+    if (dayData.shifts.some(s => s.bookedBy?.some(b => b.userId === csrProfile.id))) {
+      alert('Та энэ өдөр аль хэдийн ээлж захиалсан байна.');
+      return;
+    }
+
+    if (!shiftId) {
+      setBookingModal({ isOpen: true, dateKey });
       return;
     }
 
@@ -1052,7 +1157,22 @@ export default function CsrDashboard() {
       return;
     }
 
-    const shiftHours = calculateHours(targetShift.time);
+    const availableWaves = getOpenBookingWaves(targetShift, dayData);
+    const targetWave = bookingWaveId
+      ? getBookingWavesForShift(targetShift, !!dayData.bookingOpen, dayData.bookingOpenAt || '').find(wave => wave.id === bookingWaveId)
+      : availableWaves[0];
+
+    if (!targetWave || !isWaveCurrentlyOpen(targetWave)) {
+      alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
+      return;
+    }
+
+    if (getWaveBookedCount(targetShift, targetWave.id) >= targetWave.slotLimit) {
+      alert('Энэ захиалах эрхийн slot дүүрсэн байна.');
+      return;
+    }
+
+    const shiftHours = holidayDates.has(dateKey) ? 0 : calculateHours(targetShift.time);
     if (monthlyBookedHours + shiftHours > effectiveMonthlyFontTime) {
       alert(`Таны сарын фонт цаг (${effectiveMonthlyFontTime} цаг) хэтрэх гээд байна. Та одоогоор ${monthlyBookedHours} цаг захиалсан байна.`);
       return;
@@ -1063,12 +1183,22 @@ export default function CsrDashboard() {
       return;
     }
 
+    const bookedAt = new Date().toISOString();
+    const bookingInfo = {
+      userId: csrProfile.id,
+      userName: csrProfile.name,
+      userCode: csrProfile.code,
+      bookedAt,
+      bookingWaveId: targetWave.id,
+      bookingWaveName: targetWave.name,
+    };
+
     const updatedShifts = dayData.shifts.map(s => {
       if (s.id === targetShift.id) {
         return {
           ...s,
           bookedSlots: s.bookedSlots + 1,
-          bookedBy: [...(s.bookedBy || []), { userId: csrProfile.id, userName: csrProfile.name }]
+          bookedBy: [...(s.bookedBy || []), bookingInfo]
         };
       }
       return s;
@@ -1077,13 +1207,37 @@ export default function CsrDashboard() {
     try {
       const globalSchedules = getLocalData('schedules', {});
       const globalDayData = globalSchedules[dateKey] || { shifts: [] };
+      const globalTargetShift = globalDayData.shifts.find((s: any) => s.id === targetShift.id);
+      if (!isBookingAvailable(globalDayData) || !globalTargetShift) {
+        alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
+        return;
+      }
+      if ((globalDayData.shifts || []).some((s: any) => s.bookedBy?.some((b: any) => b.userId === csrProfile.id))) {
+        alert('Та энэ өдөр аль хэдийн ээлж захиалсан байна.');
+        return;
+      }
+      if (globalTargetShift.bookedSlots >= globalTargetShift.totalSlots) {
+        alert('Энэ ээлж дүүрсэн байна.');
+        return;
+      }
+
+      const globalTargetWave = getBookingWavesForShift(globalTargetShift, !!globalDayData.bookingOpen, globalDayData.bookingOpenAt || '')
+        .find((wave: BookingWave) => wave.id === targetWave.id);
+      if (!globalTargetWave || !isWaveCurrentlyOpen(globalTargetWave)) {
+        alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
+        return;
+      }
+      if (getWaveBookedCount(globalTargetShift, globalTargetWave.id) >= globalTargetWave.slotLimit) {
+        alert('Энэ захиалах эрхийн slot дүүрсэн байна.');
+        return;
+      }
       
       const updatedGlobalShifts = globalDayData.shifts.map((s: any) => {
         if (s.id === targetShift.id) {
           return {
             ...s,
             bookedSlots: s.bookedSlots + 1,
-            bookedBy: [...(s.bookedBy || []), { userId: csrProfile.id, userName: csrProfile.name }]
+            bookedBy: [...(s.bookedBy || []), bookingInfo]
           };
         }
         return s;
@@ -1095,13 +1249,20 @@ export default function CsrDashboard() {
       };
       
       setLocalData('schedules', globalSchedules);
-      logAction('Shift Booked', `Booked shift on ${dateKey}`);
+      setSchedule(prev => ({
+        ...prev,
+        [dateKey]: {
+          ...dayData,
+          shifts: updatedShifts
+        }
+      }));
+      logAction('Shift Booked', `Booked shift on ${dateKey} / ${targetWave.name}`);
       triggerSuccess();
     } catch (error) {
       console.error('Error booking shift:', error);
       alert('Ээлж захиалахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, monthlyBookedHours, effectiveMonthlyFontTime, csrProfile]);
+  }, [schedule, submittedMonths, currentMonthKey, monthlyBookedHours, effectiveMonthlyFontTime, csrProfile, holidayDates]);
 
   const handleCancelShift = React.useCallback((dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
@@ -1201,7 +1362,6 @@ export default function CsrDashboard() {
               <div className="space-y-1">
                 <p className="text-[11px] font-black text-white">
                   {month}-р сарын фонт цаг: <span className="text-blue-400">{effectiveMonthlyFontTime} ц</span>
-                  {holidayHours > 0 && <span className="text-[10px] text-red-400 block mt-1">(Баяр ёслолын {holidayHours} цаг хасагдсан)</span>}
                 </p>
               </div>
               <div className="text-right">
@@ -2224,12 +2384,14 @@ export default function CsrDashboard() {
                 <div className="space-y-4 mb-8">
                   {(schedule[bookingModal.dateKey]?.shifts || []).map((shift, idx) => {
                     const isFull = shift.bookedSlots >= shift.totalSlots;
+                    const dayData = schedule[bookingModal.dateKey];
+                    const waves = getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '');
                     return (
-                      <div 
+                      <div
                         key={`booking-shift-${shift.id}-${idx}`}
                         className={`p-5 rounded-2xl border transition-all ${
-                          isFull 
-                            ? 'bg-gray-800/20 border-gray-800 opacity-50' 
+                          isFull
+                            ? 'bg-gray-800/20 border-gray-800 opacity-70'
                             : 'bg-gray-800/40 border-gray-700 hover:border-blue-500/50'
                         }`}
                       >
@@ -2237,31 +2399,26 @@ export default function CsrDashboard() {
                           <div className="flex flex-col gap-1">
                             <div className="flex items-center gap-3">
                               <Clock size={20} className={isFull ? 'text-gray-600' : 'text-blue-400'} />
-                              <span className="text-lg font-bold text-white">{shift.time}</span>
+                              <span className="text-lg font-bold text-white">{formatShiftTimeForDisplay(shift.time)}</span>
                             </div>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Нийт: {shift.bookedSlots}/{shift.totalSlots}</p>
                           </div>
                           {isFull && (
                             <span className="px-2 py-0.5 bg-red-500/10 text-red-500 text-[10px] font-black rounded uppercase">Дүүрсэн</span>
                           )}
                         </div>
 
-                        <div className="mt-4 border-t border-white/5 pt-4">
-                          {/* Refined Quota Graphic - Clean & Minimal */}
+                        <div className="mt-4 border-t border-white/5 pt-4 space-y-3">
                           <div className="w-full relative h-10 px-1 mt-2">
-                            {/* Background Line */}
                             <div className="absolute top-1/2 left-0 right-14 h-1.5 -translate-y-1/2 bg-gray-800 rounded-full" />
-                            
-                            {/* Progress Line */}
                             <motion.div 
                               initial={{ width: 0 }}
-                              animate={{ width: `${Math.min(100, (shift.bookedSlots / shift.totalSlots) * 100)}%` }}
+                              animate={{ width: `${Math.min(100, (shift.bookedSlots / Math.max(1, shift.totalSlots)) * 100)}%` }}
                               className={`absolute top-1/2 left-0 h-1.5 -translate-y-1/2 rounded-full z-10 ${isFull ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.4)]' : 'bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.4)]'}`}
                               style={{ maxWidth: 'calc(100% - 3.5rem)' }}
                             />
-                            
-                            {/* Moving Indicator */}
                             <motion.div
-                              animate={{ left: `${Math.min(100, (shift.bookedSlots / shift.totalSlots) * 100)}%` }}
+                              animate={{ left: `${Math.min(100, (shift.bookedSlots / Math.max(1, shift.totalSlots)) * 100)}%` }}
                               transition={{ type: "spring", stiffness: 100, damping: 20 }}
                               className="absolute top-0 -translate-x-1/2 flex flex-col items-center z-20"
                               style={{ maxWidth: 'calc(100% - 3.5rem)' }}
@@ -2271,27 +2428,48 @@ export default function CsrDashboard() {
                               </div>
                               <div className={`w-0.5 h-1.5 ${isFull ? 'bg-red-600' : 'bg-blue-600'} mt-0.5`} />
                             </motion.div>
-                            
-                            {/* Total Target */}
                             <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-4">
                               <span className="text-[14px] font-outfit font-black text-gray-500">{shift.totalSlots}</span>
-                              
-                              {!isFull && (
-                                <button 
-                                  onClick={() => {
-                                    handleBookShift(bookingModal.dateKey, shift.id);
-                                    setBookingModal(null);
-                                  }}
-                                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-blue-500/20"
-                                >
-                                  Сонгох
-                                </button>
-                              )}
                             </div>
                           </div>
+
+                          <div className="space-y-2">
+                            {waves.map(wave => {
+                              const booked = getWaveBookedCount(shift, wave.id);
+                              const waveFull = booked >= wave.slotLimit;
+                              const waveOpen = isWaveCurrentlyOpen(wave);
+                              const canBook = !isFull && !waveFull && waveOpen;
+                              return (
+                                <div key={wave.id} className={`rounded-2xl border p-3 ${canBook ? 'border-blue-500/30 bg-blue-500/5' : 'border-white/5 bg-black/20 opacity-70'}`}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <p className="text-xs font-black text-white">{wave.name}</p>
+                                      <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                                        {booked}/{wave.slotLimit} {waveOpen ? 'нээлттэй' : 'хаалттай'}
+                                      </p>
+                                    </div>
+                                    {canBook ? (
+                                      <button
+                                        onClick={() => {
+                                          handleBookShift(bookingModal.dateKey, shift.id, wave.id);
+                                          setBookingModal(null);
+                                        }}
+                                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-blue-500/20"
+                                      >
+                                        Сонгох
+                                      </button>
+                                    ) : (
+                                      <span className="rounded-xl bg-gray-800 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-gray-500">
+                                        {waveFull ? 'Дүүрсэн' : 'Хаалттай'}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
- drum-beat-marker: csr_quota_refined
-                      </div>
+                       </div>
                     );
                   })}
                 </div>
@@ -2329,7 +2507,7 @@ export default function CsrDashboard() {
                           >
                             <div className="flex items-center gap-3">
                               <Clock size={18} className="text-blue-400" />
-                              <span className="font-bold text-white">{shift.time}</span>
+                              <span className="font-bold text-white">{formatShiftTimeForDisplay(shift.time)}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-gray-500">{shift.bookedSlots} ажилтан</span>
@@ -2348,7 +2526,7 @@ export default function CsrDashboard() {
                       >
                         <ChevronDown size={20} className="rotate-90" />
                       </button>
-                      <p className="text-gray-400 text-sm">{tradingModal.shift?.time} ээлжинд байгаа ажилтнууд:</p>
+                      <p className="text-gray-400 text-sm">{formatShiftTimeForDisplay(tradingModal.shift?.time)} ээлжинд байгаа ажилтнууд:</p>
                     </div>
                     
                     <div className="space-y-3 mb-8">
@@ -2408,7 +2586,7 @@ export default function CsrDashboard() {
                   </div>
                 </div>
                 <p className="text-sm text-gray-300 mb-6">
-                  <span className="font-bold text-white">{incoming.senderName}</span> таны <span className="text-blue-400 font-bold">{incoming.receiverShiftTime}</span> ээлжийг өөрийн <span className="text-purple-400 font-bold">{incoming.senderShiftTime}</span> ээлжээр солих хүсэлт ирүүллээ.
+                  <span className="font-bold text-white">{incoming.senderName}</span> таны <span className="text-blue-400 font-bold">{formatShiftTimeForDisplay(incoming.receiverShiftTime)}</span> ээлжийг өөрийн <span className="text-purple-400 font-bold">{formatShiftTimeForDisplay(incoming.senderShiftTime)}</span> ээлжээр солих хүсэлт ирүүллээ.
                 </p>
                 <div className="flex gap-2">
                   <button 

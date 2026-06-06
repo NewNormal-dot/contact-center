@@ -33,12 +33,35 @@ function normalizeEmploymentType(value: unknown, fallback: 'Full Time' | 'Part T
   return value;
 }
 
+async function hasUserLocationColumn() {
+  return db.schema.hasColumn('users', 'location');
+}
+
+function userSelectColumns(includeLocation: boolean, includeCreatedAt = false) {
+  return [
+    'id',
+    'email',
+    'name',
+    'role',
+    'status',
+    'photo_url',
+    'code',
+    ...(includeLocation ? ['location'] : []),
+    'segment',
+    'employment_type',
+    'weekly_rule_id',
+    ...(includeCreatedAt ? ['created_at'] : []),
+  ];
+}
+
 // Get all users (Superadmin only)
 router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
-    const users = await db('users').select('id', 'email', 'name', 'role', 'status', 'photo_url', 'code', 'segment', 'employment_type', 'weekly_rule_id', 'created_at');
+    const includeLocation = await hasUserLocationColumn();
+    const users = await db('users').select(userSelectColumns(includeLocation, true));
     const formattedUsers = users.map(u => ({
       ...u,
+      location: includeLocation ? u.location : '',
       photoUrl: u.photo_url,
       lineType: u.segment || DEFAULT_SEGMENTS_BY_ROLE[u.role] || '',
       employmentType: u.employment_type,
@@ -54,11 +77,13 @@ router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
 // Get CSR users (Admin and Superadmin)
 router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
+    const includeLocation = await hasUserLocationColumn();
     const users = await db('users')
       .where({ role: 'csr' })
-      .select('id', 'email', 'name', 'role', 'status', 'photo_url', 'code', 'segment', 'employment_type', 'weekly_rule_id');
+      .select(userSelectColumns(includeLocation));
     const formattedUsers = users.map(u => ({
       ...u,
+      location: includeLocation ? u.location : '',
       photoUrl: u.photo_url,
       lineType: u.segment || '',
       employmentType: u.employment_type,
@@ -72,7 +97,7 @@ router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req,
 
 // Create User
 router.post('/', authenticate, async (req: any, res) => {
-  const { email, password, name, role, status, employment_type, employmentType, code, segment, lineType } = req.body;
+  const { email, password, name, role, status, employment_type, employmentType, code, location, segment, lineType } = req.body;
   const actingUserRole = req.user.role;
   const finalRole = role || 'csr';
   const finalStatus = status || 'active';
@@ -122,8 +147,9 @@ router.post('/', authenticate, async (req: any, res) => {
 
     const id = uuidv4();
     const hashedPassword = await bcrypt.hash(password, 10);
+    const includeLocation = await hasUserLocationColumn();
 
-    await db('users').insert({
+    const insertData: any = {
       id,
       email,
       password_hash: hashedPassword,
@@ -132,11 +158,17 @@ router.post('/', authenticate, async (req: any, res) => {
       status: finalStatus,
       employment_type: finalEmploymentType,
       segment: finalSegment || null,
-      code
-    });
+      code,
+    };
+
+    if (includeLocation) {
+      insertData.location = location || null;
+    }
+
+    await db('users').insert(insertData);
 
     await logAction(req.user.id, 'CREATE_USER', 'users', id, `Created user ${name} (${finalRole})`);
-    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code });
+    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code, location });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
@@ -146,7 +178,7 @@ router.post('/', authenticate, async (req: any, res) => {
 // Update User
 router.put('/:id', authenticate, async (req: any, res) => {
   const { id } = req.params;
-  const { name, status, employment_type, employmentType, code, role, segment, lineType } = req.body;
+  const { name, status, employment_type, employmentType, code, location, role, segment, lineType } = req.body;
   const actingUserRole = req.user.role;
   const requestedEmploymentType = employment_type ?? employmentType;
   const finalEmploymentType = requestedEmploymentType === undefined ? undefined : normalizeEmploymentType(requestedEmploymentType);
@@ -182,6 +214,7 @@ router.put('/:id', authenticate, async (req: any, res) => {
     }
 
     const updates: any = {};
+    const includeLocation = await hasUserLocationColumn();
 
     if (name !== undefined) {
       if (!String(name).trim()) return res.status(400).json({ error: 'Нэр хоосон байж болохгүй' });
@@ -200,6 +233,10 @@ router.put('/:id', authenticate, async (req: any, res) => {
 
     if (code !== undefined) {
       updates.code = code || null;
+    }
+
+    if (includeLocation && location !== undefined) {
+      updates.location = location || null;
     }
 
     if (finalSegment !== undefined) {

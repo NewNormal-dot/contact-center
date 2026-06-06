@@ -12,6 +12,7 @@ export interface User {
   status: 'active' | 'inactive' | 'online' | 'offline';
   photoUrl?: string;
   code?: string;
+  location?: string;
   employmentType: 'Full Time' | 'Part Time' | string;
   lineType?: string;
   password?: string;
@@ -25,6 +26,7 @@ export interface CSR {
   code?: string;
   name: string;
   email?: string;
+  location?: string;
   lineType: string;
   photoUrl: string;
   status: 'online' | 'offline' | 'active' | 'inactive';

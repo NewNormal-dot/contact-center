@@ -12,11 +12,28 @@ import requestRoutes from "./src/api/requests";
 import broadcastRoutes from "./src/api/broadcasts";
 import auditRoutes from "./src/api/audit";
 import tradeRoutes from "./src/api/trades";
+import forecastRoutes from "./src/api/forecast";
+import db from "./src/database/db";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+async function runProductionMigrations() {
+  if (process.env.NODE_ENV !== "production" || process.env.SKIP_DB_MIGRATIONS === "true") {
+    return;
+  }
+
+  const [batchNo, migrations] = await db.migrate.latest();
+  if (migrations.length > 0) {
+    console.log(`Database migrations applied in batch ${batchNo}: ${migrations.join(", ")}`);
+  } else {
+    console.log("Database migrations already up to date");
+  }
+}
+
 async function startServer() {
+  await runProductionMigrations();
+
   const app = express();
   const PORT = Number(process.env.PORT) || 8080;
 
@@ -36,6 +53,7 @@ async function startServer() {
   app.use("/api/broadcasts", broadcastRoutes);
   app.use("/api/audit", auditRoutes);
   app.use("/api/trades", tradeRoutes);
+  app.use("/api/forecast", forecastRoutes);
 
   // API Health Check
   app.get("/api/health", (req, res) => {

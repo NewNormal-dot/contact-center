@@ -13,6 +13,14 @@ function displayDateTime(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString();
 }
 
+
+function normalizeSqlTimeKey(value: string) {
+  const display = displayTime(value) || value;
+  const match = String(display).match(/(\d{1,2})(?::\d{1,2})?/);
+  if (!match) return '';
+  return String(Number(match[1])).padStart(2, '0');
+}
+
 function mapSlot(slot: any, currentBookings = 0) {
   return {
     ...slot,
@@ -139,6 +147,14 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req, r
 
     if (!sqlSlotDate || !sqlStartTime || !sqlEndTime || !sqlDeadline) {
       return res.status(400).json({ error: 'Огноо болон цагийн формат буруу байна' });
+    }
+
+    const duplicateSlot = await db('work_slots')
+      .where({ date: sqlSlotDate, start_time: sqlStartTime, end_time: sqlEndTime })
+      .first();
+
+    if (duplicateSlot) {
+      return res.status(409).json({ error: 'Энэ цаг нэмэгдсэн байна. Нэг shift дээр олон захиалга авах бол capacity/slot тоогоо нэмнэ үү.' });
     }
 
     const start = new Date(`1970-01-01T${sqlStartTime}`);
