@@ -32,8 +32,6 @@ async function runProductionMigrations() {
 }
 
 async function startServer() {
-  await runProductionMigrations();
-
   const app = express();
   const PORT = Number(process.env.PORT) || 8080;
 
@@ -95,6 +93,10 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+
+  runProductionMigrations().catch((err) => {
+    console.error('Database migrations failed after server start:', err);
   });
 }
 
