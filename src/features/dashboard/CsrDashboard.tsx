@@ -82,6 +82,7 @@ interface BookingWave {
   slotLimit: number;
   bookingOpen: boolean;
   bookingOpenAt?: string;
+  bookingCloseAt?: string;
 }
 
 interface DayData {
@@ -89,10 +90,16 @@ interface DayData {
   holidayName?: string;
   bookingOpen?: boolean;
   bookingOpenAt?: string;
+  bookingCloseAt?: string;
 }
 
 
-const getBookingWavesForShift = (shift: Shift | any, dayBookingOpen = false, dayBookingOpenAt = ''): BookingWave[] => {
+const getBookingWavesForShift = (
+  shift: Shift | any,
+  dayBookingOpen = false,
+  dayBookingOpenAt = '',
+  dayBookingCloseAt = '',
+): BookingWave[] => {
   const existing = Array.isArray(shift?.bookingWaves) ? shift.bookingWaves : [];
   const normalized = existing
     .map((wave: any, index: number) => ({
@@ -101,6 +108,7 @@ const getBookingWavesForShift = (shift: Shift | any, dayBookingOpen = false, day
       slotLimit: Math.max(0, Number(wave.slotLimit ?? wave.slots ?? wave.capacity ?? 0) || 0),
       bookingOpen: Boolean(wave.bookingOpen),
       bookingOpenAt: wave.bookingOpenAt || '',
+      bookingCloseAt: wave.bookingCloseAt || '',
     }))
     .filter((wave: BookingWave) => wave.slotLimit > 0);
 
@@ -112,14 +120,69 @@ const getBookingWavesForShift = (shift: Shift | any, dayBookingOpen = false, day
     slotLimit: Math.max(1, Number(shift?.totalSlots) || 1),
     bookingOpen: Boolean(dayBookingOpen),
     bookingOpenAt: dayBookingOpenAt || '',
+    bookingCloseAt: dayBookingCloseAt || '',
   }];
 };
 
-const isWaveCurrentlyOpen = (wave: BookingWave) => {
+const getTimestamp = (value?: string) => {
+  if (!value) return NaN;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? NaN : time;
+};
+
+const formatCountdown = (milliseconds: number) => {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days} өдөр`);
+  if (hours > 0) parts.push(`${hours} цаг`);
+  if (minutes > 0) parts.push(`${minutes} минут`);
+  parts.push(`${seconds} секунд`);
+  return parts.join(' ');
+};
+
+const getWaveAccessState = (wave: BookingWave, now = Date.now()) => {
+  if (!wave.bookingOpen) {
+    return { state: 'closed' as const, label: 'Хаалттай', countdown: '' };
+  }
+
+  const openAt = getTimestamp(wave.bookingOpenAt);
+  const closeAt = getTimestamp(wave.bookingCloseAt);
+
+  if (!Number.isNaN(closeAt) && closeAt <= now) {
+    return { state: 'expired' as const, label: 'Хаагдсан', countdown: '' };
+  }
+
+  if (!Number.isNaN(openAt) && openAt > now) {
+    const countdown = formatCountdown(openAt - now);
+    return {
+      state: 'scheduled' as const,
+      label: `Нээгдэхэд ${countdown}`,
+      countdown,
+      targetTime: openAt,
+    };
+  }
+
+  if (!Number.isNaN(closeAt)) {
+    const countdown = formatCountdown(closeAt - now);
+    return {
+      state: 'open' as const,
+      label: `Хаагдахад ${countdown}`,
+      countdown,
+      targetTime: closeAt,
+    };
+  }
+
+  return { state: 'open' as const, label: 'Нээлттэй', countdown: '' };
+};
+
+const isWaveCurrentlyOpen = (wave: BookingWave, now = Date.now()) => {
   if (!wave.bookingOpen) return false;
-  if (!wave.bookingOpenAt) return true;
-  const openAt = new Date(wave.bookingOpenAt).getTime();
-  return Number.isNaN(openAt) || openAt <= Date.now();
+  return getWaveAccessState(wave, now).state === 'open';
 };
 
 const getWaveBookedCount = (shift: Shift | any, waveId: string) => {
@@ -128,15 +191,78 @@ const getWaveBookedCount = (shift: Shift | any, waveId: string) => {
   return bookedBy.filter((booking: any) => booking.bookingWaveId === waveId).length;
 };
 
-const getOpenBookingWaves = (shift: Shift | any, dayData?: DayData) =>
-  getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '')
-    .filter(wave => isWaveCurrentlyOpen(wave) && getWaveBookedCount(shift, wave.id) < wave.slotLimit);
+const getOpenBookingWaves = (shift: Shift | any, dayData?: DayData, now = Date.now()) =>
+  getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '', dayData?.bookingCloseAt || '')
+    .filter(wave => isWaveCurrentlyOpen(wave, now) && getWaveBookedCount(shift, wave.id) < wave.slotLimit);
 
-const isBookingAvailable = (dayData?: DayData) => {
-  if (!dayData?.bookingOpen) return false;
-  if (!dayData.bookingOpenAt) return true;
-  const openAtTime = new Date(dayData.bookingOpenAt).getTime();
-  return Number.isNaN(openAtTime) || openAtTime <= Date.now();
+const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
+  const shifts = dayData?.shifts || [];
+  let scheduledCountdown = '';
+  let scheduledTarget = Number.POSITIVE_INFINITY;
+  let closeCountdown = '';
+  let closeTarget = Number.POSITIVE_INFINITY;
+  let hasOpenWave = false;
+  let hasBookableWave = false;
+  let hasExpiredWave = false;
+
+  shifts.forEach((shift: Shift) => {
+    getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '', dayData?.bookingCloseAt || '')
+      .forEach((wave) => {
+        const access = getWaveAccessState(wave, now);
+        if (access.state === 'open') {
+          hasOpenWave = true;
+          if (getWaveBookedCount(shift, wave.id) < wave.slotLimit) {
+            hasBookableWave = true;
+          }
+          if (access.targetTime && access.targetTime < closeTarget) {
+            closeTarget = access.targetTime;
+            closeCountdown = access.countdown;
+          }
+          return;
+        }
+
+        if (access.state === 'scheduled' && access.targetTime && access.targetTime < scheduledTarget) {
+          scheduledTarget = access.targetTime;
+          scheduledCountdown = access.countdown;
+        }
+        if (access.state === 'expired') {
+          hasExpiredWave = true;
+        }
+      });
+  });
+
+  if (hasBookableWave) {
+    return {
+      state: 'open' as const,
+      canBook: true,
+      label: closeCountdown ? `Хаагдахад ${closeCountdown}` : 'Нээлттэй',
+      countdown: closeCountdown,
+    };
+  }
+
+  if (hasOpenWave) {
+    return {
+      state: 'full' as const,
+      canBook: false,
+      label: closeCountdown ? `Хаагдахад ${closeCountdown}` : 'Нээлттэй',
+      countdown: closeCountdown,
+    };
+  }
+
+  if (scheduledCountdown) {
+    return {
+      state: 'scheduled' as const,
+      canBook: false,
+      label: `Нээгдэхэд ${scheduledCountdown}`,
+      countdown: scheduledCountdown,
+    };
+  }
+
+  if (hasExpiredWave) {
+    return { state: 'expired' as const, canBook: false, label: 'Хаагдсан', countdown: '' };
+  }
+
+  return { state: 'closed' as const, canBook: false, label: 'Хаалттай', countdown: '' };
 };
 
 const formatShiftTimeForDisplay = (timeStr?: string) => {
@@ -259,7 +385,7 @@ function formatDateHeader(date: Date) {
 const DayRow = React.memo(({ 
   date, isToday, isTomorrow, isYesterday, isPast, 
   dayData, csrProfile, isSubmitted, 
-  onBookShift, onTradeShift 
+  onBookShift, onTradeShift, nowTick,
 }: any) => {
   const dateKey = formatDateKey(date);
   const myBookedShift = dayData.shifts.find((s: any) => s.bookedBy?.some((b: any) => b.userId === csrProfile.id));
@@ -267,7 +393,22 @@ const DayRow = React.memo(({
   const isWeekend = date.getDay() === 0 || date.getDay() === 6;
   const shouldBeRed = isHoliday || isWeekend;
   const hasData = dayData.shifts.length > 0;
-  const isBookingOpen = isBookingAvailable(dayData);
+  const bookingAccess = getDayBookingAccess(dayData, nowTick);
+  const isBookingOpen = bookingAccess.canBook;
+  const bookingStatusText = bookingAccess.state === 'scheduled'
+    ? `Захиалга ${bookingAccess.label.toLowerCase()}`
+    : bookingAccess.state === 'open' || bookingAccess.state === 'full'
+      ? `Захиалга ${bookingAccess.label.toLowerCase()}`
+      : bookingAccess.state === 'expired'
+        ? 'Захиалга хаагдсан'
+        : 'Захиалга хараахан нээгдээгүй байна';
+  const disabledBookingLabel = bookingAccess.state === 'scheduled'
+    ? bookingAccess.label
+    : bookingAccess.state === 'expired'
+      ? 'Хаагдсан'
+      : bookingAccess.state === 'full'
+        ? 'Дүүрсэн'
+        : 'Нээгдээгүй';
 
   return (
     <div 
@@ -343,11 +484,10 @@ const DayRow = React.memo(({
                 ? 'Ажиллаж дууссан' 
                 : !hasData 
                   ? 'Уучлаарай, хуваарь одоогоор ороогүй байна' 
-                  : !isBookingOpen && !myBookedShift
-                    ? 'Захиалга хараахан нээгдээгүй байна'
+                  : !myBookedShift
+                    ? bookingStatusText
                   : isToday 
                     ? (() => {
-                        if (!myBookedShift) return 'Батлагдсан хуваарь';
                         const endTime = getShiftEndTime(myBookedShift.time);
                         if (!endTime) return 'Батлагдсан хуваарь';
                         const now = new Date();
@@ -363,7 +503,7 @@ const DayRow = React.memo(({
         <div className="flex flex-wrap items-center gap-3">
           {hasData ? (
             <div className="flex flex-wrap items-center gap-2">
-              {(isToday || isPast) ? (
+              {isPast ? (
                 myBookedShift && (
                   <div className="px-4 py-2 rounded-xl border bg-green-500/10 border-green-500/30 text-green-400 flex items-center gap-3">
                     <Clock size={16} />
@@ -433,10 +573,10 @@ const DayRow = React.memo(({
                       ) : (
                         <button
                           disabled
-                          className="px-6 py-2.5 rounded-xl bg-gray-800/50 text-gray-600 font-bold border border-gray-800 flex items-center gap-2 cursor-not-allowed opacity-60"
+                          className="px-6 py-2.5 rounded-xl bg-gray-800/50 text-gray-500 font-bold border border-gray-800 flex items-center gap-2 cursor-not-allowed opacity-70"
                         >
                           <Lock size={18} />
-                          Нээгдээгүй
+                          {disabledBookingLabel}
                         </button>
                       )
                     )
@@ -471,6 +611,7 @@ export default function CsrDashboard() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [filterStep, setFilterStep] = useState<'year' | 'month'>('year');
   const [tempYear, setTempYear] = useState(new Date().getFullYear());
+  const [nowTick, setNowTick] = useState(Date.now());
   
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [tradeRequests, setTradeRequests] = useState<TradeRequest[]>([]);
@@ -478,6 +619,11 @@ export default function CsrDashboard() {
   const lastDataRef = useRef<string>('');
   const [vacationRequests, setVacationRequests] = useState<VacationRequest[]>([]);
   const [vacationQuotas, setVacationQuotas] = useState<VacationQuota[]>([]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [trainingMaterials, setTrainingMaterials] = useState<TrainingMaterial[]>([]);
   const [isStatsExpanded, setIsStatsExpanded] = useState(false);
   const [submittedMonths, setSubmittedMonths] = useState<string[]>([]);
@@ -526,8 +672,6 @@ export default function CsrDashboard() {
     return new Set((holidays as any[]).filter(h => h?.date).map(h => h.date));
   }, [holidays]);
 
-  const effectiveMonthlyFontTime = monthlyFontTime;
-
   const { monthlyBookedHours, regularWorkedHours, holidayWorkedHours, totalAvailableHours } = React.useMemo(() => {
     let monthlyBookedHours = 0;
     let regularWorkedHours = 0;
@@ -546,9 +690,7 @@ export default function CsrDashboard() {
           totalAvailableHours += isHoliday ? 0 : hours;
           if (shift.bookedBy?.some(b => b.userId === csrProfile?.id)) {
             if (isHoliday) {
-              if (isPastDate) {
-                holidayWorkedHours += hours;
-              }
+              holidayWorkedHours += hours;
             } else {
               monthlyBookedHours += hours;
               if (isPastDate) {
@@ -581,8 +723,12 @@ export default function CsrDashboard() {
   }, [vacationRequests, currentMonthKey]);
 
   const totalExecutionHours = regularWorkedHours + sickHours + leaveHours;
+  const effectiveMonthlyFontTime = Math.max(monthlyFontTime, monthlyBookedHours);
+  const progressBaseHours = Math.max(effectiveMonthlyFontTime, totalExecutionHours, 1);
+  const executionPointerPercent = Math.min((totalExecutionHours / progressBaseHours) * 100, 100);
+  const getProgressWidth = (hours: number) => `${Math.max(0, Math.min((hours / progressBaseHours) * 100, 100))}%`;
   const overtimeHours = Math.max(0, totalExecutionHours - effectiveMonthlyFontTime);
-  const executionPercentage = effectiveMonthlyFontTime > 0 ? Math.min(Math.round((totalExecutionHours / effectiveMonthlyFontTime) * 100), 100) : 0;
+  const executionPercentage = Math.min(Math.round((totalExecutionHours / progressBaseHours) * 100), 100);
 
   const hasMonthData = React.useMemo(() => {
     return Object.keys(schedule).some(key => key.startsWith(currentMonthKey) && schedule[key].shifts.length > 0);
@@ -735,6 +881,7 @@ export default function CsrDashboard() {
           holidayName: holiday ? holiday.name : dayData.holidayName,
           bookingOpen: !!dayData.bookingOpen,
           bookingOpenAt: dayData.bookingOpenAt || '',
+          bookingCloseAt: dayData.bookingCloseAt || '',
           shifts: (dayData.shifts || []).filter((s: any) => {
             const matchesSegment = (s.segment === 'All') || 
                                   (s.segment === csrProfile.lineType) || 
@@ -1135,7 +1282,8 @@ export default function CsrDashboard() {
       return;
     }
 
-    if (!isBookingAvailable(dayData)) {
+    const dayAccess = getDayBookingAccess(dayData, nowTick);
+    if (!dayAccess.canBook) {
       alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
       return;
     }
@@ -1157,24 +1305,18 @@ export default function CsrDashboard() {
       return;
     }
 
-    const availableWaves = getOpenBookingWaves(targetShift, dayData);
+    const availableWaves = getOpenBookingWaves(targetShift, dayData, nowTick);
     const targetWave = bookingWaveId
-      ? getBookingWavesForShift(targetShift, !!dayData.bookingOpen, dayData.bookingOpenAt || '').find(wave => wave.id === bookingWaveId)
+      ? getBookingWavesForShift(targetShift, !!dayData.bookingOpen, dayData.bookingOpenAt || '', dayData.bookingCloseAt || '').find(wave => wave.id === bookingWaveId)
       : availableWaves[0];
 
-    if (!targetWave || !isWaveCurrentlyOpen(targetWave)) {
+    if (!targetWave || !isWaveCurrentlyOpen(targetWave, nowTick)) {
       alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
       return;
     }
 
     if (getWaveBookedCount(targetShift, targetWave.id) >= targetWave.slotLimit) {
       alert('Энэ захиалах эрхийн slot дүүрсэн байна.');
-      return;
-    }
-
-    const shiftHours = holidayDates.has(dateKey) ? 0 : calculateHours(targetShift.time);
-    if (monthlyBookedHours + shiftHours > effectiveMonthlyFontTime) {
-      alert(`Таны сарын фонт цаг (${effectiveMonthlyFontTime} цаг) хэтрэх гээд байна. Та одоогоор ${monthlyBookedHours} цаг захиалсан байна.`);
       return;
     }
 
@@ -1208,7 +1350,7 @@ export default function CsrDashboard() {
       const globalSchedules = getLocalData('schedules', {});
       const globalDayData = globalSchedules[dateKey] || { shifts: [] };
       const globalTargetShift = globalDayData.shifts.find((s: any) => s.id === targetShift.id);
-      if (!isBookingAvailable(globalDayData) || !globalTargetShift) {
+      if (!globalTargetShift) {
         alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
         return;
       }
@@ -1221,9 +1363,9 @@ export default function CsrDashboard() {
         return;
       }
 
-      const globalTargetWave = getBookingWavesForShift(globalTargetShift, !!globalDayData.bookingOpen, globalDayData.bookingOpenAt || '')
+      const globalTargetWave = getBookingWavesForShift(globalTargetShift, !!globalDayData.bookingOpen, globalDayData.bookingOpenAt || '', globalDayData.bookingCloseAt || '')
         .find((wave: BookingWave) => wave.id === targetWave.id);
-      if (!globalTargetWave || !isWaveCurrentlyOpen(globalTargetWave)) {
+      if (!globalTargetWave || !isWaveCurrentlyOpen(globalTargetWave, nowTick)) {
         alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
         return;
       }
@@ -1262,7 +1404,7 @@ export default function CsrDashboard() {
       console.error('Error booking shift:', error);
       alert('Ээлж захиалахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, monthlyBookedHours, effectiveMonthlyFontTime, csrProfile, holidayDates]);
+  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick]);
 
   const handleCancelShift = React.useCallback((dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
@@ -1313,7 +1455,7 @@ export default function CsrDashboard() {
     } catch (error) {
       console.error('Error cancelling shift:', error);
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile, effectiveMonthlyFontTime]);
+  }, [schedule, submittedMonths, currentMonthKey, csrProfile]);
 
   const handleTradeShift = React.useCallback((dateKey: string) => {
     setTradingModal({ isOpen: true, dateKey, step: 'times' });
@@ -1321,11 +1463,6 @@ export default function CsrDashboard() {
 
   const handleSubmitSchedule = () => {
     if (!csrProfile) return;
-    
-    if (monthlyBookedHours !== effectiveMonthlyFontTime) {
-      alert(`Таны захиалсан цаг (${monthlyBookedHours}) фонт цагтай (${effectiveMonthlyFontTime}) таарахгүй байна. Яг тааруулж захиална уу.`);
-      return;
-    }
 
     if (schedule && Object.keys(schedule).filter(d => d.startsWith(currentMonthKey) && schedule[d].shifts.some(s => s.bookedBy?.some(b => b.userId === csrProfile.id))).length === 0) {
       alert('Та дор хаяж нэг өдөр ээлж захиалах ёстой.');
@@ -1375,7 +1512,7 @@ export default function CsrDashboard() {
               <div 
                 className="absolute top-0 transition-all duration-1000 flex flex-col items-center"
                 style={{ 
-                  left: `${((regularWorkedHours + sickHours + leaveHours) / effectiveMonthlyFontTime) * 100}%`,
+                  left: `${executionPointerPercent}%`,
                   transform: 'translateX(-50%)'
                 }}
               >
@@ -1388,15 +1525,15 @@ export default function CsrDashboard() {
               <div className="h-2.5 bg-gray-800/50 rounded-full overflow-hidden flex border border-gray-700/30">
                 <div 
                   className="h-full bg-white transition-all duration-1000 shadow-[0_0_10px_rgba(255,255,255,0.2)]"
-                  style={{ width: `${(regularWorkedHours / effectiveMonthlyFontTime) * 100}%` }}
+                  style={{ width: getProgressWidth(regularWorkedHours) }}
                 />
                 <div 
                   className="h-full bg-red-500 transition-all duration-1000 shadow-[0_0_10px_rgba(239,68,68,0.2)]"
-                  style={{ width: `${(sickHours / effectiveMonthlyFontTime) * 100}%` }}
+                  style={{ width: getProgressWidth(sickHours) }}
                 />
                 <div 
                   className="h-full bg-orange-500 transition-all duration-1000 shadow-[0_0_10px_rgba(249,115,22,0.2)]"
-                  style={{ width: `${(leaveHours / effectiveMonthlyFontTime) * 100}%` }}
+                  style={{ width: getProgressWidth(leaveHours) }}
                 />
               </div>
             </div>
@@ -1470,6 +1607,7 @@ export default function CsrDashboard() {
                 isSubmitted={isSubmitted}
                 onBookShift={handleBookShift}
                 onTradeShift={handleTradeShift}
+                nowTick={nowTick}
               />
             );
           })}
@@ -2385,7 +2523,7 @@ export default function CsrDashboard() {
                   {(schedule[bookingModal.dateKey]?.shifts || []).map((shift, idx) => {
                     const isFull = shift.bookedSlots >= shift.totalSlots;
                     const dayData = schedule[bookingModal.dateKey];
-                    const waves = getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '');
+                    const waves = getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '', dayData?.bookingCloseAt || '');
                     return (
                       <div
                         key={`booking-shift-${shift.id}-${idx}`}
@@ -2437,15 +2575,19 @@ export default function CsrDashboard() {
                             {waves.map(wave => {
                               const booked = getWaveBookedCount(shift, wave.id);
                               const waveFull = booked >= wave.slotLimit;
-                              const waveOpen = isWaveCurrentlyOpen(wave);
+                              const waveAccess = getWaveAccessState(wave, nowTick);
+                              const waveOpen = waveAccess.state === 'open';
                               const canBook = !isFull && !waveFull && waveOpen;
+                              const statusLabel = waveFull
+                                ? 'Дүүрсэн'
+                                : waveAccess.label;
                               return (
                                 <div key={wave.id} className={`rounded-2xl border p-3 ${canBook ? 'border-blue-500/30 bg-blue-500/5' : 'border-white/5 bg-black/20 opacity-70'}`}>
                                   <div className="flex items-center justify-between gap-3">
                                     <div>
                                       <p className="text-xs font-black text-white">{wave.name}</p>
                                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                                        {booked}/{wave.slotLimit} {waveOpen ? 'нээлттэй' : 'хаалттай'}
+                                        {booked}/{wave.slotLimit} {statusLabel}
                                       </p>
                                     </div>
                                     {canBook ? (
@@ -2460,7 +2602,7 @@ export default function CsrDashboard() {
                                       </button>
                                     ) : (
                                       <span className="rounded-xl bg-gray-800 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-gray-500">
-                                        {waveFull ? 'Дүүрсэн' : 'Хаалттай'}
+                                        {waveFull ? 'Дүүрсэн' : waveAccess.state === 'expired' ? 'Хаагдсан' : waveAccess.state === 'scheduled' ? 'Хүлээгдэж байна' : 'Хаалттай'}
                                       </span>
                                     )}
                                   </div>

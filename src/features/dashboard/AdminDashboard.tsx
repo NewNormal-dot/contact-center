@@ -3306,6 +3306,7 @@ export default function AdminDashboard() {
 
       const newSchedules = { ...schedules };
       const nextBookingOpenAt = isOpen ? bookingOpenAtInput : "";
+      const nextBookingCloseAt = isOpen ? bookingCloseAtInput : "";
       datesWithSchedules.forEach((dateKey) => {
         const day = newSchedules[dateKey] || { shifts: [] };
         const nextShifts = (day.shifts || []).map((shift: any) => ({
@@ -3314,10 +3315,12 @@ export default function AdminDashboard() {
             shift,
             isOpen,
             nextBookingOpenAt,
+            nextBookingCloseAt,
           ).map((wave) => ({
             ...wave,
             bookingOpen: isOpen,
             bookingOpenAt: nextBookingOpenAt,
+            bookingCloseAt: nextBookingCloseAt,
           })),
         }));
 
@@ -3326,6 +3329,7 @@ export default function AdminDashboard() {
           shifts: nextShifts,
           bookingOpen: isOpen,
           bookingOpenAt: nextBookingOpenAt,
+          bookingCloseAt: nextBookingCloseAt,
         };
       });
 
@@ -3826,6 +3830,7 @@ export default function AdminDashboard() {
                           shift,
                           !!schedules[selectedDateSchedule]?.bookingOpen,
                           schedules[selectedDateSchedule]?.bookingOpenAt || "",
+                          schedules[selectedDateSchedule]?.bookingCloseAt || "",
                         ),
                         dateKey: selectedDateSchedule,
                       }
@@ -3980,6 +3985,7 @@ export default function AdminDashboard() {
                         shift,
                         !!currentSchedule.bookingOpen,
                         currentSchedule.bookingOpenAt || "",
+                        currentSchedule.bookingCloseAt || "",
                       );
                       const updatedWaves = existingWaves.map((wave) =>
                         getWaveKind(wave) === waveKind
@@ -4035,6 +4041,7 @@ export default function AdminDashboard() {
                       shift,
                       !!currentSchedule.bookingOpen,
                       currentSchedule.bookingOpenAt || "",
+                      currentSchedule.bookingCloseAt || "",
                     );
                     let shiftTouched = false;
                     const updatedWaves = waves.map((wave) => {
@@ -4379,6 +4386,7 @@ export default function AdminDashboard() {
                             shift,
                             !!schedules[selectedDateSchedule]?.bookingOpen,
                             schedules[selectedDateSchedule]?.bookingOpenAt || "",
+                            schedules[selectedDateSchedule]?.bookingCloseAt || "",
                           );
                           const morningWave = bookingWaves.find((wave) => getWaveKind(wave) === "morning") || createBookingWave(MORNING_WAVE_NAME, 0);
                           const eveningWave = bookingWaves.find((wave) => getWaveKind(wave) === "evening") || createBookingWave(EVENING_WAVE_NAME, 0);
