@@ -35,7 +35,16 @@ function formatDateDisplay(date: Date) {
 }
 
 function formatDateKey(date: Date) {
-  return date.toISOString().split('T')[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatMonthKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
 }
 
 // Generate display days: 7 days past, Today, and until the Sunday of the next week
@@ -607,7 +616,7 @@ export default function CsrDashboard() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [schedule, setSchedule] = useState<Record<string, DayData>>({});
-  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [selectedMonth, setSelectedMonth] = useState(formatMonthKey(new Date()));
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [filterStep, setFilterStep] = useState<'year' | 'month'>('year');
   const [tempYear, setTempYear] = useState(new Date().getFullYear());
@@ -1763,7 +1772,7 @@ export default function CsrDashboard() {
     endDate: string;
     reason: string;
     type: 'vacation' | 'sick' | 'leave';
-  }>({ month: new Date().toISOString().slice(0, 7), startDate: '', endDate: '', reason: '', type: 'vacation' });
+  }>({ month: formatMonthKey(new Date()), startDate: '', endDate: '', reason: '', type: 'vacation' });
 
   const handleRequestVacation = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1810,7 +1819,7 @@ export default function CsrDashboard() {
       addLocalItem('vacationRequests', newRequest);
       logAction('Vacation Requested', `Requested vacation for ${vacationForm.month}`);
       setIsRequestingVacation(false);
-      setVacationForm({ month: new Date().toISOString().slice(0, 7), startDate: '', endDate: '', reason: '', type: 'vacation' });
+      setVacationForm({ month: formatMonthKey(new Date()), startDate: '', endDate: '', reason: '', type: 'vacation' });
     } catch (error) {
       console.error('Error requesting vacation:', error);
     }
