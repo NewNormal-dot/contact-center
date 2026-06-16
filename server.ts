@@ -13,6 +13,7 @@ import broadcastRoutes from "./src/api/broadcasts";
 import auditRoutes from "./src/api/audit";
 import tradeRoutes from "./src/api/trades";
 import forecastRoutes from "./src/api/forecast";
+import ruleRoutes from "./src/api/rules";
 import db from "./src/database/db";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,6 +53,7 @@ async function startServer() {
   app.use("/api/audit", auditRoutes);
   app.use("/api/trades", tradeRoutes);
   app.use("/api/forecast", forecastRoutes);
+  app.use("/api/rules", ruleRoutes);
 
   // API Health Check
   app.get("/api/health", (req, res) => {

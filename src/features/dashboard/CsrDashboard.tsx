@@ -47,6 +47,52 @@ function formatMonthKey(date: Date) {
   return `${year}-${month}`;
 }
 
+type WeeklyShiftRule = {
+  totalHours: number;
+  sixHourShifts: number;
+  sevenHourShifts: number;
+  restDays: number;
+};
+
+const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
+  totalHours: 40,
+  sixHourShifts: 3,
+  sevenHourShifts: 3,
+  restDays: 1,
+};
+
+const makeSegmentTypeKey = (segment: string, employmentType: string) =>
+  `${segment || 'All'}|${employmentType || 'Full Time'}`;
+
+const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string) =>
+  `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
+
+const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => ({
+  totalHours: Math.max(0, Number(value?.totalHours ?? DEFAULT_WEEKLY_SHIFT_RULE.totalHours) || 0),
+  sixHourShifts: Math.max(0, Number(value?.sixHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sixHourShifts) || 0),
+  sevenHourShifts: Math.max(0, Number(value?.sevenHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sevenHourShifts) || 0),
+  restDays: Math.max(0, Math.min(7, Number(value?.restDays ?? DEFAULT_WEEKLY_SHIFT_RULE.restDays) || 0)),
+});
+
+const getWeekStartDateKey = (dateKey: string) => {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  const dayOfWeek = date.getDay();
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  date.setDate(date.getDate() + diffToMonday);
+  return formatDateKey(date);
+};
+
+const getWeekDateKeys = (dateKey: string) => {
+  const [year, month, day] = getWeekStartDateKey(dateKey).split('-').map(Number);
+  const start = new Date(year, month - 1, day);
+  return Array.from({ length: 7 }, (_, index) => {
+    const current = new Date(start);
+    current.setDate(start.getDate() + index);
+    return formatDateKey(current);
+  });
+};
+
 // Generate display days: 7 days past, Today, and until the Sunday of the next week
 function generateFullScheduleWindow(referenceDate: Date) {
   const days = [];
@@ -639,6 +685,8 @@ export default function CsrDashboard() {
   const [vacationYear, setVacationYear] = useState(new Date().getFullYear());
   const [isVacationFilterOpen, setIsVacationFilterOpen] = useState(false);
   const [holidays, setHolidays] = useState<{date: string, name: string}[]>([]);
+  const [monthlyFontHourRules, setMonthlyFontHourRules] = useState<Record<string, number>>({});
+  const [weeklyShiftRules, setWeeklyShiftRules] = useState<Record<string, WeeklyShiftRule>>({});
   const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === csrProfile?.id)).length;
 
   useEffect(() => {
@@ -675,7 +723,15 @@ export default function CsrDashboard() {
   };
 
   const currentMonthKey = selectedMonth;
-  const monthlyFontTime = csrProfile?.monthlyFontTime?.[currentMonthKey] || 0;
+  const csrSegment = csrProfile?.lineType || '';
+  const csrEmploymentType = csrProfile?.employmentType || 'Full Time';
+  const monthlyFontTime = Math.max(
+    0,
+    Number(monthlyFontHourRules[makeMonthlyFontHourKey(currentMonthKey, csrSegment, csrEmploymentType)] ?? csrProfile?.monthlyFontTime?.[currentMonthKey] ?? 0) || 0,
+  );
+  const activeWeeklyRule = normalizeWeeklyShiftRule(
+    weeklyShiftRules[makeSegmentTypeKey(csrSegment, csrEmploymentType)],
+  );
 
   const holidayDates = React.useMemo(() => {
     return new Set((holidays as any[]).filter(h => h?.date).map(h => h.date));
@@ -840,6 +896,18 @@ export default function CsrDashboard() {
     }
   };
 
+
+
+  const fetchShiftRules = async () => {
+    try {
+      const response = await apiClient.get('/rules');
+      setMonthlyFontHourRules(response.data?.monthlyFontHourRules || {});
+      setWeeklyShiftRules(response.data?.weeklyShiftRules || {});
+    } catch (error) {
+      console.error('Error fetching shift rules:', error);
+    }
+  };
+
   // Real-time listeners (Mocked with Polling)
   useEffect(() => {
     if (!csrProfile) return;
@@ -917,9 +985,11 @@ export default function CsrDashboard() {
     loadData();
     fetchNotifications();
     fetchVacationRequests();
+    fetchShiftRules();
     const interval = setInterval(loadData, 2000);
     const notificationInterval = setInterval(fetchNotifications, 10000);
     const vacationInterval = setInterval(fetchVacationRequests, 10000);
+    const shiftRuleInterval = setInterval(fetchShiftRules, 5000);
     
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
@@ -932,6 +1002,7 @@ export default function CsrDashboard() {
       clearInterval(interval);
       clearInterval(notificationInterval);
       clearInterval(vacationInterval);
+      clearInterval(shiftRuleInterval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);
@@ -1282,6 +1353,48 @@ export default function CsrDashboard() {
     }
   }, [activeTab]);
 
+  const getMyWeeklyBookingStats = React.useCallback((dateKey: string, sourceSchedule: Record<string, DayData>) => {
+    const weekDateKeys = getWeekDateKeys(dateKey);
+    let sixHourShifts = 0;
+    let sevenHourShifts = 0;
+    let bookedDays = 0;
+    let hours = 0;
+
+    weekDateKeys.forEach((weekDateKey) => {
+      const bookedShift = sourceSchedule[weekDateKey]?.shifts?.find((shift) =>
+        shift.bookedBy?.some((booking) => booking.userId === csrProfile.id),
+      );
+      if (!bookedShift) return;
+      const shiftHours = calculateHours(bookedShift.time);
+      hours += shiftHours;
+      bookedDays += 1;
+      if (Math.round(shiftHours) === 6) sixHourShifts += 1;
+      if (Math.round(shiftHours) === 7) sevenHourShifts += 1;
+    });
+
+    return { sixHourShifts, sevenHourShifts, bookedDays, hours };
+  }, [csrProfile.id]);
+
+  const validateShiftRuleBeforeBooking = React.useCallback((dateKey: string, targetShift: Shift, sourceSchedule: Record<string, DayData>) => {
+    const shiftHours = calculateHours(targetShift.time);
+    const weekStats = getMyWeeklyBookingStats(dateKey, sourceSchedule);
+    const maxWorkingDays = Math.max(0, 7 - activeWeeklyRule.restDays);
+
+    if (maxWorkingDays > 0 && weekStats.bookedDays + 1 > maxWorkingDays) {
+      return `Энэ 7 хоногт ${activeWeeklyRule.restDays} өдөр амрах тохиргоотой тул нийт ${maxWorkingDays} өдрөөс илүү shift сонгох боломжгүй.`;
+    }
+
+    if (Math.round(shiftHours) === 6 && weekStats.sixHourShifts + 1 > activeWeeklyRule.sixHourShifts) {
+      return `Энэ 7 хоногт 6 цагтай shift хамгийн ихдээ ${activeWeeklyRule.sixHourShifts} удаа сонгоно.`;
+    }
+
+    if (Math.round(shiftHours) === 7 && weekStats.sevenHourShifts + 1 > activeWeeklyRule.sevenHourShifts) {
+      return `Энэ 7 хоногт 7 цагтай shift хамгийн ихдээ ${activeWeeklyRule.sevenHourShifts} удаа сонгоно.`;
+    }
+
+    return '';
+  }, [activeWeeklyRule, getMyWeeklyBookingStats]);
+
   const handleBookShift = React.useCallback((dateKey: string, shiftId?: string, bookingWaveId?: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
@@ -1311,6 +1424,12 @@ export default function CsrDashboard() {
 
     if (!targetShift) {
       alert('Энэ ээлж дүүрсэн эсвэл байхгүй байна.');
+      return;
+    }
+
+    const ruleError = validateShiftRuleBeforeBooking(dateKey, targetShift, schedule);
+    if (ruleError) {
+      alert(ruleError);
       return;
     }
 
@@ -1372,6 +1491,12 @@ export default function CsrDashboard() {
         return;
       }
 
+      const globalRuleError = validateShiftRuleBeforeBooking(dateKey, globalTargetShift, globalSchedules);
+      if (globalRuleError) {
+        alert(globalRuleError);
+        return;
+      }
+
       const globalTargetWave = getBookingWavesForShift(globalTargetShift, !!globalDayData.bookingOpen, globalDayData.bookingOpenAt || '', globalDayData.bookingCloseAt || '')
         .find((wave: BookingWave) => wave.id === targetWave.id);
       if (!globalTargetWave || !isWaveCurrentlyOpen(globalTargetWave, nowTick)) {
@@ -1413,7 +1538,7 @@ export default function CsrDashboard() {
       console.error('Error booking shift:', error);
       alert('Ээлж захиалахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick]);
+  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking]);
 
   const handleCancelShift = React.useCallback((dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
@@ -1476,6 +1601,30 @@ export default function CsrDashboard() {
     if (schedule && Object.keys(schedule).filter(d => d.startsWith(currentMonthKey) && schedule[d].shifts.some(s => s.bookedBy?.some(b => b.userId === csrProfile.id))).length === 0) {
       alert('Та дор хаяж нэг өдөр ээлж захиалах ёстой.');
       return;
+    }
+
+    const monthWeekKeys = Array.from(new Set(
+      Object.keys(schedule)
+        .filter((dateKey) => dateKey.startsWith(currentMonthKey))
+        .map((dateKey) => getWeekStartDateKey(dateKey)),
+    ));
+
+    for (const weekStartKey of monthWeekKeys) {
+      const weekStats = getMyWeeklyBookingStats(weekStartKey, schedule);
+      if (weekStats.bookedDays === 0) continue;
+      const maxWorkingDays = Math.max(0, 7 - activeWeeklyRule.restDays);
+      if (maxWorkingDays > 0 && weekStats.bookedDays > maxWorkingDays) {
+        alert(`${weekStartKey}-с эхлэх 7 хоногт амралтын өдрийн тохиргоо зөрчсөн байна.`);
+        return;
+      }
+      if (weekStats.sixHourShifts > activeWeeklyRule.sixHourShifts) {
+        alert(`${weekStartKey}-с эхлэх 7 хоногт 6 цагтай shift ${activeWeeklyRule.sixHourShifts}-аас их байна.`);
+        return;
+      }
+      if (weekStats.sevenHourShifts > activeWeeklyRule.sevenHourShifts) {
+        alert(`${weekStartKey}-с эхлэх 7 хоногт 7 цагтай shift ${activeWeeklyRule.sevenHourShifts}-аас их байна.`);
+        return;
+      }
     }
 
     try {
@@ -2332,7 +2481,7 @@ export default function CsrDashboard() {
         <ChatWindow isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
         <button 
           onClick={() => setIsChatOpen(!isChatOpen)}
-          className="absolute bottom-6 right-6 sm:bottom-8 sm:right-8 p-3.5 sm:p-4 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-2xl hover:shadow-blue-500/40 transform hover:-translate-y-1 hover:scale-105 transition-all duration-300 z-50"
+          className="absolute bottom-6 right-6 sm:bottom-8 sm:right-8 p-3.5 sm:p-4 rounded-full bg-pink-500 text-white shadow-2xl hover:shadow-pink-500/40 transform hover:-translate-y-1 hover:scale-105 transition-all duration-300 z-50"
           aria-label="Open Chat"
         >
           <MessageCircle size={24} />

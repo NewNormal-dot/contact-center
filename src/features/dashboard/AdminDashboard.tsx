@@ -88,6 +88,16 @@ const ENG_MONTHS = [
   "DEC",
 ];
 
+const EMPLOYEE_LOCATIONS = ["Ulaanbaatar", "Darkhan"] as const;
+type EmployeeLocation = (typeof EMPLOYEE_LOCATIONS)[number];
+
+const normalizeEmployeeLocation = (value: unknown): EmployeeLocation | "" => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return (
+    EMPLOYEE_LOCATIONS.find((location) => location.toLowerCase() === normalized) || ""
+  );
+};
+
 const formatMonthShort = (monthIndex: number) => {
   const month = ENG_MONTHS[monthIndex] || "";
   return month.charAt(0) + month.slice(1).toLowerCase();
@@ -369,6 +379,34 @@ const isWaveCurrentlyOpen = (wave: BookingWaveDraft) => {
 const sumWaveSlots = (waves: BookingWaveDraft[] = []) =>
   waves.reduce((sum, wave) => sum + (Number(wave.slotLimit) || 0), 0);
 
+
+type WeeklyShiftRule = {
+  totalHours: number;
+  sixHourShifts: number;
+  sevenHourShifts: number;
+  restDays: number;
+};
+
+const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
+  totalHours: 40,
+  sixHourShifts: 3,
+  sevenHourShifts: 3,
+  restDays: 1,
+};
+
+const makeSegmentTypeKey = (segment: string, employmentType: string) =>
+  `${segment || "All"}|${employmentType || "Full Time"}`;
+
+const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string) =>
+  `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
+
+const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => ({
+  totalHours: Math.max(0, Number(value?.totalHours ?? DEFAULT_WEEKLY_SHIFT_RULE.totalHours) || 0),
+  sixHourShifts: Math.max(0, Number(value?.sixHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sixHourShifts) || 0),
+  sevenHourShifts: Math.max(0, Number(value?.sevenHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sevenHourShifts) || 0),
+  restDays: Math.max(0, Math.min(7, Number(value?.restDays ?? DEFAULT_WEEKLY_SHIFT_RULE.restDays) || 0)),
+});
+
 type BulkUploadUser = Partial<CSR> & {
   rowNumber: number;
   error?: string;
@@ -400,6 +438,8 @@ export default function AdminDashboard() {
   const [monthlyQuotas, setMonthlyQuotas] = useState<Record<number, number>>(
     {},
   );
+  const [monthlyFontHourRules, setMonthlyFontHourRules] = useState<Record<string, number>>({});
+  const [weeklyShiftRules, setWeeklyShiftRules] = useState<Record<string, WeeklyShiftRule>>({});
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const lastDataRef = useRef<string>("");
 
@@ -532,7 +572,7 @@ export default function AdminDashboard() {
     return {
       id: raw.id,
       code: raw.code || "",
-      location: raw.location || "",
+      location: normalizeEmployeeLocation(raw.location) || raw.location || "",
       name,
       email: raw.email || "",
       lineType: raw.lineType || raw.segment || "",
@@ -636,6 +676,49 @@ export default function AdminDashboard() {
     }
   };
 
+
+
+  const fetchShiftRules = async () => {
+    try {
+      const response = await apiClient.get("/rules");
+      const nextMonthlyRules = response.data?.monthlyFontHourRules || {};
+      const nextWeeklyRules = response.data?.weeklyShiftRules || {};
+      setMonthlyFontHourRules(nextMonthlyRules);
+      setWeeklyShiftRules(nextWeeklyRules);
+      return { monthlyFontHourRules: nextMonthlyRules, weeklyShiftRules: nextWeeklyRules };
+    } catch (error) {
+      console.error("Error fetching shift rules:", error);
+      return { monthlyFontHourRules, weeklyShiftRules };
+    }
+  };
+
+  const saveMonthlyFontHoursRule = async (
+    monthKey: string,
+    segment: string,
+    employmentType: "Full Time" | "Part Time",
+    hours: number,
+  ) => {
+    const normalizedHours = Math.max(0, Number(hours) || 0);
+    await apiClient.put("/rules/monthly-font-hours", {
+      monthKey,
+      segment,
+      employmentType,
+      hours: normalizedHours,
+    });
+  };
+
+  const saveWeeklyShiftRule = async (
+    segment: string,
+    employmentType: "Full Time" | "Part Time",
+    rule: WeeklyShiftRule,
+  ) => {
+    await apiClient.put("/rules/weekly-shift-rules", {
+      segment,
+      employmentType,
+      rule: normalizeWeeklyShiftRule(rule),
+    });
+  };
+
   const generateRandomPassword = (length = 10) => {
     const charset =
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+";
@@ -689,6 +772,7 @@ export default function AdminDashboard() {
       }),
     );
     setSchedules(getLocalData("schedules", {}));
+    fetchShiftRules().catch(() => undefined);
     fetchLeaveRequests().catch(() =>
       setHourlyLeaveRequests(getLocalData("hourlyLeaveRequests", [])),
     );
@@ -816,6 +900,7 @@ export default function AdminDashboard() {
     const apiRefreshInterval = setInterval(() => {
       fetchLeaveRequests().catch(() => undefined);
       fetchVacationRequests().catch(() => undefined);
+      fetchShiftRules().catch(() => undefined);
     }, 10000);
 
     const handleStorageUpdate = (event: StorageEvent) => {
@@ -1149,7 +1234,7 @@ export default function AdminDashboard() {
     );
   };
 
-  const getCsrLocation = (csr: CSR) => csr.location || "";
+  const getCsrLocation = (csr: CSR) => normalizeEmployeeLocation(csr.location) || csr.location || "";
 
   const getCsrSearchText = (csr: CSR) =>
     [
@@ -1663,13 +1748,14 @@ export default function AdminDashboard() {
   });
 
   const handleAddUser = async () => {
+    const normalizedLocation = normalizeEmployeeLocation(newUser.location);
     if (
       !newUser.code ||
       !newUser.name ||
       !newUser.email ||
       !newUser.lineType ||
       !newUser.employmentType ||
-      !newUser.location
+      !normalizedLocation
     ) {
       alert(
         "Ажилтны код, User, e-mail, segment, Part/Full, Location бүгд шаардлагатай.",
@@ -1683,7 +1769,7 @@ export default function AdminDashboard() {
         code: newUser.code,
         name: newUser.name,
         email: newUser.email,
-        location: newUser.location,
+        location: normalizedLocation,
         password: randomPassword,
         role: "csr",
         status: "active",
@@ -1693,7 +1779,7 @@ export default function AdminDashboard() {
       const userToAdd = mapCsrForUi({
         ...response.data,
         segment: newUser.lineType,
-        location: newUser.location,
+        location: normalizedLocation,
         photoUrl: newUser.photoUrl,
       });
       const updatedUsers = [...csrs, userToAdd];
@@ -1726,17 +1812,22 @@ export default function AdminDashboard() {
 
   const handleUpdateUser = async () => {
     if (editingUser) {
+      const normalizedLocation = normalizeEmployeeLocation(editingUser.location);
+      if (!normalizedLocation) {
+        alert("Location заавал Ulaanbaatar эсвэл Darkhan байна.");
+        return;
+      }
       try {
         await apiClient.put(`/users/${editingUser.id}`, {
           code: editingUser.code,
           name: editingUser.name,
-          location: editingUser.location,
+          location: normalizedLocation,
           status: editingUser.status || "active",
           segment: editingUser.lineType,
           employmentType: editingUser.employmentType || "Full Time",
         });
         const updatedUsers = csrs.map((u: CSR) =>
-          u.id === editingUser.id ? editingUser : u,
+          u.id === editingUser.id ? { ...editingUser, location: normalizedLocation } : u,
         );
         setLocalData("users", updatedUsers);
         setCsrs(updatedUsers);
@@ -1865,16 +1956,17 @@ export default function AdminDashboard() {
             "Employee Code",
           ]);
           const segment = getExcelValue(row, ["segment", "Segment", "Сегмент"]);
-          const location = getExcelValue(row, [
+          const locationRaw = getExcelValue(row, [
             "Location",
             "location",
             "Байршил",
             "Салбар",
           ]);
+          const location = normalizeEmployeeLocation(locationRaw);
           const matchedSegment =
             segments.find(
               (existingSegment) =>
-                existingSegment.toLowerCase() === segment.toLowerCase(),
+                existingSegment.toLowerCase() === String(segment).toLowerCase(),
             ) || segment;
           const employmentType = normalizeEmploymentTypeInput(
             getExcelValue(row, [
@@ -1894,7 +1986,7 @@ export default function AdminDashboard() {
           if (!name) errors.push("User/нэр дутуу");
           if (!email) errors.push("e-mail дутуу");
           if (!segment) errors.push("segment дутуу");
-          if (!location) errors.push("Location дутуу");
+          if (!location) errors.push("Location нь Ulaanbaatar эсвэл Darkhan байх ёстой");
           if (normalizedEmail && existingEmails.has(normalizedEmail))
             errors.push("email бүртгэлтэй");
           if (normalizedEmail && fileEmails.has(normalizedEmail))
@@ -1955,7 +2047,7 @@ export default function AdminDashboard() {
         (segment) =>
           !segments.some(
             (existingSegment) =>
-              existingSegment.toLowerCase() === segment.toLowerCase(),
+              existingSegment.toLowerCase() === String(segment).toLowerCase(),
           ),
       );
       if (missingSegments.length > 0) {
@@ -2338,28 +2430,28 @@ export default function AdminDashboard() {
 
               <div className="bg-gray-900/40 border border-gray-800 rounded-3xl overflow-x-auto backdrop-blur-md shadow-2xl">
                 {members.length > 0 ? (
-                  <table className="w-full min-w-[1120px] text-left">
+                  <table className="w-full min-w-[1320px] table-fixed text-left">
                     <thead>
                       <tr className="border-b border-gray-800 bg-gray-800/30">
-                        <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest w-40">
+                        <th className="w-[140px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
                           Ажилтны код
                         </th>
-                        <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                        <th className="w-[230px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
                           User
                         </th>
-                        <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                        <th className="w-[300px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
                           e-mail
                         </th>
-                        <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                        <th className="w-[180px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
                           segment
                         </th>
-                        <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                        <th className="w-[170px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
                           Part/Full
                         </th>
-                        <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                        <th className="w-[170px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
                           Location
                         </th>
-                        <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest text-right">
+                        <th className="w-[130px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest text-right whitespace-nowrap">
                           Үйлдэл
                         </th>
                       </tr>
@@ -2370,29 +2462,29 @@ export default function AdminDashboard() {
                           key={csr.id}
                           className="hover:bg-blue-600/5 transition-all group"
                         >
-                          <td className="px-8 py-5">
+                          <td className="px-6 py-5 align-middle whitespace-nowrap">
                             <span className="text-sm font-black text-blue-500 group-hover:scale-110 transition-transform inline-block lowercase">
                               {csr.code || csr.id.slice(0, 6).toUpperCase()}
                             </span>
                           </td>
-                          <td className="px-8 py-5">
-                            <div className="text-lg font-black text-white group-hover:translate-x-1 transition-transform inline-block cursor-default tracking-wide uppercase">
+                          <td className="px-6 py-5 align-middle whitespace-nowrap">
+                            <div className="max-w-[210px] truncate text-base font-black text-white group-hover:translate-x-1 transition-transform inline-block cursor-default tracking-wide uppercase">
                               {csr.name}
                             </div>
                           </td>
-                          <td className="px-8 py-5">
-                            <div className="text-sm font-black text-white flex items-center gap-2">
-                              <Mail size={14} className="text-blue-500" />
+                          <td className="px-6 py-5 align-middle whitespace-nowrap">
+                            <div className="max-w-[280px] truncate text-sm font-black text-white flex items-center gap-2">
+                              <Mail size={14} className="shrink-0 text-blue-500" />
                               {csr.email ||
                                 `${csr.name.toLowerCase().replace(/\s/g, ".")}@example.com`}
                             </div>
                           </td>
-                          <td className="px-8 py-5">
-                            <span className="text-sm font-black uppercase tracking-widest text-white">
+                          <td className="px-6 py-5 align-middle whitespace-nowrap">
+                            <span className="block max-w-[160px] truncate text-sm font-black uppercase tracking-widest text-white">
                               {csr.lineType || "-"}
                             </span>
                           </td>
-                          <td className="px-8 py-5">
+                          <td className="px-6 py-5 align-middle whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <Clock size={14} className="text-blue-500" />
                               <span className="text-sm font-black uppercase tracking-widest text-white">
@@ -2400,12 +2492,13 @@ export default function AdminDashboard() {
                               </span>
                             </div>
                           </td>
-                          <td className="px-8 py-5">
+                          <td className="px-6 py-5 align-middle whitespace-nowrap">
                             <span className="text-sm font-bold text-gray-300">
                               {getCsrLocation(csr) || "-"}
                             </span>
                           </td>
-                          <td className="px-8 py-5 text-right flex items-center justify-end gap-1">
+                          <td className="px-6 py-5 text-right align-middle">
+                            <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => handleEditUserClick(csr)}
                               className="p-2.5 text-gray-600 hover:text-blue-500 hover:bg-blue-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
@@ -2432,6 +2525,7 @@ export default function AdminDashboard() {
                             >
                               <Trash2 size={20} />
                             </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -3266,6 +3360,32 @@ export default function AdminDashboard() {
       activeEmploymentView,
     );
 
+    const selectedMonthKey = `${selectedYearCalendar}-${String(selectedMonthCalendar + 1).padStart(2, "0")}`;
+    const activeRuleKey = makeSegmentTypeKey(activeSegmentView, activeEmploymentView);
+    const activeMonthFontKey = makeMonthlyFontHourKey(selectedMonthKey, activeSegmentView, activeEmploymentView);
+    const activeWeeklyRule = normalizeWeeklyShiftRule(weeklyShiftRules[activeRuleKey]);
+    const activeMonthlyFontHours = Math.max(0, Number(monthlyFontHourRules[activeMonthFontKey]) || 0);
+
+    const updateActiveMonthlyFontHours = (value: number) => {
+      const nextHours = Math.max(0, Number(value) || 0);
+      const next = { ...monthlyFontHourRules, [activeMonthFontKey]: nextHours };
+      setMonthlyFontHourRules(next);
+      saveMonthlyFontHoursRule(selectedMonthKey, activeSegmentView, activeEmploymentView, nextHours).catch((error) => {
+        console.error("Save monthly font hours rule error:", error);
+        alert("Сарын фонт цаг DB-д хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
+      });
+    };
+
+    const updateActiveWeeklyRule = (patch: Partial<WeeklyShiftRule>) => {
+      const nextRule = normalizeWeeklyShiftRule({ ...activeWeeklyRule, ...patch });
+      const next = { ...weeklyShiftRules, [activeRuleKey]: nextRule };
+      setWeeklyShiftRules(next);
+      saveWeeklyShiftRule(activeSegmentView, activeEmploymentView, nextRule).catch((error) => {
+        console.error("Save weekly shift rule error:", error);
+        alert("7 хоногийн дүрэм DB-д хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
+      });
+    };
+
     const toggleBookingDateSelection = (dateKey: string) => {
       if (isPastScheduleDate(dateKey)) {
         setSelectedDateSchedule(dateKey);
@@ -3665,6 +3785,72 @@ export default function AdminDashboard() {
             </div>
           </div>
 
+        </div>
+
+        <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 shadow-xl backdrop-blur-xl">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-300">Фонт цаг ба 7 хоногийн сонголтын дүрэм</p>
+              <p className="mt-1 text-xs font-bold text-gray-400">
+                {selectedMonthKey} · {activeSegmentView} · {activeEmploymentView}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <label className="space-y-1">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">Сарын фонт цаг</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={activeMonthlyFontHours}
+                  onChange={(e) => updateActiveMonthlyFontHours(Number(e.target.value))}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">7 хоногийн цаг</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={activeWeeklyRule.totalHours}
+                  onChange={(e) => updateActiveWeeklyRule({ totalHours: Number(e.target.value) })}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">6 цагтай shift</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={7}
+                  value={activeWeeklyRule.sixHourShifts}
+                  onChange={(e) => updateActiveWeeklyRule({ sixHourShifts: Number(e.target.value) })}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">7 цагтай shift</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={7}
+                  value={activeWeeklyRule.sevenHourShifts}
+                  onChange={(e) => updateActiveWeeklyRule({ sevenHourShifts: Number(e.target.value) })}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">Амралтын өдөр</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={7}
+                  value={activeWeeklyRule.restDays}
+                  onChange={(e) => updateActiveWeeklyRule({ restDays: Number(e.target.value) })}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                />
+              </label>
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-[minmax(620px,760px)_minmax(360px,430px)] justify-center gap-5 items-start w-full min-w-0">
@@ -6097,16 +6283,21 @@ export default function AdminDashboard() {
                     <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">
                       LOCATION
                     </label>
-                    <input
-                      type="text"
-                      placeholder="Darkhan"
-                      value={newUser.location || ""}
+                    <select
+                      value={normalizeEmployeeLocation(newUser.location)}
                       onChange={(e) =>
                         setNewUser({ ...newUser, location: e.target.value })
                       }
                       className="w-full bg-gray-900/40 border border-gray-700/50 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
                       required
-                    />
+                    >
+                      <option value="">Сонгох...</option>
+                      {EMPLOYEE_LOCATIONS.map((location) => (
+                        <option key={location} value={location}>
+                          {location}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="flex gap-4 pt-6">
                     <button
@@ -6216,7 +6407,7 @@ export default function AdminDashboard() {
                       ))}
                     </div>
                     <p className="mt-3 text-[10px] font-bold leading-relaxed text-gray-500">
-                      Бүх багана заавал бөглөгдсөн мөрүүдийг import хийнэ.
+                      Бүх багана заавал бөглөгдөнө. Location нь зөвхөн Ulaanbaatar эсвэл Darkhan байна.
                     </p>
                   </div>
                 </div>
@@ -6476,9 +6667,8 @@ export default function AdminDashboard() {
                     <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">
                       LOCATION
                     </label>
-                    <input
-                      type="text"
-                      value={editingUser.location || ""}
+                    <select
+                      value={normalizeEmployeeLocation(editingUser.location)}
                       onChange={(e) =>
                         setEditingUser({
                           ...editingUser,
@@ -6486,7 +6676,15 @@ export default function AdminDashboard() {
                         })
                       }
                       className="w-full bg-gray-900/40 border border-gray-700/50 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
-                    />
+                      required
+                    >
+                      <option value="">Сонгох...</option>
+                      {EMPLOYEE_LOCATIONS.map((location) => (
+                        <option key={location} value={location}>
+                          {location}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="flex gap-4 pt-6">
                     <button

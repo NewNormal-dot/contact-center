@@ -9,6 +9,7 @@ const router = express.Router();
 const VALID_ROLES = new Set(['superadmin', 'admin', 'csr']);
 const VALID_STATUSES = new Set(['active', 'inactive']);
 const VALID_EMPLOYMENT_TYPES = new Set(['Full Time', 'Part Time']);
+const VALID_LOCATIONS = new Set(['Ulaanbaatar', 'Darkhan']);
 const DEFAULT_SEGMENTS_BY_ROLE: Record<string, string> = {
   superadmin: 'System Control',
   admin: 'Supervisor',
@@ -31,6 +32,11 @@ function normalizeEmploymentType(value: unknown, fallback: 'Full Time' | 'Part T
   if (value === undefined || value === null || value === '') return fallback;
   if (value === 'admin' || value === 'superadmin') return 'Full Time';
   return value;
+}
+
+function normalizeLocation(value: unknown) {
+  const normalized = String(value ?? '').trim();
+  return Array.from(VALID_LOCATIONS).find((location) => location.toLowerCase() === normalized.toLowerCase()) || '';
 }
 
 async function hasUserLocationColumn() {
@@ -132,6 +138,11 @@ router.post('/', authenticate, async (req: any, res) => {
     return res.status(400).json({ error: 'Ажлын төрөл буруу байна' });
   }
 
+  const finalLocation = finalRole === 'csr' ? normalizeLocation(location) : normalizeLocation(location) || null;
+  if (finalRole === 'csr' && !finalLocation) {
+    return res.status(400).json({ error: 'Location заавал Ulaanbaatar эсвэл Darkhan байна' });
+  }
+
   // Business Rule: Admin can only create CSR. Superadmin can create anyone.
   if (actingUserRole === 'admin' && finalRole !== 'csr') {
     return res.status(403).json({ error: 'Админ зөвхөн CSR бүртгэх эрхтэй' });
@@ -162,13 +173,13 @@ router.post('/', authenticate, async (req: any, res) => {
     };
 
     if (includeLocation) {
-      insertData.location = location || null;
+      insertData.location = finalLocation || null;
     }
 
     await db('users').insert(insertData);
 
     await logAction(req.user.id, 'CREATE_USER', 'users', id, `Created user ${name} (${finalRole})`);
-    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code, location });
+    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code, location: finalLocation || '' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
@@ -215,6 +226,10 @@ router.put('/:id', authenticate, async (req: any, res) => {
 
     const updates: any = {};
     const includeLocation = await hasUserLocationColumn();
+    const finalLocation = location === undefined ? undefined : normalizeLocation(location);
+    if (includeLocation && location !== undefined && effectiveRole === 'csr' && !finalLocation) {
+      return res.status(400).json({ error: 'Location заавал Ulaanbaatar эсвэл Darkhan байна' });
+    }
 
     if (name !== undefined) {
       if (!String(name).trim()) return res.status(400).json({ error: 'Нэр хоосон байж болохгүй' });
@@ -236,7 +251,7 @@ router.put('/:id', authenticate, async (req: any, res) => {
     }
 
     if (includeLocation && location !== undefined) {
-      updates.location = location || null;
+      updates.location = finalLocation || null;
     }
 
     if (finalSegment !== undefined) {
