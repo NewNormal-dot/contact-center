@@ -1,16 +1,8 @@
 import type { Knex } from 'knex';
+import { tableExists } from '../schemaUtils';
 
 export async function up(knex: Knex): Promise<void> {
-  const clientName = (knex as any).client?.config?.client;
-  let exists = false;
-
-  if (clientName === 'mssql') {
-    const result: any = await knex.raw("SELECT 1 AS [exists] WHERE OBJECT_ID(N'[dbo].[forecast_data]', N'U') IS NOT NULL");
-    const rows = Array.isArray(result) ? result : (result?.recordset || result?.rows || []);
-    exists = Array.isArray(rows) && rows.length > 0;
-  } else {
-    exists = await knex.schema.hasTable('forecast_data');
-  }
+  const exists = await tableExists(knex, 'forecast_data');
 
   if (exists) return;
 

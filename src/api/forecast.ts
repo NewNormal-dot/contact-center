@@ -1,6 +1,7 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import db from '../database/db';
+import { tableExists } from '../database/schemaUtils';
 import { authenticate, authorize } from '../middleware/auth';
 
 const router = express.Router();
@@ -48,16 +49,7 @@ function toIsoDateTime(value: unknown) {
 }
 
 async function ensureForecastTable() {
-  const clientName = (db as any).client?.config?.client;
-  let exists = false;
-
-  if (clientName === 'mssql') {
-    const result: any = await db.raw("SELECT 1 AS [exists] WHERE OBJECT_ID(N'[dbo].[forecast_data]', N'U') IS NOT NULL");
-    const rows = Array.isArray(result) ? result : (result?.recordset || result?.rows || []);
-    exists = Array.isArray(rows) && rows.length > 0;
-  } else {
-    exists = await db.schema.hasTable('forecast_data');
-  }
+  const exists = await tableExists(db, 'forecast_data');
 
   if (exists) return;
 

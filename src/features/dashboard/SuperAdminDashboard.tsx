@@ -64,9 +64,9 @@ export default function SuperAdminDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [collapsedRoles, setCollapsedRoles] = useState<Record<string, boolean>>({
-    superadmin: true,
-    admin: true,
-    csr: true,
+    superadmin: false,
+    admin: false,
+    csr: false,
   });
   const [selectedActionFilter, setSelectedActionFilter] = useState('all');
   const [showSuccess, setShowSuccess] = useState(false);
@@ -126,6 +126,7 @@ export default function SuperAdminDashboard() {
         };
       });
       setCsrs(users);
+      setLocalData('users', users);
     } catch (error) {
       console.error('Error fetching users from API:', error);
       const cachedUsers = getLocalData('users', []).map((user: any) => {
@@ -429,6 +430,7 @@ export default function SuperAdminDashboard() {
           code: editingUser.code,
         });
         setCsrs(prev => prev.map(u => u.id === editingUser.id ? { ...editingUser, lineType: segment, employmentType } : u));
+        await fetchUsers();
         logAction('User Update', `Updated user ${editingUser.name} (${editingUser.role})`);
         setEditingUser(null);
         triggerSuccess();
@@ -604,6 +606,8 @@ export default function SuperAdminDashboard() {
               role: rowUser.role,
               status: rowUser.status,
               employmentType: rowUser.employmentType,
+              segment: rowUser.lineType,
+              lineType: rowUser.lineType,
               code: rowUser.code,
             });
             createdUsers.push({

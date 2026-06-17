@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { logAction } from './audit';
+import { columnExists } from '../database/schemaUtils';
 
 const router = express.Router();
 const VALID_ROLES = new Set(['superadmin', 'admin', 'csr']);
@@ -40,7 +41,7 @@ function normalizeLocation(value: unknown) {
 }
 
 async function hasUserLocationColumn() {
-  return db.schema.hasColumn('users', 'location');
+  return columnExists(db, 'users', 'location');
 }
 
 function userSelectColumns(includeLocation: boolean, includeCreatedAt = false) {
