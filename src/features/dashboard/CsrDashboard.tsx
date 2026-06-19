@@ -48,17 +48,17 @@ function formatMonthKey(date: Date) {
 }
 
 type WeeklyShiftRule = {
-  totalHours: number;
-  sixHourShifts: number;
-  sevenHourShifts: number;
+  selectedDays: number;
   restDays: number;
+  hourCounts: Record<string, number>;
+  totalHours: number;
 };
 
 const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
-  totalHours: 40,
-  sixHourShifts: 3,
-  sevenHourShifts: 3,
-  restDays: 1,
+  selectedDays: 0,
+  restDays: 0,
+  hourCounts: {},
+  totalHours: 0,
 };
 
 const makeSegmentTypeKey = (segment: string, employmentType: string) =>
@@ -67,12 +67,33 @@ const makeSegmentTypeKey = (segment: string, employmentType: string) =>
 const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string) =>
   `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
 
-const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => ({
-  totalHours: Math.max(0, Number(value?.totalHours ?? DEFAULT_WEEKLY_SHIFT_RULE.totalHours) || 0),
-  sixHourShifts: Math.max(0, Number(value?.sixHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sixHourShifts) || 0),
-  sevenHourShifts: Math.max(0, Number(value?.sevenHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sevenHourShifts) || 0),
-  restDays: Math.max(0, Math.min(7, Number(value?.restDays ?? DEFAULT_WEEKLY_SHIFT_RULE.restDays) || 0)),
-});
+const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
+  const rawHourCounts = value?.hourCounts && typeof value.hourCounts === 'object' ? value.hourCounts : {};
+  const hourCounts: Record<string, number> = {};
+
+  Object.entries(rawHourCounts).forEach(([hour, count]) => {
+    const normalizedHour = String(hour);
+    if (!/^(?:[4-9]|rest)$/.test(normalizedHour)) return;
+    hourCounts[normalizedHour] = Math.max(0, Math.min(31, Number(count) || 0));
+  });
+
+  if (value?.sixHourShifts !== undefined && hourCounts['6'] === undefined) {
+    hourCounts['6'] = Math.max(0, Math.min(31, Number(value.sixHourShifts) || 0));
+  }
+  if (value?.sevenHourShifts !== undefined && hourCounts['7'] === undefined) {
+    hourCounts['7'] = Math.max(0, Math.min(31, Number(value.sevenHourShifts) || 0));
+  }
+
+  const restDays = Math.max(0, Math.min(31, Number(value?.restDays ?? hourCounts.rest ?? 0) || 0));
+  if (restDays > 0 || hourCounts.rest !== undefined) hourCounts.rest = restDays;
+
+  return {
+    selectedDays: Math.max(0, Math.min(31, Number(value?.selectedDays ?? 0) || 0)),
+    restDays,
+    hourCounts,
+    totalHours: Math.max(0, Math.min(744, Number(value?.totalHours ?? 0) || 0)),
+  };
+};
 
 const getWeekStartDateKey = (dateKey: string) => {
   const [year, month, day] = dateKey.split('-').map(Number);
@@ -1353,10 +1374,15 @@ export default function CsrDashboard() {
     }
   }, [activeTab]);
 
+  const getShiftRuleHourKey = React.useCallback((shift: Shift) => {
+    if (shift.time === 'Амралт') return 'rest';
+    const roundedHours = String(Math.round(calculateHours(shift.time)));
+    return /^[4-9]$/.test(roundedHours) ? roundedHours : '';
+  }, []);
+
   const getMyWeeklyBookingStats = React.useCallback((dateKey: string, sourceSchedule: Record<string, DayData>) => {
     const weekDateKeys = getWeekDateKeys(dateKey);
-    let sixHourShifts = 0;
-    let sevenHourShifts = 0;
+    const hourCounts: Record<string, number> = {};
     let bookedDays = 0;
     let hours = 0;
 
@@ -1365,35 +1391,41 @@ export default function CsrDashboard() {
         shift.bookedBy?.some((booking) => booking.userId === csrProfile.id),
       );
       if (!bookedShift) return;
+      const hourKey = getShiftRuleHourKey(bookedShift);
       const shiftHours = calculateHours(bookedShift.time);
       hours += shiftHours;
       bookedDays += 1;
-      if (Math.round(shiftHours) === 6) sixHourShifts += 1;
-      if (Math.round(shiftHours) === 7) sevenHourShifts += 1;
+      if (hourKey) hourCounts[hourKey] = (hourCounts[hourKey] || 0) + 1;
     });
 
-    return { sixHourShifts, sevenHourShifts, bookedDays, hours };
-  }, [csrProfile.id]);
+    return { hourCounts, bookedDays, hours };
+  }, [csrProfile.id, getShiftRuleHourKey]);
 
   const validateShiftRuleBeforeBooking = React.useCallback((dateKey: string, targetShift: Shift, sourceSchedule: Record<string, DayData>) => {
-    const shiftHours = calculateHours(targetShift.time);
     const weekStats = getMyWeeklyBookingStats(dateKey, sourceSchedule);
-    const maxWorkingDays = Math.max(0, 7 - activeWeeklyRule.restDays);
+    const targetHourKey = getShiftRuleHourKey(targetShift);
+    const maxSelectedDays = Number(activeWeeklyRule.selectedDays) || 0;
 
-    if (maxWorkingDays > 0 && weekStats.bookedDays + 1 > maxWorkingDays) {
-      return `Энэ 7 хоногт ${activeWeeklyRule.restDays} өдөр амрах тохиргоотой тул нийт ${maxWorkingDays} өдрөөс илүү shift сонгох боломжгүй.`;
+    if (maxSelectedDays > 0 && weekStats.bookedDays + 1 > maxSelectedDays) {
+      return `Энэ 7 хоногт нийт ${maxSelectedDays} өдөр сонгох тохиргоотой.`;
     }
 
-    if (Math.round(shiftHours) === 6 && weekStats.sixHourShifts + 1 > activeWeeklyRule.sixHourShifts) {
-      return `Энэ 7 хоногт 6 цагтай shift хамгийн ихдээ ${activeWeeklyRule.sixHourShifts} удаа сонгоно.`;
-    }
-
-    if (Math.round(shiftHours) === 7 && weekStats.sevenHourShifts + 1 > activeWeeklyRule.sevenHourShifts) {
-      return `Энэ 7 хоногт 7 цагтай shift хамгийн ихдээ ${activeWeeklyRule.sevenHourShifts} удаа сонгоно.`;
+    if (targetHourKey) {
+      const maxForHour = Number((activeWeeklyRule.hourCounts || {})[targetHourKey] || 0);
+      if (maxForHour > 0 && (weekStats.hourCounts[targetHourKey] || 0) + 1 > maxForHour) {
+        return targetHourKey === 'rest'
+          ? `Энэ 7 хоногт амралтын өдөр хамгийн ихдээ ${maxForHour} удаа сонгоно.`
+          : `Энэ 7 хоногт ${targetHourKey} цагтай shift хамгийн ихдээ ${maxForHour} удаа сонгоно.`;
+      }
+      if (maxForHour === 0 && Object.keys(activeWeeklyRule.hourCounts || {}).length > 0) {
+        return targetHourKey === 'rest'
+          ? 'Энэ 7 хоногт амралтын өдөр сонгох боломжгүй.'
+          : `Энэ 7 хоногт ${targetHourKey} цагтай shift сонгох боломжгүй.`;
+      }
     }
 
     return '';
-  }, [activeWeeklyRule, getMyWeeklyBookingStats]);
+  }, [activeWeeklyRule, getMyWeeklyBookingStats, getShiftRuleHourKey]);
 
   const handleBookShift = React.useCallback((dateKey: string, shiftId?: string, bookingWaveId?: string) => {
     const dayData = schedule[dateKey];
@@ -1612,18 +1644,19 @@ export default function CsrDashboard() {
     for (const weekStartKey of monthWeekKeys) {
       const weekStats = getMyWeeklyBookingStats(weekStartKey, schedule);
       if (weekStats.bookedDays === 0) continue;
-      const maxWorkingDays = Math.max(0, 7 - activeWeeklyRule.restDays);
-      if (maxWorkingDays > 0 && weekStats.bookedDays > maxWorkingDays) {
-        alert(`${weekStartKey}-с эхлэх 7 хоногт амралтын өдрийн тохиргоо зөрчсөн байна.`);
+      const maxSelectedDays = Number(activeWeeklyRule.selectedDays) || 0;
+      if (maxSelectedDays > 0 && weekStats.bookedDays > maxSelectedDays) {
+        alert(`${weekStartKey}-с эхлэх 7 хоногт нийт сонгох өдөр ${maxSelectedDays}-аас их байна.`);
         return;
       }
-      if (weekStats.sixHourShifts > activeWeeklyRule.sixHourShifts) {
-        alert(`${weekStartKey}-с эхлэх 7 хоногт 6 цагтай shift ${activeWeeklyRule.sixHourShifts}-аас их байна.`);
-        return;
-      }
-      if (weekStats.sevenHourShifts > activeWeeklyRule.sevenHourShifts) {
-        alert(`${weekStartKey}-с эхлэх 7 хоногт 7 цагтай shift ${activeWeeklyRule.sevenHourShifts}-аас их байна.`);
-        return;
+      for (const [hourKey, maxCount] of Object.entries(activeWeeklyRule.hourCounts || {})) {
+        const currentCount = weekStats.hourCounts[hourKey] || 0;
+        if (Number(maxCount) > 0 && currentCount > Number(maxCount)) {
+          alert(hourKey === 'rest'
+            ? `${weekStartKey}-с эхлэх 7 хоногт амралтын өдөр ${maxCount}-аас их байна.`
+            : `${weekStartKey}-с эхлэх 7 хоногт ${hourKey} цагтай shift ${maxCount}-аас их байна.`);
+          return;
+        }
       }
     }
 

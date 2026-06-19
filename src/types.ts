@@ -13,6 +13,7 @@ export interface User {
   photoUrl?: string;
   code?: string;
   location?: string;
+  supervisorName?: string;
   employmentType: 'Full Time' | 'Part Time' | string;
   lineType?: string;
   password?: string;
@@ -27,6 +28,7 @@ export interface CSR {
   name: string;
   email?: string;
   location?: string;
+  supervisorName?: string;
   lineType: string;
   photoUrl: string;
   status: 'online' | 'offline' | 'active' | 'inactive';

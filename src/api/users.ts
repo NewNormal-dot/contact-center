@@ -44,7 +44,11 @@ async function hasUserLocationColumn() {
   return columnExists(db, 'users', 'location');
 }
 
-function userSelectColumns(includeLocation: boolean, includeCreatedAt = false) {
+async function hasUserSupervisorNameColumn() {
+  return columnExists(db, 'users', 'supervisor_name');
+}
+
+function userSelectColumns(includeLocation: boolean, includeSupervisorName: boolean, includeCreatedAt = false) {
   return [
     'id',
     'email',
@@ -54,6 +58,7 @@ function userSelectColumns(includeLocation: boolean, includeCreatedAt = false) {
     'photo_url',
     'code',
     ...(includeLocation ? ['location'] : []),
+    ...(includeSupervisorName ? ['supervisor_name'] : []),
     'segment',
     'employment_type',
     'weekly_rule_id',
@@ -65,10 +70,12 @@ function userSelectColumns(includeLocation: boolean, includeCreatedAt = false) {
 router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
     const includeLocation = await hasUserLocationColumn();
-    const users = await db('users').select(userSelectColumns(includeLocation, true));
+    const includeSupervisorName = await hasUserSupervisorNameColumn();
+    const users = await db('users').select(userSelectColumns(includeLocation, includeSupervisorName, true));
     const formattedUsers = users.map(u => ({
       ...u,
       location: includeLocation ? u.location : '',
+      supervisorName: includeSupervisorName ? u.supervisor_name || '' : '',
       photoUrl: u.photo_url,
       lineType: u.segment || DEFAULT_SEGMENTS_BY_ROLE[u.role] || '',
       employmentType: u.employment_type,
@@ -85,12 +92,14 @@ router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
 router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
     const includeLocation = await hasUserLocationColumn();
+    const includeSupervisorName = await hasUserSupervisorNameColumn();
     const users = await db('users')
       .where({ role: 'csr' })
-      .select(userSelectColumns(includeLocation));
+      .select(userSelectColumns(includeLocation, includeSupervisorName));
     const formattedUsers = users.map(u => ({
       ...u,
       location: includeLocation ? u.location : '',
+      supervisorName: includeSupervisorName ? u.supervisor_name || '' : '',
       photoUrl: u.photo_url,
       lineType: u.segment || '',
       employmentType: u.employment_type,
@@ -104,7 +113,7 @@ router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req,
 
 // Create User
 router.post('/', authenticate, async (req: any, res) => {
-  const { email, password, name, role, status, employment_type, employmentType, code, location, segment, lineType } = req.body;
+  const { email, password, name, role, status, employment_type, employmentType, code, location, segment, lineType, supervisorName, supervisor_name } = req.body;
   const actingUserRole = req.user.role;
   const finalRole = role || 'csr';
   const finalStatus = status || 'active';
@@ -144,6 +153,11 @@ router.post('/', authenticate, async (req: any, res) => {
     return res.status(400).json({ error: 'Location заавал Ulaanbaatar эсвэл Darkhan байна' });
   }
 
+  const finalSupervisorName = String(supervisorName ?? supervisor_name ?? '').trim();
+  if (finalRole === 'csr' && !finalSupervisorName) {
+    return res.status(400).json({ error: 'Ахлах ажилтны нэр шаардлагатай' });
+  }
+
   // Business Rule: Admin can only create CSR. Superadmin can create anyone.
   if (actingUserRole === 'admin' && finalRole !== 'csr') {
     return res.status(403).json({ error: 'Админ зөвхөн CSR бүртгэх эрхтэй' });
@@ -160,6 +174,7 @@ router.post('/', authenticate, async (req: any, res) => {
     const id = uuidv4();
     const hashedPassword = await bcrypt.hash(password, 10);
     const includeLocation = await hasUserLocationColumn();
+    const includeSupervisorName = await hasUserSupervisorNameColumn();
 
     const insertData: any = {
       id,
@@ -177,10 +192,14 @@ router.post('/', authenticate, async (req: any, res) => {
       insertData.location = finalLocation || null;
     }
 
+    if (includeSupervisorName) {
+      insertData.supervisor_name = finalSupervisorName || null;
+    }
+
     await db('users').insert(insertData);
 
     await logAction(req.user.id, 'CREATE_USER', 'users', id, `Created user ${name} (${finalRole})`);
-    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code, location: finalLocation || '' });
+    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code, location: finalLocation || '', supervisorName: finalSupervisorName || '' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
@@ -190,7 +209,7 @@ router.post('/', authenticate, async (req: any, res) => {
 // Update User
 router.put('/:id', authenticate, async (req: any, res) => {
   const { id } = req.params;
-  const { name, status, employment_type, employmentType, code, location, role, segment, lineType } = req.body;
+  const { name, status, employment_type, employmentType, code, location, role, segment, lineType, supervisorName, supervisor_name } = req.body;
   const actingUserRole = req.user.role;
   const requestedEmploymentType = employment_type ?? employmentType;
   const finalEmploymentType = requestedEmploymentType === undefined ? undefined : normalizeEmploymentType(requestedEmploymentType);
@@ -227,9 +246,16 @@ router.put('/:id', authenticate, async (req: any, res) => {
 
     const updates: any = {};
     const includeLocation = await hasUserLocationColumn();
+    const includeSupervisorName = await hasUserSupervisorNameColumn();
     const finalLocation = location === undefined ? undefined : normalizeLocation(location);
     if (includeLocation && location !== undefined && effectiveRole === 'csr' && !finalLocation) {
       return res.status(400).json({ error: 'Location заавал Ulaanbaatar эсвэл Darkhan байна' });
+    }
+
+    const requestedSupervisorName = supervisorName ?? supervisor_name;
+    const finalSupervisorName = requestedSupervisorName === undefined ? undefined : String(requestedSupervisorName || '').trim();
+    if (includeSupervisorName && requestedSupervisorName !== undefined && effectiveRole === 'csr' && !finalSupervisorName) {
+      return res.status(400).json({ error: 'Ахлах ажилтны нэр шаардлагатай' });
     }
 
     if (name !== undefined) {
@@ -253,6 +279,10 @@ router.put('/:id', authenticate, async (req: any, res) => {
 
     if (includeLocation && location !== undefined) {
       updates.location = finalLocation || null;
+    }
+
+    if (includeSupervisorName && requestedSupervisorName !== undefined) {
+      updates.supervisor_name = finalSupervisorName || null;
     }
 
     if (finalSegment !== undefined) {

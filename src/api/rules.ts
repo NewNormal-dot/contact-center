@@ -7,17 +7,17 @@ const router = express.Router();
 const VALID_RULE_TYPES = new Set(['monthly_font_hours', 'weekly_shift_rules']);
 
 type WeeklyShiftRule = {
-  totalHours: number;
-  sixHourShifts: number;
-  sevenHourShifts: number;
+  selectedDays: number;
   restDays: number;
+  hourCounts: Record<string, number>;
+  totalHours: number;
 };
 
 const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
-  totalHours: 40,
-  sixHourShifts: 3,
-  sevenHourShifts: 3,
-  restDays: 1,
+  selectedDays: 0,
+  restDays: 0,
+  hourCounts: {},
+  totalHours: 0,
 };
 
 function makeSegmentTypeKey(segment: string, employmentType: string) {
@@ -55,11 +55,30 @@ function normalizeMonthlyFontHours(value: unknown) {
 }
 
 function normalizeWeeklyShiftRule(value: any): WeeklyShiftRule {
+  const rawHourCounts = value?.hourCounts && typeof value.hourCounts === 'object' ? value.hourCounts : {};
+  const hourCounts: Record<string, number> = {};
+
+  Object.entries(rawHourCounts).forEach(([hour, count]) => {
+    const normalizedHour = String(hour);
+    if (!/^(?:[4-9]|rest)$/.test(normalizedHour)) return;
+    hourCounts[normalizedHour] = Math.max(0, Math.min(31, Number(count) || 0));
+  });
+
+  if (value?.sixHourShifts !== undefined && hourCounts['6'] === undefined) {
+    hourCounts['6'] = Math.max(0, Math.min(31, Number(value.sixHourShifts) || 0));
+  }
+  if (value?.sevenHourShifts !== undefined && hourCounts['7'] === undefined) {
+    hourCounts['7'] = Math.max(0, Math.min(31, Number(value.sevenHourShifts) || 0));
+  }
+
+  const restDays = Math.max(0, Math.min(31, Number(value?.restDays ?? hourCounts.rest ?? 0) || 0));
+  if (restDays > 0 || hourCounts.rest !== undefined) hourCounts.rest = restDays;
+
   return {
-    totalHours: Math.max(0, Math.min(168, Number(value?.totalHours ?? DEFAULT_WEEKLY_SHIFT_RULE.totalHours) || 0)),
-    sixHourShifts: Math.max(0, Math.min(7, Number(value?.sixHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sixHourShifts) || 0)),
-    sevenHourShifts: Math.max(0, Math.min(7, Number(value?.sevenHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sevenHourShifts) || 0)),
-    restDays: Math.max(0, Math.min(7, Number(value?.restDays ?? DEFAULT_WEEKLY_SHIFT_RULE.restDays) || 0)),
+    selectedDays: Math.max(0, Math.min(31, Number(value?.selectedDays ?? 0) || 0)),
+    restDays,
+    hourCounts,
+    totalHours: Math.max(0, Math.min(744, Number(value?.totalHours ?? 0) || 0)),
   };
 }
 

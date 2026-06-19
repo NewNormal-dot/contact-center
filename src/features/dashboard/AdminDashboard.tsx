@@ -381,17 +381,17 @@ const sumWaveSlots = (waves: BookingWaveDraft[] = []) =>
 
 
 type WeeklyShiftRule = {
-  totalHours: number;
-  sixHourShifts: number;
-  sevenHourShifts: number;
+  selectedDays: number;
   restDays: number;
+  hourCounts: Record<string, number>;
+  totalHours: number;
 };
 
 const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
-  totalHours: 40,
-  sixHourShifts: 3,
-  sevenHourShifts: 3,
-  restDays: 1,
+  selectedDays: 0,
+  restDays: 0,
+  hourCounts: {},
+  totalHours: 0,
 };
 
 const makeSegmentTypeKey = (segment: string, employmentType: string) =>
@@ -400,12 +400,33 @@ const makeSegmentTypeKey = (segment: string, employmentType: string) =>
 const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string) =>
   `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
 
-const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => ({
-  totalHours: Math.max(0, Number(value?.totalHours ?? DEFAULT_WEEKLY_SHIFT_RULE.totalHours) || 0),
-  sixHourShifts: Math.max(0, Number(value?.sixHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sixHourShifts) || 0),
-  sevenHourShifts: Math.max(0, Number(value?.sevenHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sevenHourShifts) || 0),
-  restDays: Math.max(0, Math.min(7, Number(value?.restDays ?? DEFAULT_WEEKLY_SHIFT_RULE.restDays) || 0)),
-});
+const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
+  const rawHourCounts = value?.hourCounts && typeof value.hourCounts === "object" ? value.hourCounts : {};
+  const hourCounts: Record<string, number> = {};
+
+  Object.entries(rawHourCounts).forEach(([hour, count]) => {
+    const normalizedHour = String(hour);
+    if (!/^(?:[4-9]|rest)$/.test(normalizedHour)) return;
+    hourCounts[normalizedHour] = Math.max(0, Math.min(31, Number(count) || 0));
+  });
+
+  if (value?.sixHourShifts !== undefined && hourCounts["6"] === undefined) {
+    hourCounts["6"] = Math.max(0, Math.min(31, Number(value.sixHourShifts) || 0));
+  }
+  if (value?.sevenHourShifts !== undefined && hourCounts["7"] === undefined) {
+    hourCounts["7"] = Math.max(0, Math.min(31, Number(value.sevenHourShifts) || 0));
+  }
+
+  const restDays = Math.max(0, Math.min(31, Number(value?.restDays ?? hourCounts.rest ?? 0) || 0));
+  if (restDays > 0 || hourCounts.rest !== undefined) hourCounts.rest = restDays;
+
+  return {
+    selectedDays: Math.max(0, Math.min(31, Number(value?.selectedDays ?? 0) || 0)),
+    restDays,
+    hourCounts,
+    totalHours: Math.max(0, Math.min(744, Number(value?.totalHours ?? 0) || 0)),
+  };
+};
 
 type BulkUploadUser = Partial<CSR> & {
   rowNumber: number;
@@ -536,6 +557,7 @@ export default function AdminDashboard() {
     segment: "All",
     location: "All",
     employmentType: "All",
+    supervisorName: "All",
   });
 
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -573,6 +595,7 @@ export default function AdminDashboard() {
       id: raw.id,
       code: raw.code || "",
       location: normalizeEmployeeLocation(raw.location) || raw.location || "",
+      supervisorName: String(raw.supervisorName || raw.supervisor_name || "").trim(),
       name,
       email: raw.email || "",
       lineType: raw.lineType || raw.segment || "",
@@ -600,6 +623,7 @@ export default function AdminDashboard() {
         return {
           ...mapped,
           location: mapped.location || localMatch?.location || "",
+          supervisorName: mapped.supervisorName || localMatch?.supervisorName || "",
         };
       });
       setCsrs(users);
@@ -819,10 +843,18 @@ export default function AdminDashboard() {
       defaultShiftTemplates,
     )
       .map((template: any) => {
-        const time = normalizeShiftTime(template.time || template.label || "");
+        const rawTime = String(template.time || template.label || "");
+        const time = rawTime === "Амралт" ? "Амралт" : normalizeShiftTime(rawTime);
         return { ...template, time, label: time };
       })
-      .filter((template: any) => isValidShiftTime(template.time));
+      .filter((template: any) => template.time === "Амралт" || isValidShiftTime(template.time));
+    if (!normalizedShiftTemplates.some((template: any) => template.time === "Амралт")) {
+      normalizedShiftTemplates.push({
+        id: "rest",
+        time: "Амралт",
+        label: "Амралт",
+      });
+    }
     setShiftTemplates(normalizedShiftTemplates);
     setLocalData("shiftTemplates", normalizedShiftTemplates);
 
@@ -1235,6 +1267,7 @@ export default function AdminDashboard() {
   };
 
   const getCsrLocation = (csr: CSR) => normalizeEmployeeLocation(csr.location) || csr.location || "";
+  const getCsrSupervisorName = (csr: CSR) => String(csr.supervisorName || "").trim();
 
   const getCsrSearchText = (csr: CSR) =>
     [
@@ -1244,6 +1277,7 @@ export default function AdminDashboard() {
       csr.lineType,
       csr.employmentType || "Full Time",
       getCsrLocation(csr),
+      getCsrSupervisorName(csr),
       csr.status,
     ]
       .filter(Boolean)
@@ -1262,11 +1296,15 @@ export default function AdminDashboard() {
       const matchesEmploymentType =
         filters.employmentType === "All" ||
         (c.employmentType || "Full Time") === filters.employmentType;
+      const matchesSupervisor =
+        filters.supervisorName === "All" ||
+        getCsrSupervisorName(c) === filters.supervisorName;
       return (
         matchesSearch &&
         matchesSegment &&
         matchesLocation &&
-        matchesEmploymentType
+        matchesEmploymentType &&
+        matchesSupervisor
       );
     });
   };
@@ -1282,6 +1320,7 @@ export default function AdminDashboard() {
       segment: c.lineType,
       "Part/Full": c.employmentType || "Full Time",
       Location: getCsrLocation(c),
+      Supervisor: getCsrSupervisorName(c),
       Төлөв: c.status || "offline",
     }));
 
@@ -1308,6 +1347,7 @@ export default function AdminDashboard() {
         segment: segments[0] || "Postpaid",
         "Part/Full": "Part",
         Location: "Darkhan",
+        Supervisor: "ariunbayar",
       },
     ];
     const workbook = XLSX.utils.book_new();
@@ -1741,6 +1781,7 @@ export default function AdminDashboard() {
     lineType: "",
     code: "",
     location: "",
+    supervisorName: "",
     employmentType: "Full Time",
     status: "offline",
     photoUrl:
@@ -1755,10 +1796,11 @@ export default function AdminDashboard() {
       !newUser.email ||
       !newUser.lineType ||
       !newUser.employmentType ||
-      !normalizedLocation
+      !normalizedLocation ||
+      !String(newUser.supervisorName || "").trim()
     ) {
       alert(
-        "Ажилтны код, User, e-mail, segment, Part/Full, Location бүгд шаардлагатай.",
+        "Ажилтны код, User, e-mail, segment, Part/Full, Location, Supervisor бүгд шаардлагатай.",
       );
       return;
     }
@@ -1770,6 +1812,7 @@ export default function AdminDashboard() {
         name: newUser.name,
         email: newUser.email,
         location: normalizedLocation,
+        supervisorName: String(newUser.supervisorName || "").trim(),
         password: randomPassword,
         role: "csr",
         status: "active",
@@ -1780,6 +1823,7 @@ export default function AdminDashboard() {
         ...response.data,
         segment: newUser.lineType,
         location: normalizedLocation,
+        supervisorName: String(newUser.supervisorName || "").trim(),
         photoUrl: newUser.photoUrl,
       });
       const updatedUsers = [...csrs, userToAdd];
@@ -1791,6 +1835,7 @@ export default function AdminDashboard() {
         lineType: "",
         code: "",
         location: "",
+        supervisorName: "",
         employmentType: "Full Time",
         status: "offline",
         photoUrl:
@@ -1817,17 +1862,22 @@ export default function AdminDashboard() {
         alert("Location заавал Ulaanbaatar эсвэл Darkhan байна.");
         return;
       }
+      if (!String(editingUser.supervisorName || "").trim()) {
+        alert("Supervisor / ахлах ажилтны нэр шаардлагатай.");
+        return;
+      }
       try {
         await apiClient.put(`/users/${editingUser.id}`, {
           code: editingUser.code,
           name: editingUser.name,
           location: normalizedLocation,
+          supervisorName: String(editingUser.supervisorName || "").trim(),
           status: editingUser.status || "active",
           segment: editingUser.lineType,
           employmentType: editingUser.employmentType || "Full Time",
         });
         const updatedUsers = csrs.map((u: CSR) =>
-          u.id === editingUser.id ? { ...editingUser, location: normalizedLocation } : u,
+          u.id === editingUser.id ? { ...editingUser, location: normalizedLocation, supervisorName: String(editingUser.supervisorName || "").trim() } : u,
         );
         setLocalData("users", updatedUsers);
         setCsrs(updatedUsers);
@@ -1963,6 +2013,15 @@ export default function AdminDashboard() {
             "Салбар",
           ]);
           const location = normalizeEmployeeLocation(locationRaw);
+          const supervisorName = getExcelValue(row, [
+            "Supervisor",
+            "SV",
+            "supervisor",
+            "supervisorName",
+            "supervisor_name",
+            "Ахлах ажилтан",
+            "Ахлах",
+          ]);
           const matchedSegment =
             segments.find(
               (existingSegment) =>
@@ -1987,6 +2046,7 @@ export default function AdminDashboard() {
           if (!email) errors.push("e-mail дутуу");
           if (!segment) errors.push("segment дутуу");
           if (!location) errors.push("Location нь Ulaanbaatar эсвэл Darkhan байх ёстой");
+          if (!supervisorName) errors.push("Supervisor/ахлах ажилтан дутуу");
           if (normalizedEmail && existingEmails.has(normalizedEmail))
             errors.push("email бүртгэлтэй");
           if (normalizedEmail && fileEmails.has(normalizedEmail))
@@ -1999,6 +2059,7 @@ export default function AdminDashboard() {
             name,
             email,
             location,
+            supervisorName,
             lineType: matchedSegment,
             employmentType,
             role: "csr",
@@ -2026,7 +2087,7 @@ export default function AdminDashboard() {
   const handleBulkAdd = async () => {
     const validUsers = bulkUsers.filter(
       (u) =>
-        !u.error && u.code && u.name && u.email && u.lineType && u.location,
+        !u.error && u.code && u.name && u.email && u.lineType && u.location && u.supervisorName,
     );
     if (validUsers.length === 0) {
       alert(
@@ -2062,6 +2123,7 @@ export default function AdminDashboard() {
           name: user.name,
           email: user.email,
           location: user.location,
+          supervisorName: user.supervisorName,
           password: randomPassword,
           role: "csr",
           status: "active",
@@ -2073,6 +2135,7 @@ export default function AdminDashboard() {
             ...response.data,
             segment: user.lineType,
             location: user.location,
+            supervisorName: user.supervisorName,
             photoUrl: user.photoUrl,
           }),
         );
@@ -2451,6 +2514,9 @@ export default function AdminDashboard() {
                         <th className="w-[170px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
                           Location
                         </th>
+                        <th className="w-[190px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest whitespace-nowrap">
+                          Supervisor
+                        </th>
                         <th className="w-[130px] px-6 py-5 text-[10px] font-black text-gray-500 uppercase tracking-widest text-right whitespace-nowrap">
                           Үйлдэл
                         </th>
@@ -2495,6 +2561,11 @@ export default function AdminDashboard() {
                           <td className="px-6 py-5 align-middle whitespace-nowrap">
                             <span className="text-sm font-bold text-gray-300">
                               {getCsrLocation(csr) || "-"}
+                            </span>
+                          </td>
+                          <td className="px-6 py-5 align-middle whitespace-nowrap">
+                            <span className="block max-w-[170px] truncate text-sm font-black uppercase tracking-wide text-white">
+                              {getCsrSupervisorName(csr) || "-"}
                             </span>
                           </td>
                           <td className="px-6 py-5 text-right align-middle">
@@ -3297,6 +3368,15 @@ export default function AdminDashboard() {
     return 9999;
   };
 
+  const getShiftTimeKey = (time: string) =>
+    time === "Амралт" ? "Амралт" : normalizeShiftTime(time);
+
+  const getShiftRuleHourKey = (time: string) => {
+    if (time === "Амралт") return "rest";
+    const hours = Math.round(getHoursForShift(time));
+    return hours >= 4 && hours <= 9 ? String(hours) : "";
+  };
+
   const renderScheduleView = () => {
     const years = [2024, 2025, 2026];
     const monthNames = [
@@ -3760,10 +3840,20 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="ml-auto flex shrink-0 items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <label className="relative h-9 w-[190px] shrink-0 rounded-xl border border-white/10 bg-black/50 transition-all focus-within:border-blue-500/60">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black uppercase tracking-widest text-gray-500">Сарын фонт цаг</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={activeMonthlyFontHours}
+                  onChange={(e) => updateActiveMonthlyFontHours(Number(e.target.value))}
+                  className="h-full w-full rounded-xl bg-transparent pl-[118px] pr-3 text-right text-[11px] font-black text-white outline-none"
+                />
+              </label>
               <button
                 onClick={handleExportScheduleReport}
-                className="h-9 px-4 bg-green-600/10 hover:bg-green-600 text-green-500 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-green-500/20 flex items-center justify-center gap-1.5"
+                className="ml-auto h-9 px-4 bg-green-600/10 hover:bg-green-600 text-green-500 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-green-500/20 flex items-center justify-center gap-1.5"
               >
                 <Download size={13} /> Татах
               </button>
@@ -3785,72 +3875,6 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-        </div>
-
-        <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 shadow-xl backdrop-blur-xl">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-300">Фонт цаг ба 7 хоногийн сонголтын дүрэм</p>
-              <p className="mt-1 text-xs font-bold text-gray-400">
-                {selectedMonthKey} · {activeSegmentView} · {activeEmploymentView}
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <label className="space-y-1">
-                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">Сарын фонт цаг</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={activeMonthlyFontHours}
-                  onChange={(e) => updateActiveMonthlyFontHours(Number(e.target.value))}
-                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">7 хоногийн цаг</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={activeWeeklyRule.totalHours}
-                  onChange={(e) => updateActiveWeeklyRule({ totalHours: Number(e.target.value) })}
-                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">6 цагтай shift</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={7}
-                  value={activeWeeklyRule.sixHourShifts}
-                  onChange={(e) => updateActiveWeeklyRule({ sixHourShifts: Number(e.target.value) })}
-                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">7 цагтай shift</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={7}
-                  value={activeWeeklyRule.sevenHourShifts}
-                  onChange={(e) => updateActiveWeeklyRule({ sevenHourShifts: Number(e.target.value) })}
-                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500">Амралтын өдөр</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={7}
-                  value={activeWeeklyRule.restDays}
-                  onChange={(e) => updateActiveWeeklyRule({ restDays: Number(e.target.value) })}
-                  className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
-                />
-              </label>
-            </div>
-          </div>
         </div>
 
         <div className="grid grid-cols-[minmax(620px,760px)_minmax(360px,430px)] justify-center gap-5 items-start w-full min-w-0">
@@ -4043,13 +4067,100 @@ export default function AdminDashboard() {
               const holidayTargetDates = selectedKeys;
               const holidayTargetLabel = formatSelectedDateRange(selectedKeys);
               const canEditSelection = selectedKeys.some((dateKey) => !isPastScheduleDate(dateKey));
-              const selectedDaysHaveShifts = selectedKeys.some((dateKey) =>
-                (schedules[dateKey]?.shifts || []).some(
+              const getMatchingShiftsForDate = (dateKey: string) =>
+                (schedules[dateKey]?.shifts || []).filter(
                   (shift: any) =>
                     shift.segment === activeSegmentView &&
                     shift.employmentType === activeEmploymentView,
-                ),
-              );
+                );
+
+              const selectedRuleShiftAvailability = selectedKeys.reduce<Record<string, number>>((acc, dateKey) => {
+                const dayHourKeys = Array.from(new Set<string>(
+                  getMatchingShiftsForDate(dateKey)
+                    .map((shift: any) => getShiftRuleHourKey(shift.time))
+                    .filter((hourKey: string) => hourKey === "rest" || /^[4-9]$/.test(hourKey)),
+                ));
+                dayHourKeys.forEach((hourKey) => {
+                  acc[hourKey] = (acc[hourKey] || 0) + 1;
+                });
+                return acc;
+              }, {});
+
+              const selectedDaysHaveShifts =
+                selectedKeys.length > 0 &&
+                selectedKeys.every((dateKey) => getMatchingShiftsForDate(dateKey).length > 0);
+
+              const selectedRuleShiftHours = Object.keys(selectedRuleShiftAvailability).sort((a, b) => {
+                if (a === "rest") return 1;
+                if (b === "rest") return -1;
+                return Number(b) - Number(a);
+              });
+
+              const calculateRuleHourTotal = (hourCounts: Record<string, number>) =>
+                Object.entries(hourCounts || {}).reduce((sum, [hour, count]) => {
+                  if (hour === "rest") return sum;
+                  return sum + Number(hour) * (Number(count) || 0);
+                }, 0);
+
+              const sumRuleCounts = (hourCounts: Record<string, number>) =>
+                Object.values(hourCounts || {}).reduce((sum, count) => sum + (Number(count) || 0), 0);
+
+              const clampRuleHourCounts = (
+                hourCounts: Record<string, number>,
+                selectedDayLimit: number,
+              ) => {
+                const nextCounts: Record<string, number> = {};
+                let remaining = Math.max(0, Number(selectedDayLimit) || 0);
+                selectedRuleShiftHours.forEach((hourKey) => {
+                  const maxAvailable = Math.max(0, Number(selectedRuleShiftAvailability[hourKey]) || 0);
+                  const nextCount = Math.max(0, Math.min(maxAvailable, remaining, Number(hourCounts?.[hourKey]) || 0));
+                  if (nextCount > 0) {
+                    nextCounts[hourKey] = nextCount;
+                    remaining -= nextCount;
+                  }
+                });
+                return nextCounts;
+              };
+
+              const activeRuleTotalSelected = Math.max(0, Math.min(selectedKeys.length, Number(activeWeeklyRule.selectedDays) || 0));
+              const visibleRuleHourCounts = selectedRuleShiftHours.reduce<Record<string, number>>((acc, hourKey) => {
+                acc[hourKey] = Math.max(
+                  0,
+                  Math.min(
+                    Number(selectedRuleShiftAvailability[hourKey]) || 0,
+                    Number((activeWeeklyRule.hourCounts || {})[hourKey]) || 0,
+                  ),
+                );
+                return acc;
+              }, {});
+              const activeRuleHourTotal = calculateRuleHourTotal(visibleRuleHourCounts);
+
+              const updateSelectedDayLimit = (count: number) => {
+                const nextSelectedDays = Math.max(0, Math.min(selectedKeys.length, Number(count) || 0));
+                const nextHourCounts = clampRuleHourCounts(activeWeeklyRule.hourCounts || {}, nextSelectedDays);
+                updateActiveWeeklyRule({
+                  selectedDays: nextSelectedDays,
+                  hourCounts: nextHourCounts,
+                  restDays: Number(nextHourCounts.rest) || 0,
+                  totalHours: calculateRuleHourTotal(nextHourCounts),
+                });
+              };
+
+              const updateDynamicWeeklyRule = (hourKey: string, count: number) => {
+                const maxAvailable = Math.max(0, Number(selectedRuleShiftAvailability[hourKey]) || 0);
+                const selectedDayLimit = Math.max(0, Math.min(selectedKeys.length, activeRuleTotalSelected || selectedKeys.length));
+                const currentCounts = clampRuleHourCounts(activeWeeklyRule.hourCounts || {}, selectedDayLimit);
+                const otherTotal = sumRuleCounts({ ...currentCounts, [hourKey]: 0 });
+                const maxBySelectedDays = Math.max(0, selectedDayLimit - otherTotal);
+                const nextCount = Math.max(0, Math.min(maxAvailable, maxBySelectedDays, Number(count) || 0));
+                const nextHourCounts = clampRuleHourCounts({ ...currentCounts, [hourKey]: nextCount }, selectedDayLimit);
+                updateActiveWeeklyRule({
+                  selectedDays: selectedDayLimit,
+                  hourCounts: nextHourCounts,
+                  restDays: Number(nextHourCounts.rest) || 0,
+                  totalHours: calculateRuleHourTotal(nextHourCounts),
+                });
+              };
 
               const handleBulkShiftCreate = () => {
                 const futureDates = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
@@ -4080,10 +4191,10 @@ export default function AdminDashboard() {
               };
 
               const addShiftFromTemplateToSelection = (templateTime: string) => {
-                const normalizedTime = normalizeShiftTime(templateTime);
+                const normalizedTime = templateTime === "Амралт" ? "Амралт" : normalizeShiftTime(templateTime);
                 const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
 
-                if (!normalizedTime || !isValidShiftTime(normalizedTime)) {
+                if (templateTime !== "Амралт" && (!normalizedTime || !isValidShiftTime(normalizedTime))) {
                   alert("Shift загварын цаг буруу байна.");
                   return;
                 }
@@ -4096,7 +4207,7 @@ export default function AdminDashboard() {
                 const duplicateDate = targetDateKeys.find((dateKey) =>
                   (schedules[dateKey]?.shifts || []).some(
                     (shift: any) =>
-                      normalizeShiftTime(shift.time) === normalizedTime &&
+                      getShiftTimeKey(shift.time) === normalizedTime &&
                       shift.segment === activeSegmentView &&
                       shift.employmentType === activeEmploymentView,
                   ),
@@ -4150,7 +4261,7 @@ export default function AdminDashboard() {
               ) => {
                 const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
                 const cleanSlots = Math.max(0, Number(value) || 0);
-                const targetTime = normalizeShiftTime(targetShift.time);
+                const targetTime = getShiftTimeKey(targetShift.time);
                 const newSchedules = { ...schedules };
 
                 targetDateKeys.forEach((dateKey) => {
@@ -4161,7 +4272,7 @@ export default function AdminDashboard() {
                     ...currentSchedule,
                     shifts: currentSchedule.shifts.map((shift: any) => {
                       const isSameShift =
-                        normalizeShiftTime(shift.time) === targetTime &&
+                        getShiftTimeKey(shift.time) === targetTime &&
                         shift.segment === targetShift.segment &&
                         shift.employmentType === targetShift.employmentType;
 
@@ -4302,6 +4413,55 @@ export default function AdminDashboard() {
                       </button>
                     </div>
                   </div>
+
+                  {selectedKeys.length > 0 && selectedDaysHaveShifts && (
+                    <div className="rounded-[1.45rem] border border-blue-500/15 bg-blue-500/5 p-4">
+                      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-300">Сонгосон өдрийн дүрэм</p>
+                          
+                        </div>
+                        <div className="text-right text-[10px] font-black uppercase tracking-widest text-gray-500">
+                          Нийт: <span className="text-white">{activeRuleTotalSelected}</span> өдөр · <span className="text-blue-300">{activeRuleHourTotal}</span> цаг
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                        <label className="flex min-w-0 flex-col gap-1">
+                          <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">Нийт сонгох боломжтой</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={selectedKeys.length}
+                            value={activeRuleTotalSelected}
+                            onChange={(e) => updateSelectedDayLimit(Number(e.target.value))}
+                            className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                          />
+                        </label>
+                        {selectedRuleShiftHours.map((hourKey) => (
+                          <label key={hourKey} className="flex min-w-0 flex-col gap-1">
+                            <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">
+                              {hourKey === "rest" ? "Амралт" : `${hourKey} цагтай`}
+                              <span className="ml-1 text-[8px] text-blue-300/70">/{Number(selectedRuleShiftAvailability[hourKey]) || 0}</span>
+                            </span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={Number(selectedRuleShiftAvailability[hourKey]) || 0}
+                              value={Number(visibleRuleHourCounts[hourKey] || 0)}
+                              onChange={(e) => updateDynamicWeeklyRule(hourKey, Number(e.target.value))}
+                              className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedKeys.length > 0 && !selectedDaysHaveShifts && (
+                    <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-yellow-300">
+                      Сонгосон бүх өдөрт энэ segment/type-ийн shift эсвэл амралт орсон үед дүрэм тохируулна.
+                    </div>
+                  )}
 
                   {isPastDay && !isMultiSelect && (
                     <div className="rounded-2xl border border-orange-500/20 bg-orange-500/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-orange-300">
@@ -4493,12 +4653,12 @@ export default function AdminDashboard() {
                                   getStartTimeValue(a.time) - getStartTimeValue(b.time),
                               )
                               .filter((template) => {
-                                const normalizedTime = normalizeShiftTime(template.time);
+                                const normalizedTime = getShiftTimeKey(template.time);
                                 if (!normalizedTime) return false;
                                 return !selectedKeys.some((dateKey) =>
                                   (schedules[dateKey]?.shifts || []).some(
                                     (shift: any) =>
-                                      normalizeShiftTime(shift.time) === normalizedTime &&
+                                      getShiftTimeKey(shift.time) === normalizedTime &&
                                       shift.segment === activeSegmentView &&
                                       shift.employmentType === activeEmploymentView,
                                   ),
@@ -4521,7 +4681,7 @@ export default function AdminDashboard() {
                             return (
                               <div className="grid max-h-[420px] grid-cols-2 gap-2 overflow-y-auto pr-1 custom-scrollbar sm:grid-cols-3">
                                 {availableTemplates.map((template) => {
-                                  const normalizedTime = normalizeShiftTime(template.time);
+                                  const normalizedTime = getShiftTimeKey(template.time);
                                   return (
                                     <button
                                       key={template.id || template.time}
@@ -4532,7 +4692,7 @@ export default function AdminDashboard() {
                                     >
                                       <p className="text-lg font-black">{normalizedTime}</p>
                                       <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-gray-500">
-                                        {getHoursForShift(normalizedTime)} цаг
+                                        {normalizedTime === "Амралт" ? "Амрах slot" : `${getHoursForShift(normalizedTime)} цаг`}
                                       </p>
                                     </button>
                                   );
@@ -4561,7 +4721,7 @@ export default function AdminDashboard() {
                           const duplicateIndex = filteredShifts
                             .filter(
                               (item: any) =>
-                                normalizeShiftTime(item.time) === normalizeShiftTime(shift.time),
+                                getShiftTimeKey(item.time) === getShiftTimeKey(shift.time),
                             )
                             .findIndex(
                               (item: any) =>
@@ -4590,7 +4750,7 @@ export default function AdminDashboard() {
                                   <div className="flex items-center gap-2">
                                     <Clock size={14} className="text-blue-400" />
                                     <p className="text-sm font-black text-white">
-                                      {normalizeShiftTime(shift.time)} <span className="text-gray-500">:</span> <span className="text-blue-300">{getHoursForShift(normalizeShiftTime(shift.time))} цаг</span>
+                                      {getShiftTimeKey(shift.time)} <span className="text-gray-500">:</span> <span className="text-blue-300">{shift.time === "Амралт" ? "амралт" : `${getHoursForShift(shift.time)} цаг`}</span>
                                     </p>
                                     {isDuplicateShift && (
                                       <span className="rounded-full bg-red-500 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-white">
@@ -4606,7 +4766,7 @@ export default function AdminDashboard() {
                                       if (isPastDay) return;
 
                                       const targetKeys = selectedKeys.length > 0 ? selectedKeys : [selectedDateSchedule].filter(Boolean);
-                                      const targetTime = normalizeShiftTime(shift.time);
+                                      const targetTime = getShiftTimeKey(shift.time);
                                       const newSchedules = { ...schedules };
 
                                       targetKeys.forEach((dateKey) => {
@@ -4616,7 +4776,7 @@ export default function AdminDashboard() {
                                         const updatedShifts = currentDay.shifts.filter((s: any) => {
                                           const sameId = shift.id && s.id === shift.id;
                                           const sameContext =
-                                            normalizeShiftTime(s.time) === targetTime &&
+                                            getShiftTimeKey(s.time) === targetTime &&
                                             s.segment === activeSegmentView &&
                                             s.employmentType === activeEmploymentView;
                                           return !(sameId || sameContext);
@@ -5174,6 +5334,33 @@ export default function AdminDashboard() {
                             </select>
                           </div>
 
+
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-blue-500 uppercase tracking-widest ml-1">
+                              Supervisor
+                            </label>
+                            <select
+                              value={filters.supervisorName}
+                              onChange={(e) =>
+                                setFilters((prev) => ({
+                                  ...prev,
+                                  supervisorName: e.target.value,
+                                }))
+                              }
+                              className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500/50 appearance-none cursor-pointer"
+                            >
+                              <option value="All">Бүх Supervisor</option>
+                              {Array.from(new Set(csrs.map((c) => getCsrSupervisorName(c)).filter(Boolean)))
+                                .sort()
+                                .map((supervisorName) => (
+                                  <option key={supervisorName} value={supervisorName}>
+                                    {supervisorName}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+
                           <div className="pt-2">
                             <button
                               onClick={() => {
@@ -5181,6 +5368,7 @@ export default function AdminDashboard() {
                                   segment: "All",
                                   location: "All",
                                   employmentType: "All",
+                                  supervisorName: "All",
                                 });
                                 setSearchQuery("");
                               }}
@@ -6243,6 +6431,21 @@ export default function AdminDashboard() {
                   </div>
                   <div>
                     <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">
+                      SUPERVISOR / АХЛАХ АЖИЛТАН
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ахлах ажилтны нэр"
+                      value={newUser.supervisorName || ""}
+                      onChange={(e) =>
+                        setNewUser({ ...newUser, supervisorName: e.target.value })
+                      }
+                      className="w-full bg-gray-900/40 border border-gray-700/50 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">
                       СЕГМЕНТ
                     </label>
                     <select
@@ -6397,6 +6600,7 @@ export default function AdminDashboard() {
                         "segment",
                         "Part/Full",
                         "Location",
+                        "Supervisor",
                       ].map((column) => (
                         <span
                           key={column}
@@ -6407,7 +6611,7 @@ export default function AdminDashboard() {
                       ))}
                     </div>
                     <p className="mt-3 text-[10px] font-bold leading-relaxed text-gray-500">
-                      Бүх багана заавал бөглөгдөнө. Location нь зөвхөн Ulaanbaatar эсвэл Darkhan байна.
+                      Бүх багана заавал бөглөгдөнө. Location нь зөвхөн Ulaanbaatar эсвэл Darkhan байна. Supervisor баганад ахлах ажилтны нэрийг бичнэ.
                     </p>
                   </div>
                 </div>
@@ -6464,6 +6668,9 @@ export default function AdminDashboard() {
                             Location
                           </th>
                           <th className="px-5 py-4 text-[10px] font-black uppercase tracking-widest text-gray-500">
+                            Supervisor
+                          </th>
+                          <th className="px-5 py-4 text-[10px] font-black uppercase tracking-widest text-gray-500">
                             Төлөв
                           </th>
                         </tr>
@@ -6497,6 +6704,9 @@ export default function AdminDashboard() {
                             <td className="px-5 py-4 text-sm font-black text-white">
                               {user.location || "-"}
                             </td>
+                            <td className="px-5 py-4 text-sm font-black text-white">
+                              {user.supervisorName || "-"}
+                            </td>
                             <td className="px-5 py-4">
                               {user.error ? (
                                 <span className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-red-300">
@@ -6529,7 +6739,8 @@ export default function AdminDashboard() {
                       user.name &&
                       user.email &&
                       user.lineType &&
-                      user.location,
+                      user.location &&
+                      user.supervisorName,
                   ).length;
                   return (
                     <div className="mt-6 flex gap-4">
@@ -6618,6 +6829,22 @@ export default function AdminDashboard() {
                         setEditingUser({
                           ...editingUser,
                           email: e.target.value,
+                        })
+                      }
+                      className="w-full bg-gray-900/40 border border-gray-700/50 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">
+                      SUPERVISOR / АХЛАХ АЖИЛТАН
+                    </label>
+                    <input
+                      type="text"
+                      value={editingUser.supervisorName || ""}
+                      onChange={(e) =>
+                        setEditingUser({
+                          ...editingUser,
+                          supervisorName: e.target.value,
                         })
                       }
                       className="w-full bg-gray-900/40 border border-gray-700/50 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
@@ -6837,7 +7064,7 @@ export default function AdminDashboard() {
                           if (
                             shiftTemplates.some(
                               (template) =>
-                                normalizeShiftTime(template.time) ===
+                                getShiftTimeKey(template.time) ===
                                 normalizedTime,
                             )
                           ) {
@@ -6887,8 +7114,7 @@ export default function AdminDashboard() {
                               {template.time}
                             </p>
                             <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
-                              Calculated: {getHoursForShift(template.time)}{" "}
-                              hours
+                              {template.time === "Амралт" ? "Амрах slot тохируулна" : `Calculated: ${getHoursForShift(template.time)} hours`}
                             </p>
                           </div>
                         </div>
@@ -6907,6 +7133,22 @@ export default function AdminDashboard() {
                       </div>
                     ))}
                 </div>
+
+                <button
+                  onClick={() => {
+                    if (!shiftTemplates.some((template) => template.time === "Амралт")) {
+                      const newTemplates = [
+                        ...shiftTemplates,
+                        { id: Math.random().toString(36).substr(2, 9), time: "Амралт", label: "Амралт" },
+                      ];
+                      setShiftTemplates(newTemplates);
+                      setLocalData("shiftTemplates", newTemplates);
+                    }
+                  }}
+                  className="mt-4 w-full rounded-3xl border border-emerald-500/20 bg-emerald-500/10 py-4 text-[10px] font-black uppercase tracking-widest text-emerald-300 transition-all hover:bg-emerald-500 hover:text-white"
+                >
+                  Амралт нэмэх
+                </button>
 
                 <button
                   onClick={() => setIsManagingShiftTemplates(false)}
