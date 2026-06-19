@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { columnExists } from '../schemaUtils';
+import { columnExists } from '../schemaUtils.ts';
 
 export async function up(knex: Knex): Promise<void> {
   const hasType = await columnExists(knex, 'leave_requests', 'type');

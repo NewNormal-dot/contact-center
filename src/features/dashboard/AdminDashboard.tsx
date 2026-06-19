@@ -238,22 +238,50 @@ const formatBookingOpenAt = (value?: string) => {
   return `${formatMonthShort(date.getMonth())}.${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 };
 
-const sanitizeShiftTimeInput = (value: string) => {
-  const cleaned = value.replace(/[^\d-]/g, "").replace(/-+/g, "-");
-  if (cleaned.includes("-")) {
-    const [start = "", end = ""] = cleaned.split("-");
-    return `${start.slice(0, 2)}-${end.slice(0, 2)}`.slice(0, 5);
-  }
+const REST_SHIFT_LABEL = "Амралт";
+const REST_SHIFT_INPUT = "амралт";
 
-  const digits = cleaned.replace(/\D/g, "").slice(0, 4);
-  if (digits.length <= 2) return digits;
-  return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+const isRestShiftText = (value: string) =>
+  value.trim().toLowerCase() === REST_SHIFT_INPUT;
+
+const compactShiftTimeInput = (value: string) =>
+  value.trim().replace(/\s+/g, "").replace(/-+/g, "-");
+
+const sanitizeShiftTimeInput = (value: string) => {
+  const trimmed = value.trim();
+  if (isRestShiftText(trimmed)) return REST_SHIFT_LABEL;
+
+  // Only normalize extra spaces or repeated hyphens. Do not silently convert
+  // invalid formats such as 0916 or 09:16 into a valid shift.
+  return compactShiftTimeInput(trimmed).slice(0, 5);
 };
 
-const normalizeShiftTime = (value: string) =>
-  sanitizeShiftTimeInput(value).trim();
+const sanitizeShiftTemplateInput = (value: string) => {
+  const trimmed = value.trimStart();
+  const lower = trimmed.toLowerCase();
+  const hasCyrillicLetters = /[а-яөү]/i.test(trimmed);
+
+  if (hasCyrillicLetters) {
+    if (REST_SHIFT_INPUT.startsWith(lower)) {
+      return lower === REST_SHIFT_INPUT ? REST_SHIFT_LABEL : trimmed.slice(0, REST_SHIFT_INPUT.length);
+    }
+    return trimmed.slice(0, 10);
+  }
+
+  return sanitizeShiftTimeInput(trimmed);
+};
+
+const normalizeShiftTime = (value: string) => {
+  const trimmed = value.trim();
+  if (isRestShiftText(trimmed) || trimmed === REST_SHIFT_LABEL) return REST_SHIFT_LABEL;
+  return compactShiftTimeInput(trimmed);
+};
 const isValidShiftTime = (value: string) =>
   /^(?:[01]\d|2[0-3])-(?:[01]\d|2[0-3])$/.test(value);
+const isValidShiftTemplateValue = (value: string) => {
+  const normalized = normalizeShiftTime(value);
+  return normalized === REST_SHIFT_LABEL || isValidShiftTime(normalized);
+};
 
 type BookingWaveDraft = {
   id: string;
@@ -426,6 +454,64 @@ const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
     hourCounts,
     totalHours: Math.max(0, Math.min(744, Number(value?.totalHours ?? 0) || 0)),
   };
+};
+
+const mapDbSlotsToSchedules = (slots: any[] = []) => {
+  const next: Record<string, any> = {};
+
+  (Array.isArray(slots) ? slots : []).forEach((slot: any) => {
+    const dateKey = String(slot.date || '').slice(0, 10);
+    if (!dateKey) return;
+
+    const isRest = Boolean(slot.isRest || slot.is_rest);
+    const bookingOpen = Boolean(slot.bookingOpen ?? slot.booking_is_open);
+    const bookingOpenAt = slot.bookingOpenAt || slot.booking_open_at || '';
+    const bookingCloseAt = slot.bookingDeadline || slot.booking_deadline || '';
+    const bookedBy = (slot.bookings || []).map((booking: any) => ({
+      id: booking.id,
+      userId: booking.userId || booking.user_id,
+      userName: booking.userName || booking.user_name || 'CSR',
+      userCode: booking.userCode || booking.user_code,
+      bookedAt: booking.bookedAt || booking.booked_at,
+    }));
+
+    const day = next[dateKey] || {
+      shifts: [],
+      bookingOpen,
+      bookingOpenAt,
+      bookingCloseAt,
+    };
+
+    next[dateKey] = {
+      ...day,
+      bookingOpen: day.bookingOpen || bookingOpen,
+      bookingOpenAt: day.bookingOpenAt || bookingOpenAt,
+      bookingCloseAt: day.bookingCloseAt || bookingCloseAt,
+      shifts: [
+        ...(day.shifts || []),
+        {
+          id: String(slot.id),
+          time: isRest
+            ? REST_SHIFT_LABEL
+            : `${String(slot.startTime || slot.start_time || '').slice(0, 5)}-${String(slot.endTime || slot.end_time || '').slice(0, 5)}`,
+          isRest,
+          totalSlots: Number(slot.capacity || slot.totalSlots || 1),
+          bookedSlots: Number(slot.currentBookings ?? slot.current_bookings ?? bookedBy.length),
+          bookedBy,
+          segment: slot.segment || 'All',
+          employmentType: slot.employmentType || slot.employment_type || 'Full Time',
+          bookingWaves: createDefaultBookingWaves(
+            Number(slot.capacity || slot.totalSlots || 1),
+            bookingOpen,
+            bookingOpenAt,
+            bookingCloseAt,
+          ),
+        },
+      ],
+    };
+  });
+
+  return next;
 };
 
 type BulkUploadUser = Partial<CSR> & {
@@ -716,6 +802,41 @@ export default function AdminDashboard() {
     }
   };
 
+  const fetchDbSchedule = async () => {
+    try {
+      const response = await apiClient.get("/slots");
+      const dbSchedules = mapDbSlotsToSchedules(response.data || []);
+      if (Object.keys(dbSchedules).length > 0) {
+        setSchedules(dbSchedules);
+        setLocalData("schedules", dbSchedules);
+      }
+      return dbSchedules;
+    } catch (error) {
+      console.error("Error fetching DB schedule:", error);
+      return null;
+    }
+  };
+
+  const persistSchedules = async (
+    nextSchedules: Record<string, any>,
+    dateKeys: string[],
+  ) => {
+    const uniqueDateKeys = Array.from(new Set(dateKeys.filter(Boolean)));
+    setSchedules(nextSchedules);
+    setLocalData("schedules", nextSchedules);
+    if (uniqueDateKeys.length === 0) return;
+
+    try {
+      await apiClient.post("/slots/sync-schedules", {
+        schedules: nextSchedules,
+        dateKeys: uniqueDateKeys,
+      });
+    } catch (error: any) {
+      console.error("Sync schedules to DB error:", error);
+      alert(error.response?.data?.error || "Хуваарь DB-д хадгалахад алдаа гарлаа.");
+    }
+  };
+
   const saveMonthlyFontHoursRule = async (
     monthKey: string,
     segment: string,
@@ -858,6 +979,7 @@ export default function AdminDashboard() {
       }),
     );
     setSchedules(getLocalData("schedules", {}));
+    fetchDbSchedule().catch(() => undefined);
     fetchShiftRules().catch(() => undefined);
     fetchLeaveRequests().catch(() =>
       setHourlyLeaveRequests(getLocalData("hourlyLeaveRequests", [])),
@@ -906,15 +1028,15 @@ export default function AdminDashboard() {
     )
       .map((template: any) => {
         const rawTime = String(template.time || template.label || "");
-        const time = rawTime === "Амралт" ? "Амралт" : normalizeShiftTime(rawTime);
+        const time = normalizeShiftTime(rawTime);
         return { ...template, time, label: time };
       })
-      .filter((template: any) => template.time === "Амралт" || isValidShiftTime(template.time));
-    if (!normalizedShiftTemplates.some((template: any) => template.time === "Амралт")) {
+      .filter((template: any) => template.time === REST_SHIFT_LABEL || isValidShiftTime(template.time));
+    if (!normalizedShiftTemplates.some((template: any) => template.time === REST_SHIFT_LABEL)) {
       normalizedShiftTemplates.push({
         id: "rest",
-        time: "Амралт",
-        label: "Амралт",
+        time: REST_SHIFT_LABEL,
+        label: REST_SHIFT_LABEL,
       });
     }
     setShiftTemplates(normalizedShiftTemplates);
@@ -1069,13 +1191,21 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleRemoveUserFromShift = (
+  const handleRemoveUserFromShift = async (
     dateKey: string,
     shiftId: string,
     userId: string,
   ) => {
     if (isPastScheduleDate(dateKey)) {
       alert("Өнгөрсөн өдрийн хуваарь read-only тул ажилтан хасах боломжгүй.");
+      return;
+    }
+
+    try {
+      await apiClient.delete(`/slots/${shiftId}/bookings/${userId}`);
+    } catch (error: any) {
+      console.error("Remove booking from DB error:", error);
+      alert(error.response?.data?.error || "Захиалга DB-ээс хасахад алдаа гарлаа.");
       return;
     }
 
@@ -1093,8 +1223,7 @@ export default function AdminDashboard() {
           return s;
         },
       );
-      setLocalData("schedules", currentSchedules);
-      setSchedules(currentSchedules);
+      void persistSchedules(currentSchedules, [dateKey]);
       logAction(
         "Member Removed from Shift",
         `Removed user ${userId} from shift ${shiftId} on ${dateKey}`,
@@ -2321,9 +2450,8 @@ export default function AdminDashboard() {
 
       persistSegments(updatedSegments);
       setLocalData("users", updatedUsers);
-      setLocalData("schedules", updatedSchedules);
       setCsrs(updatedUsers);
-      setSchedules(updatedSchedules);
+      await persistSchedules(updatedSchedules, Object.keys(updatedSchedules));
       if (activeSegmentView === oldName) setActiveSegmentView(nextName);
       if (filters.segment === oldName)
         setFilters((prev) => ({ ...prev, segment: nextName }));
@@ -3427,7 +3555,7 @@ export default function AdminDashboard() {
   };
 
   const getHoursForShift = (time: string) => {
-    if (!time || time === "Амралт") return 0;
+    if (!time || time === REST_SHIFT_LABEL) return 0;
     const normalizedTime = normalizeShiftTime(time);
     if (!isValidShiftTime(normalizedTime)) return 0;
 
@@ -3438,7 +3566,7 @@ export default function AdminDashboard() {
   };
 
   const getStartTimeValue = (time: string) => {
-    if (!time || time === "Амралт") return 9999;
+    if (!time || time === REST_SHIFT_LABEL) return 9999;
     const normalizedTime = normalizeShiftTime(time);
     if (isValidShiftTime(normalizedTime)) {
       return Number(normalizedTime.slice(0, 2)) * 60;
@@ -3447,10 +3575,10 @@ export default function AdminDashboard() {
   };
 
   const getShiftTimeKey = (time: string) =>
-    time === "Амралт" ? "Амралт" : normalizeShiftTime(time);
+    time === REST_SHIFT_LABEL ? "Амралт" : normalizeShiftTime(time);
 
   const getShiftRuleHourKey = (time: string) => {
-    if (time === "Амралт") return "rest";
+    if (time === REST_SHIFT_LABEL) return "rest";
     const hours = Math.round(getHoursForShift(time));
     return hours >= 4 && hours <= 9 ? String(hours) : "";
   };
@@ -3611,14 +3739,7 @@ export default function AdminDashboard() {
         };
       });
 
-      setSchedules(newSchedules);
-      setLocalData("schedules", newSchedules);
-      try {
-        await apiClient.post("/slots/sync-schedules", { schedules: newSchedules, dateKeys: datesWithSchedules });
-      } catch (error: any) {
-        console.error("Sync schedules to DB error:", error);
-        alert(error.response?.data?.error || "Хуваарь DB-д хадгалахад алдаа гарлаа.");
-      }
+      await persistSchedules(newSchedules, datesWithSchedules);
       setSelectedBookingDates([]);
       logAction(
         isOpen ? "Schedule Booking Opened" : "Schedule Booking Closed",
@@ -3726,8 +3847,7 @@ export default function AdminDashboard() {
         return;
       }
 
-      setSchedules(newSchedules);
-      setLocalData("schedules", newSchedules);
+      void persistSchedules(newSchedules, futureDateKeys);
       logAction(
         "Schedule Copied",
         `Copied ${totalCopied} ${activeEmploymentView} shifts for ${activeSegmentView} into ${futureDateKeys.length} day(s)`,
@@ -3761,8 +3881,7 @@ export default function AdminDashboard() {
           }
         });
 
-        setSchedules(newSchedules);
-        setLocalData("schedules", newSchedules);
+        void persistSchedules(newSchedules, editableDateKeys);
         logAction(
           "Schedule Deleted",
           `Deleted ${activeEmploymentView} shifts for ${activeSegmentView} from ${editableDateKeys.length} day(s)`,
@@ -4275,10 +4394,10 @@ export default function AdminDashboard() {
               };
 
               const addShiftFromTemplateToSelection = (templateTime: string) => {
-                const normalizedTime = templateTime === "Амралт" ? "Амралт" : normalizeShiftTime(templateTime);
+                const normalizedTime = normalizeShiftTime(templateTime);
                 const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
 
-                if (templateTime !== "Амралт" && (!normalizedTime || !isValidShiftTime(normalizedTime))) {
+                if (normalizedTime !== REST_SHIFT_LABEL && (!normalizedTime || !isValidShiftTime(normalizedTime))) {
                   alert("Shift загварын цаг буруу байна.");
                   return;
                 }
@@ -4333,8 +4452,7 @@ export default function AdminDashboard() {
                   };
                 });
 
-                setLocalData("schedules", newSchedules);
-                setSchedules(newSchedules);
+                void persistSchedules(newSchedules, targetDateKeys);
                 setIsShiftTemplatePickerOpen(false);
               };
 
@@ -4384,8 +4502,7 @@ export default function AdminDashboard() {
                   };
                 });
 
-                setLocalData("schedules", newSchedules);
-                setSchedules(newSchedules);
+                void persistSchedules(newSchedules, targetDateKeys);
               };
 
               const toggleWaveSelection = (shift: any, wave: BookingWaveDraft) => {
@@ -4471,8 +4588,7 @@ export default function AdminDashboard() {
                   return;
                 }
 
-                setLocalData("schedules", newSchedules);
-                setSchedules(newSchedules);
+                void persistSchedules(newSchedules, targetDateKeys);
                 setSelectedWaveKeys([]);
                 logAction(
                   isOpen ? "Booking Waves Opened" : "Booking Waves Closed",
@@ -4776,7 +4892,7 @@ export default function AdminDashboard() {
                                     >
                                       <p className="text-lg font-black">{normalizedTime}</p>
                                       <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-gray-500">
-                                        {normalizedTime === "Амралт" ? "Амрах slot" : `${getHoursForShift(normalizedTime)} цаг`}
+                                        {normalizedTime === REST_SHIFT_LABEL ? "Амрах slot" : `${getHoursForShift(normalizedTime)} цаг`}
                                       </p>
                                     </button>
                                   );
@@ -4834,7 +4950,7 @@ export default function AdminDashboard() {
                                   <div className="flex items-center gap-2">
                                     <Clock size={14} className="text-blue-400" />
                                     <p className="text-sm font-black text-white">
-                                      {getShiftTimeKey(shift.time)} <span className="text-gray-500">:</span> <span className="text-blue-300">{shift.time === "Амралт" ? "амралт" : `${getHoursForShift(shift.time)} цаг`}</span>
+                                      {getShiftTimeKey(shift.time)} <span className="text-gray-500">:</span> <span className="text-blue-300">{shift.time === REST_SHIFT_LABEL ? "амралт" : `${getHoursForShift(shift.time)} цаг`}</span>
                                     </p>
                                     {isDuplicateShift && (
                                       <span className="rounded-full bg-red-500 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-white">
@@ -4876,8 +4992,7 @@ export default function AdminDashboard() {
                                         }
                                       });
 
-                                      setLocalData("schedules", newSchedules);
-                                      setSchedules(newSchedules);
+                                      void persistSchedules(newSchedules, targetKeys);
                                       logAction("Schedule Shift Deleted", `${targetTime} removed from ${targetKeys.join(", ")}`);
                                     })
                                   }
@@ -7129,20 +7244,19 @@ export default function AdminDashboard() {
                         value={newTemplateTime}
                         onChange={(e) =>
                           setNewTemplateTime(
-                            sanitizeShiftTimeInput(e.target.value),
+                            sanitizeShiftTemplateInput(e.target.value),
                           )
                         }
-                        placeholder="Жишээ: 08-17"
-                        maxLength={5}
+                        placeholder="Жишээ: 08-17 эсвэл амралт"
+                        maxLength={10}
                         className="flex-1 bg-black/40 border border-white/10 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
                         autoFocus
                       />
                       <button
                         onClick={() => {
-                          const normalizedTime =
-                            normalizeShiftTime(newTemplateTime);
-                          if (!isValidShiftTime(normalizedTime)) {
-                            alert("Shift цагийг 09-18 хэлбэрээр оруулна уу.");
+                          const normalizedTime = normalizeShiftTime(newTemplateTime);
+                          if (!isValidShiftTemplateValue(normalizedTime)) {
+                            alert("Зөвхөн HH-HH формат эсвэл \"Амралт\" оруулна уу.");
                             return;
                           }
                           if (
@@ -7198,7 +7312,7 @@ export default function AdminDashboard() {
                               {template.time}
                             </p>
                             <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
-                              {template.time === "Амралт" ? "Амрах slot тохируулна" : `Calculated: ${getHoursForShift(template.time)} hours`}
+                              {template.time === REST_SHIFT_LABEL ? "Амрах slot тохируулна" : `${getHoursForShift(template.time)} цаг`}
                             </p>
                           </div>
                         </div>
@@ -7217,22 +7331,6 @@ export default function AdminDashboard() {
                       </div>
                     ))}
                 </div>
-
-                <button
-                  onClick={() => {
-                    if (!shiftTemplates.some((template) => template.time === "Амралт")) {
-                      const newTemplates = [
-                        ...shiftTemplates,
-                        { id: Math.random().toString(36).substr(2, 9), time: "Амралт", label: "Амралт" },
-                      ];
-                      setShiftTemplates(newTemplates);
-                      setLocalData("shiftTemplates", newTemplates);
-                    }
-                  }}
-                  className="mt-4 w-full rounded-3xl border border-emerald-500/20 bg-emerald-500/10 py-4 text-[10px] font-black uppercase tracking-widest text-emerald-300 transition-all hover:bg-emerald-500 hover:text-white"
-                >
-                  Амралт нэмэх
-                </button>
 
                 <button
                   onClick={() => setIsManagingShiftTemplates(false)}
@@ -7284,12 +7382,12 @@ export default function AdminDashboard() {
                         onChange={(e) =>
                           setEditingShiftData({
                             ...editingShiftData,
-                            time: sanitizeShiftTimeInput(e.target.value),
+                            time: sanitizeShiftTemplateInput(e.target.value),
                           })
                         }
                         className="flex-1 bg-black/40 border border-white/5 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
-                        placeholder="Жишээ: 09-18"
-                        maxLength={5}
+                        placeholder="Жишээ: 09-18 эсвэл амралт"
+                        maxLength={10}
                       />
                     </div>
                   </div>
@@ -7313,7 +7411,7 @@ export default function AdminDashboard() {
                             editingShiftData.dateKey
                           ]?.shifts.some(
                             (s: any) =>
-                              normalizeShiftTime(s.time) ===
+                              getShiftTimeKey(s.time) ===
                                 normalizedTemplateTime &&
                               s.segment === editingShiftData.segment &&
                               s.employmentType ===
@@ -7588,8 +7686,8 @@ export default function AdminDashboard() {
                           return;
                         }
 
-                        if (!isValidShiftTime(time)) {
-                          alert("Ээлжийн цагийг 09-18 хэлбэрээр оруулна уу.");
+                        if (!isValidShiftTemplateValue(time)) {
+                          alert("Зөвхөн HH-HH формат эсвэл \"Амралт\" оруулна уу.");
                           return;
                         }
 
@@ -7665,6 +7763,7 @@ export default function AdminDashboard() {
                               updatedShifts[idx] = {
                                 ...updatedShifts[idx],
                                 time,
+                                isRest: time === REST_SHIFT_LABEL,
                                 segment,
                                 employmentType,
                                 totalSlots: cleanTotalSlots,
@@ -7675,6 +7774,7 @@ export default function AdminDashboard() {
                             updatedShifts.push({
                               id: Math.random().toString(36).substr(2, 9),
                               time,
+                              isRest: time === REST_SHIFT_LABEL,
                               totalSlots: cleanTotalSlots,
                               bookedSlots: 0,
                               segment,
@@ -7712,8 +7812,7 @@ export default function AdminDashboard() {
                           setLocalData("shiftTemplates", newTemplates);
                         }
 
-                        setLocalData("schedules", newSchedules);
-                        setSchedules(newSchedules);
+                        void persistSchedules(newSchedules, targetDateKeys);
                         setBulkShiftDateKeys([]);
                         setIsEditingShiftModal(false);
                       }}

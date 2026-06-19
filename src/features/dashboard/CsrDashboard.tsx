@@ -939,6 +939,9 @@ export default function CsrDashboard() {
       const matchesEmployment = (slot.employmentType || slot.employment_type || 'Full Time') === csrProfile.employmentType;
       if (!matchesSegment || !matchesEmployment) return;
       const time = slot.isRest || slot.is_rest ? 'Амралт' : `${String(slot.startTime || '').slice(0,5)}-${String(slot.endTime || '').slice(0,5)}`;
+      const bookingOpen = Boolean(slot.bookingOpen ?? slot.booking_is_open);
+      const bookingOpenAt = slot.bookingOpenAt || slot.booking_open_at || '';
+      const bookingCloseAt = slot.bookingDeadline || slot.booking_deadline || '';
       const bookedBy = (slot.bookings || []).map((b: any) => ({
         userId: b.userId || b.user_id,
         userName: b.userName || b.user_name || 'CSR',
@@ -958,16 +961,16 @@ export default function CsrDashboard() {
           id: 'default',
           name: 'Нийт захиалах эрх',
           slotLimit: Number(slot.capacity || 1),
-          bookingOpen: true,
-          bookingOpenAt: '',
-          bookingCloseAt: slot.bookingDeadline || slot.booking_deadline || '',
+          bookingOpen,
+          bookingOpenAt,
+          bookingCloseAt,
         }],
       };
       next[dateKey] = {
         ...(next[dateKey] || { shifts: [] }),
-        bookingOpen: true,
-        bookingOpenAt: '',
-        bookingCloseAt: slot.bookingDeadline || slot.booking_deadline || '',
+        bookingOpen: (next[dateKey]?.bookingOpen || bookingOpen),
+        bookingOpenAt: next[dateKey]?.bookingOpenAt || bookingOpenAt,
+        bookingCloseAt: next[dateKey]?.bookingCloseAt || bookingCloseAt,
         shifts: [...(next[dateKey]?.shifts || []), shift],
       };
     });
@@ -1469,7 +1472,7 @@ export default function CsrDashboard() {
     }
   }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking, fetchDbSchedule]);
 
-  const handleCancelShift = React.useCallback((dateKey: string, shiftId: string) => {
+  const handleCancelShift = React.useCallback(async (dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
 
@@ -1478,47 +1481,16 @@ export default function CsrDashboard() {
       return;
     }
 
-    const updatedShifts = dayData.shifts.map(shift => {
-      const isBookedByMe = shift.bookedBy?.some(b => b.userId === csrProfile.id);
-      if (shift.id === shiftId && isBookedByMe) {
-        return { 
-          ...shift, 
-          bookedSlots: shift.bookedSlots - 1,
-          bookedBy: (shift.bookedBy || []).filter(b => b.userId !== csrProfile.id)
-        };
-      }
-      return shift;
-    });
-
     try {
-      const globalSchedules = getLocalData('schedules', {});
-      const globalDayData = globalSchedules[dateKey];
-      if (!globalDayData) return;
-
-      const updatedGlobalShifts = globalDayData.shifts.map((s: any) => {
-        const isBookedByMe = s.bookedBy?.some((b: any) => b.userId === csrProfile.id);
-        if (s.id === shiftId && isBookedByMe) {
-          return {
-            ...s,
-            bookedSlots: Math.max(0, s.bookedSlots - 1),
-            bookedBy: (s.bookedBy || []).filter((b: any) => b.userId !== csrProfile.id)
-          };
-        }
-        return s;
-      });
-
-      globalSchedules[dateKey] = {
-        ...globalDayData,
-        shifts: updatedGlobalShifts
-      };
-
-      setLocalData('schedules', globalSchedules);
+      await apiClient.post(`/slots/${shiftId}/cancel`, { slotId: shiftId });
+      await fetchDbSchedule();
       logAction('Shift Cancelled', `Cancelled shift for ${dateKey}`);
       triggerSuccess();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error cancelling shift:', error);
+      alert(error.response?.data?.error || 'Ээлж цуцлахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile]);
+  }, [schedule, submittedMonths, currentMonthKey, csrProfile, fetchDbSchedule]);
 
   const handleTradeShift = React.useCallback((dateKey: string) => {
     setTradingModal({ isOpen: true, dateKey, step: 'times' });

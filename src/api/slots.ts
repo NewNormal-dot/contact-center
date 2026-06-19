@@ -35,6 +35,47 @@ function calculateDuration(startTime: string, endTime: string, explicitDuration?
   return duration;
 }
 
+function boolValue(value: unknown) {
+  return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
+function resolveBookingWindow(day: any, shift: any) {
+  const waves = Array.isArray(shift?.bookingWaves) ? shift.bookingWaves : [];
+  const openWaves = waves.filter((wave: any) => boolValue(wave.bookingOpen));
+  const bookingOpen = day?.bookingOpen === undefined
+    ? openWaves.length > 0
+    : boolValue(day.bookingOpen) || openWaves.length > 0;
+  const openAt = openWaves.find((wave: any) => wave.bookingOpenAt)?.bookingOpenAt
+    || shift.bookingOpenAt
+    || day?.bookingOpenAt
+    || null;
+  const closeAt = openWaves.find((wave: any) => wave.bookingCloseAt)?.bookingCloseAt
+    || shift.bookingCloseAt
+    || day?.bookingCloseAt
+    || day?.bookingDeadline
+    || shift.bookingDeadline
+    || null;
+
+  return {
+    bookingOpen,
+    bookingOpenAt: bookingOpen ? toSqlDateTime(openAt) : null,
+    bookingDeadline: bookingOpen
+      ? toSqlDateTime(closeAt, new Date(Date.now() + 24 * 60 * 60 * 1000))
+      : new Date(0),
+  };
+}
+
+function slotIdentity(slot: any) {
+  return [
+    displayDate(slot.date),
+    displayTime(slot.start_time),
+    displayTime(slot.end_time),
+    normalizeSegment(slot.segment),
+    normalizeEmploymentType(slot.employment_type),
+    boolValue(slot.is_rest) ? '1' : '0',
+  ].join('|');
+}
+
 function mapSlot(slot: any, currentBookings = 0, bookings: any[] = []) {
   const isRest = Boolean(slot.is_rest || slot.isRest);
   return {
@@ -45,6 +86,8 @@ function mapSlot(slot: any, currentBookings = 0, bookings: any[] = []) {
     endTime: isRest ? 'Амралт' : displayTime(slot.end_time),
     duration: Number(slot.duration || 0),
     capacity: Number(slot.capacity || 0),
+    bookingOpen: boolValue(slot.booking_is_open),
+    bookingOpenAt: displayDateTime(slot.booking_open_at),
     bookingDeadline: displayDateTime(slot.booking_deadline),
     segment: normalizeSegment(slot.segment),
     employmentType: normalizeEmploymentType(slot.employment_type),
@@ -69,6 +112,8 @@ function mapBooking(row: any) {
     endTime: row.is_rest ? 'Амралт' : displayTime(row.end_time),
     duration: Number(row.duration || 0),
     capacity: Number(row.capacity || 0),
+    bookingOpen: boolValue(row.booking_is_open),
+    bookingOpenAt: displayDateTime(row.booking_open_at),
     bookingDeadline: displayDateTime(row.booking_deadline),
     segment: normalizeSegment(row.segment),
     employmentType: normalizeEmploymentType(row.employment_type),
@@ -188,6 +233,8 @@ router.get('/bookings', authenticate, async (req: any, res) => {
         'work_slots.end_time',
         'work_slots.duration',
         'work_slots.capacity',
+        'work_slots.booking_open_at',
+        'work_slots.booking_is_open',
         'work_slots.booking_deadline',
         'work_slots.segment',
         'work_slots.employment_type',
@@ -258,13 +305,15 @@ router.get('/', authenticate, async (_req, res) => {
 });
 
 router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
-  const { date, startTime, endTime, start_time, end_time, capacity, bookingDeadline, booking_deadline, segment, employmentType, employment_type, isRest, is_rest } = req.body;
+  const { date, startTime, endTime, start_time, end_time, capacity, bookingDeadline, booking_deadline, bookingOpen, booking_open, bookingOpenAt, booking_open_at, segment, employmentType, employment_type, isRest, is_rest } = req.body;
   const finalCapacity = Math.max(1, Number(capacity) || 1);
   const rest = Boolean(isRest || is_rest || startTime === 'Амралт' || start_time === 'Амралт');
   const sqlSlotDate = toSqlDate(date);
   const sqlStartTime = rest ? '00:00:00' : normalizeTime(start_time || startTime);
   const sqlEndTime = rest ? '00:00:00' : normalizeTime(end_time || endTime);
   const sqlDeadline = toSqlDateTime(booking_deadline || bookingDeadline, new Date(Date.now() + 24 * 60 * 60 * 1000));
+  const sqlOpenAt = toSqlDateTime(booking_open_at || bookingOpenAt);
+  const finalBookingOpen = boolValue(booking_open ?? bookingOpen);
   const finalSegment = normalizeSegment(segment);
   const finalEmploymentType = normalizeEmploymentType(employment_type || employmentType);
 
@@ -279,7 +328,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
 
     const duration = rest ? 0 : calculateDuration(sqlStartTime, sqlEndTime, req.body.duration);
     if (duplicateSlot) {
-      await db('work_slots').where({ id: duplicateSlot.id }).update({ capacity: finalCapacity, booking_deadline: sqlDeadline, updated_at: db.fn.now() });
+      await db('work_slots').where({ id: duplicateSlot.id }).update({ capacity: finalCapacity, booking_open_at: sqlOpenAt, booking_is_open: finalBookingOpen ? 1 : 0, booking_deadline: finalBookingOpen ? sqlDeadline : new Date(0), updated_at: db.fn.now() });
       return res.json({ id: duplicateSlot.id });
     }
 
@@ -291,7 +340,9 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
       end_time: sqlEndTime,
       duration,
       capacity: finalCapacity,
-      booking_deadline: sqlDeadline,
+      booking_open_at: sqlOpenAt,
+      booking_is_open: finalBookingOpen ? 1 : 0,
+      booking_deadline: finalBookingOpen ? sqlDeadline : new Date(0),
       segment: finalSegment,
       employment_type: finalEmploymentType,
       is_rest: rest ? 1 : 0,
@@ -308,40 +359,70 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
   if (!schedules || typeof schedules !== 'object') return res.status(400).json({ error: 'schedules шаардлагатай' });
   const keys = Array.isArray(dateKeys) && dateKeys.length ? dateKeys : Object.keys(schedules);
   let synced = 0;
+  let deleted = 0;
   try {
-    for (const dateKey of keys) {
-      const day = schedules[dateKey];
-      if (!day?.shifts?.length) continue;
-      const bookingDeadline = day.bookingCloseAt || day.bookingDeadline || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      for (const shift of day.shifts) {
-        const rest = shift.time === 'Амралт' || shift.isRest;
-        const timeMatch = String(shift.time || '').match(/(\d{1,2})(?::\d{2})?\s*-\s*(\d{1,2})(?::\d{2})?/);
-        const startTime = rest ? '00:00' : `${String(timeMatch?.[1] || '').padStart(2, '0')}:00`;
-        const endTime = rest ? '00:00' : `${String(timeMatch?.[2] || '').padStart(2, '0')}:00`;
-        if (!rest && (!timeMatch || !startTime || !endTime)) continue;
-        const segment = normalizeSegment(shift.segment);
-        const employmentType = normalizeEmploymentType(shift.employmentType);
-        const sqlStart = rest ? '00:00:00' : normalizeTime(startTime);
-        const sqlEnd = rest ? '00:00:00' : normalizeTime(endTime);
-        const existing = await db('work_slots').where({ date: dateKey, start_time: sqlStart, end_time: sqlEnd, segment, employment_type: employmentType, is_rest: rest ? 1 : 0 }).first();
-        const payload = {
-          date: dateKey,
-          start_time: sqlStart,
-          end_time: sqlEnd,
-          duration: rest ? 0 : calculateDuration(sqlStart, sqlEnd),
-          capacity: Math.max(1, Number(shift.totalSlots || shift.capacity || 1) || 1),
-          booking_deadline: toSqlDateTime(bookingDeadline, new Date(Date.now() + 24 * 60 * 60 * 1000)),
-          segment,
-          employment_type: employmentType,
-          is_rest: rest ? 1 : 0,
-          updated_at: db.fn.now(),
-        };
-        if (existing) await db('work_slots').where({ id: existing.id }).update(payload);
-        else await db('work_slots').insert({ id: shift.id || uuidv4(), ...payload, created_at: db.fn.now() });
-        synced += 1;
+    await db.transaction(async (trx) => {
+      for (const rawDateKey of keys) {
+        const dateKey = toSqlDate(rawDateKey);
+        if (!dateKey) continue;
+
+        const day = schedules[dateKey] || schedules[rawDateKey] || { shifts: [] };
+        const incomingSlots: any[] = [];
+        for (const shift of day?.shifts || []) {
+          const rest = shift.time === 'Амралт' || shift.isRest || shift.is_rest;
+          const timeMatch = String(shift.time || '').match(/(\d{1,2})(?::\d{2})?\s*-\s*(\d{1,2})(?::\d{2})?/);
+          const startTime = rest ? '00:00' : `${String(timeMatch?.[1] || '').padStart(2, '0')}:00`;
+          const endTime = rest ? '00:00' : `${String(timeMatch?.[2] || '').padStart(2, '0')}:00`;
+          if (!rest && (!timeMatch || !startTime || !endTime)) continue;
+          const segment = normalizeSegment(shift.segment);
+          const employmentType = normalizeEmploymentType(shift.employmentType || shift.employment_type);
+          const sqlStart = rest ? '00:00:00' : normalizeTime(startTime);
+          const sqlEnd = rest ? '00:00:00' : normalizeTime(endTime);
+          const bookingWindow = resolveBookingWindow(day, shift);
+          incomingSlots.push({
+            id: shift.id || uuidv4(),
+            date: dateKey,
+            start_time: sqlStart,
+            end_time: sqlEnd,
+            duration: rest ? 0 : calculateDuration(sqlStart, sqlEnd),
+            capacity: Math.max(1, Number(shift.totalSlots || shift.capacity || 1) || 1),
+            booking_open_at: bookingWindow.bookingOpenAt,
+            booking_is_open: bookingWindow.bookingOpen ? 1 : 0,
+            booking_deadline: bookingWindow.bookingDeadline,
+            segment,
+            employment_type: employmentType,
+            is_rest: rest ? 1 : 0,
+            updated_at: trx.fn.now(),
+          });
+        }
+
+        const existingRows = await trx('work_slots').where({ date: dateKey }).select('*');
+        const existingById = new Map(existingRows.map((row: any) => [String(row.id), row]));
+        const existingByIdentity = new Map(existingRows.map((row: any) => [slotIdentity(row), row]));
+        const keptIds = new Set<string>();
+
+        for (const payload of incomingSlots) {
+          const existing = existingById.get(String(payload.id)) || existingByIdentity.get(slotIdentity(payload));
+          if (existing) {
+            await trx('work_slots').where({ id: existing.id }).update(payload);
+            keptIds.add(String(existing.id));
+          } else {
+            await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
+            keptIds.add(String(payload.id));
+          }
+          synced += 1;
+        }
+
+        const staleRows = existingRows.filter((row: any) => !keptIds.has(String(row.id)));
+        if (staleRows.length > 0) {
+          const staleIds = staleRows.map((row: any) => row.id);
+          await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
+          await trx('work_slots').whereIn('id', staleIds).delete();
+          deleted += staleRows.length;
+        }
       }
-    }
-    res.json({ synced });
+    });
+    res.json({ synced, deleted });
   } catch (err) {
     console.error('Sync schedules error:', err);
     res.status(500).json({ error: 'Хуваарь DB-д хадгалахад алдаа гарлаа' });
@@ -359,6 +440,24 @@ router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (r
   }
 });
 
+router.delete('/:slotId/bookings/:userId', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
+  const { slotId, userId } = req.params;
+  try {
+    const deleted = await db('slot_bookings')
+      .where({ slot_id: slotId, user_id: userId, status: 'confirmed' })
+      .delete();
+
+    if (!deleted) {
+      return res.status(404).json({ error: 'Захиалга олдсонгүй' });
+    }
+
+    res.json({ message: 'Захиалга хасагдлаа' });
+  } catch (err) {
+    console.error('Remove booking error:', err);
+    res.status(500).json({ error: 'Захиалга хасахад алдаа гарлаа' });
+  }
+});
+
 const bookHandler = async (req: any, res: any) => {
   const slot_id = req.params.slotId || req.body.slot_id || req.body.slotId;
   const userId = req.user.id;
@@ -368,6 +467,12 @@ const bookHandler = async (req: any, res: any) => {
   try {
     const slot = await db('work_slots').where({ id: slot_id }).first();
     if (!slot) return res.status(404).json({ error: 'Слот олдсонгүй' });
+    if (!boolValue(slot.booking_is_open)) {
+      return res.status(400).json({ error: 'Захиалга хаалттай байна' });
+    }
+    if (slot.booking_open_at && new Date().getTime() < new Date(slot.booking_open_at).getTime()) {
+      return res.status(400).json({ error: 'Захиалга эхлэх хугацаа болоогүй байна' });
+    }
     if (slot.booking_deadline && new Date().getTime() > new Date(slot.booking_deadline).getTime()) {
       return res.status(400).json({ error: 'Захиалга хийх хугацаа дууссан байна' });
     }
@@ -394,19 +499,41 @@ const bookHandler = async (req: any, res: any) => {
     const ruleError = await validateUserWeeklyLimit(userId, slot, editBookingId ? existingOnSameDay?.slot_id : undefined);
     if (ruleError) return res.status(400).json({ error: ruleError });
 
-    const [{ count }] = await db('slot_bookings').where({ slot_id, status: 'confirmed' }).count('id as count');
-    if (Number(count) >= Number(slot.capacity) && (!existingOnSameDay || existingOnSameDay.slot_id !== slot_id)) {
-      return res.status(400).json({ error: 'Орон тоо дүүрсэн байна' });
+    const bookingResult = await db.transaction(async trx => {
+      const currentBooking = await trx('slot_bookings')
+        .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
+        .where({ 'slot_bookings.user_id': userId, 'work_slots.date': slot.date, 'slot_bookings.status': 'confirmed' })
+        .select('slot_bookings.*')
+        .first();
+
+      if (currentBooking && currentBooking.slot_id !== slot_id && !editBookingId) {
+        return { status: 400, error: 'Энэ өдөр аль хэдийн захиалга хийсэн байна' };
+      }
+
+      const [{ count }] = await trx('slot_bookings').where({ slot_id, status: 'confirmed' }).count('id as count');
+      if (Number(count) >= Number(slot.capacity) && (!currentBooking || currentBooking.slot_id !== slot_id)) {
+        return { status: 400, error: 'Орон тоо дүүрсэн байна' };
+      }
+
+      if (currentBooking) {
+        await trx('slot_bookings').where({ id: currentBooking.id }).update({ slot_id, booked_at: db.fn.now(), status: 'confirmed' });
+        return { id: currentBooking.id, edited: true };
+      }
+
+      const id = uuidv4();
+      await trx('slot_bookings').insert({ id, slot_id, user_id: userId, status: 'confirmed' });
+      return { id, created: true };
+    });
+
+    if ('error' in bookingResult) {
+      return res.status(bookingResult.status).json({ error: bookingResult.error });
     }
 
-    if (existingOnSameDay) {
-      await db('slot_bookings').where({ id: existingOnSameDay.id }).update({ slot_id, booked_at: db.fn.now(), status: 'confirmed' });
-      return res.json({ id: existingOnSameDay.id, edited: true });
+    if ('edited' in bookingResult && bookingResult.edited) {
+      return res.json({ id: bookingResult.id, edited: true });
     }
 
-    const id = uuidv4();
-    await db('slot_bookings').insert({ id, slot_id, user_id: userId, status: 'confirmed' });
-    res.status(201).json({ id });
+    res.status(201).json({ id: bookingResult.id });
   } catch (err) {
     console.error('Book slot error:', err);
     res.status(500).json({ error: 'Захиалга хийхэд алдаа гарлаа' });

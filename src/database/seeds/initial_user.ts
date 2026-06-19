@@ -3,6 +3,15 @@ import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function seed(knex: Knex): Promise<void> {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DESTRUCTIVE_SEED !== 'true') {
+    throw new Error('Refusing to run destructive user seed in production');
+  }
+
+  const existingUsers = await knex('users').count('id as count').first();
+  if (existingUsers && Number(existingUsers.count) > 0 && process.env.ALLOW_DESTRUCTIVE_SEED !== 'true') {
+    throw new Error('Refusing to overwrite existing users without ALLOW_DESTRUCTIVE_SEED=true');
+  }
+
   await knex('users').del();
 
   const email = process.env.SEED_SUPERADMIN_EMAIL;

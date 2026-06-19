@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { columnExists } from '../schemaUtils';
+import { columnExists } from '../schemaUtils.ts';
 
 export async function up(knex: Knex): Promise<void> {
   if (!(await columnExists(knex, 'work_slots', 'segment'))) {
