@@ -142,6 +142,8 @@ export interface Notification {
   authorName?: string;
   type?: 'general' | 'training' | 'important';
   targetUserId?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
   tradeRequestId?: string;
   fileUrl?: string;
   fileName?: string;

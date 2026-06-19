@@ -4,7 +4,7 @@ import { LazyMedia } from '../../components/LazyMedia';
 import Sidebar from '../../components/Sidebar';
 import ChatWindow from '../chat/ChatWindow';
 import { DigitalClock } from '../../components/DigitalClock';
-import { MessageCircle, Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
+import { MessageCircle, Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, Edit, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
 import { Notification as AppNotification, TrainingMaterial, VacationQuota, VacationRequest, TradeRequest, HourlyLeaveRequest } from '../../types';
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
@@ -477,14 +477,14 @@ const DayRow = React.memo(({
       ? `Захиалга ${bookingAccess.label.toLowerCase()}`
       : bookingAccess.state === 'expired'
         ? 'Захиалга хаагдсан'
-        : 'Захиалга хараахан нээгдээгүй байна';
+        : '';
   const disabledBookingLabel = bookingAccess.state === 'scheduled'
     ? bookingAccess.label
     : bookingAccess.state === 'expired'
       ? 'Хаагдсан'
       : bookingAccess.state === 'full'
         ? 'Дүүрсэн'
-        : 'Нээгдээгүй';
+        : 'Захиалах';
 
   return (
     <div 
@@ -507,7 +507,7 @@ const DayRow = React.memo(({
               : isYesterday
                 ? 'bg-gray-900/95 backdrop-blur-xl border border-orange-500/30'
                 : !hasData
-                  ? 'bg-gray-900/10 border border-gray-800/30 opacity-50'
+                  ? 'bg-gray-900/40 border border-gray-800'
                   : 'bg-gray-900/40 border border-gray-800'
       }`}>
         <div className="flex items-center gap-4 md:gap-8">
@@ -628,11 +628,20 @@ const DayRow = React.memo(({
                       </div>
                       {!isSubmitted && isBookingOpen && (
                         <button 
+                          onClick={() => onBookShift(dateKey)}
+                          className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
+                        >
+                          <Edit size={18} />
+                          Edit
+                        </button>
+                      )}
+                      {!isSubmitted && !isBookingOpen && bookingAccess.state === 'expired' && (
+                        <button 
                           onClick={() => onTradeShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
                         >
                           <ArrowRightLeft size={18} />
-                          Хуваарь солих
+                          Trade
                         </button>
                       )}
                     </>
@@ -919,6 +928,91 @@ export default function CsrDashboard() {
 
 
 
+
+
+  const mapSlotsToSchedule = React.useCallback((slots: any[]): Record<string, DayData> => {
+    const next: Record<string, DayData> = {};
+    (slots || []).forEach((slot: any) => {
+      const dateKey = String(slot.date || '').slice(0, 10);
+      if (!dateKey) return;
+      const matchesSegment = (slot.segment === 'All') || (slot.segment === csrProfile.lineType) || (csrProfile.lineType === 'VIP' && slot.segment === 'Premium');
+      const matchesEmployment = (slot.employmentType || slot.employment_type || 'Full Time') === csrProfile.employmentType;
+      if (!matchesSegment || !matchesEmployment) return;
+      const time = slot.isRest || slot.is_rest ? 'Амралт' : `${String(slot.startTime || '').slice(0,5)}-${String(slot.endTime || '').slice(0,5)}`;
+      const bookedBy = (slot.bookings || []).map((b: any) => ({
+        userId: b.userId || b.user_id,
+        userName: b.userName || b.user_name || 'CSR',
+        userCode: b.userCode || b.user_code,
+        bookedAt: b.bookedAt || b.booked_at,
+      }));
+      const shift: Shift = {
+        id: String(slot.id),
+        time,
+        totalSlots: Number(slot.capacity || slot.totalSlots || 1),
+        bookedSlots: Number(slot.currentBookings ?? slot.current_bookings ?? bookedBy.length),
+        isBookedByMe: bookedBy.some((b: any) => b.userId === csrProfile.id),
+        bookedBy,
+        segment: slot.segment || csrProfile.lineType,
+        employmentType: slot.employmentType || slot.employment_type || csrProfile.employmentType,
+        bookingWaves: [{
+          id: 'default',
+          name: 'Нийт захиалах эрх',
+          slotLimit: Number(slot.capacity || 1),
+          bookingOpen: true,
+          bookingOpenAt: '',
+          bookingCloseAt: slot.bookingDeadline || slot.booking_deadline || '',
+        }],
+      };
+      next[dateKey] = {
+        ...(next[dateKey] || { shifts: [] }),
+        bookingOpen: true,
+        bookingOpenAt: '',
+        bookingCloseAt: slot.bookingDeadline || slot.booking_deadline || '',
+        shifts: [...(next[dateKey]?.shifts || []), shift],
+      };
+    });
+    return next;
+  }, [csrProfile]);
+
+  const fetchDbSchedule = React.useCallback(async () => {
+    try {
+      const response = await apiClient.get('/slots');
+      const dbSchedule = mapSlotsToSchedule(response.data || []);
+      if (Object.keys(dbSchedule).length > 0) {
+        setSchedule(dbSchedule);
+        return dbSchedule;
+      }
+    } catch (error) {
+      console.error('Error fetching DB schedule:', error);
+    }
+    return null;
+  }, [mapSlotsToSchedule]);
+
+  const fetchTradeRequests = React.useCallback(async () => {
+    try {
+      const response = await apiClient.get('/trades');
+      const mapped = (response.data || []).map((t: any) => ({
+        ...t,
+        senderId: t.senderId || t.sender_id,
+        receiverId: t.receiverId || t.receiver_id,
+        senderName: t.senderName || t.sender_name,
+        receiverName: t.receiverName || t.receiver_name,
+        senderShiftId: t.senderSlotId || t.sender_slot_id || t.senderShiftId,
+        receiverShiftId: t.receiverSlotId || t.receiver_slot_id || t.receiverShiftId,
+        senderSlotId: t.senderSlotId || t.sender_slot_id,
+        receiverSlotId: t.receiverSlotId || t.receiver_slot_id,
+        senderShiftTime: t.senderShiftTime || t.sender_shift_time,
+        receiverShiftTime: t.receiverShiftTime || t.receiver_shift_time,
+        createdAt: t.createdAt || t.created_at,
+      }));
+      setTradeRequests(mapped);
+      return mapped;
+    } catch (error) {
+      console.error('Error fetching trade requests:', error);
+      return [];
+    }
+  }, []);
+
   const fetchShiftRules = async () => {
     try {
       const response = await apiClient.get('/rules');
@@ -1007,10 +1101,13 @@ export default function CsrDashboard() {
     fetchNotifications();
     fetchVacationRequests();
     fetchShiftRules();
-    const interval = setInterval(loadData, 2000);
+    fetchDbSchedule();
+    fetchTradeRequests();
+    const interval = setInterval(() => { loadData(); fetchDbSchedule(); }, 5000);
     const notificationInterval = setInterval(fetchNotifications, 10000);
     const vacationInterval = setInterval(fetchVacationRequests, 10000);
     const shiftRuleInterval = setInterval(fetchShiftRules, 5000);
+    const tradeInterval = setInterval(fetchTradeRequests, 5000);
     
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
@@ -1024,6 +1121,7 @@ export default function CsrDashboard() {
       clearInterval(notificationInterval);
       clearInterval(vacationInterval);
       clearInterval(shiftRuleInterval);
+      clearInterval(tradeInterval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);
@@ -1083,9 +1181,7 @@ export default function CsrDashboard() {
     }
   };
 
-  const handleSendTradeRequest = (receiverId: string, receiverName: string, receiverShiftId: string, receiverShiftTime: string, dateKey: string) => {
-    // Find my shift on that day or any day? Usually same day or similar.
-    // Let's find any shift booked by me.
+  const handleSendTradeRequest = async (receiverId: string, receiverName: string, receiverShiftId: string, receiverShiftTime: string, dateKey: string) => {
     let myShift: { date: string, shift: Shift } | null = null;
     Object.entries(schedule).forEach(([date, data]) => {
       const dayData = data as DayData;
@@ -1098,194 +1194,47 @@ export default function CsrDashboard() {
       return;
     }
 
-    const newRequest: TradeRequest = {
-      id: Math.random().toString(36).substr(2, 9),
-      senderId: csrProfile.id,
-      senderName: csrProfile.name,
-      receiverId,
-      receiverName,
-      date: dateKey,
-      senderShiftId: myShift.shift.id,
-      senderShiftTime: myShift.shift.time,
-      receiverShiftId,
-      receiverShiftTime,
-      status: 'pending',
-      createdAt: new Date().toISOString()
-    };
-
-    const saveTradeRequest = () => {
-      try {
-        addLocalItem('tradeRequests', newRequest);
-        
-        // Add notification for receiver
-        const receiverNotif: AppNotification = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: 'Ээлж солих хүсэлт',
-          content: `${csrProfile.name} тантай ээлж солих хүсэлт ирүүллээ.`,
-          deadline: '',
-          createdAt: new Date().toISOString(),
-          authorId: csrProfile.id,
-          authorName: csrProfile.name,
-          type: 'general',
-          targetUserId: receiverId,
-          tradeRequestId: newRequest.id,
-          seenBy: []
-        };
-
-        // Add notification for sender
-        const senderNotif: AppNotification = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: 'Ээлж солих хүсэлт илгээгдлээ',
-          content: `Та ${receiverName} руу ээлж солих хүсэлт илгээлээ.`,
-          deadline: '',
-          createdAt: new Date().toISOString(),
-          authorId: csrProfile.id,
-          authorName: csrProfile.name,
-          type: 'general',
-          targetUserId: csrProfile.id,
-          seenBy: []
-        };
-
-        addLocalItem('notifications', receiverNotif);
-        addLocalItem('notifications', senderNotif);
-        
-        setTradingModal(null);
-        triggerSuccess();
-        logAction('Trade Requested', `Sent trade request to ${receiverName}`);
-      } catch (error) {
-        console.error('Error sending trade request:', error);
-        alert('Хүсэлт илгээхэд алдаа гарлаа.');
-      }
-    };
-
-    saveTradeRequest();
-  };
-
-  const handleAcceptTrade = (request: TradeRequest) => {
     try {
-      // 1. Update trade request status
-      updateLocalItem('tradeRequests', request.id, { status: 'approved' });
-
-      // 2. Update schedules (swap)
-      let senderDateKey = '';
-      Object.entries(schedule).forEach(([date, data]) => {
-        const dayData = data as DayData;
-        if (dayData.shifts.some(s => s.id === request.senderShiftId)) senderDateKey = date;
+      await apiClient.post('/trades', {
+        receiver_id: receiverId,
+        sender_slot_id: myShift.shift.id,
+        receiver_slot_id: receiverShiftId,
       });
-
-      if (senderDateKey && schedule[senderDateKey] && schedule[request.date]) {
-        const updatedSenderDay = {
-          ...schedule[senderDateKey],
-          shifts: schedule[senderDateKey].shifts.map(s => {
-            if (s.id === request.senderShiftId) {
-              return {
-                ...s,
-                bookedBy: (s.bookedBy || []).map(b => b.userId === request.senderId ? { userId: request.receiverId, userName: request.receiverName } : b)
-              };
-            }
-            return s;
-          })
-        };
-
-        const updatedReceiverDay = {
-          ...schedule[request.date],
-          shifts: schedule[request.date].shifts.map(s => {
-            if (s.id === request.receiverShiftId) {
-              return {
-                ...s,
-                bookedBy: (s.bookedBy || []).map(b => b.userId === request.receiverId ? { userId: request.senderId, userName: request.senderName } : b)
-              };
-            }
-            return s;
-          })
-        };
-
-        const schedules = getLocalData('schedules', {});
-        schedules[senderDateKey] = updatedSenderDay;
-        schedules[request.date] = updatedReceiverDay;
-        setLocalData('schedules', schedules);
-      }
-
-      // 3. Add notifications
-      const senderNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлт зөвшөөрөгдлөө',
-        content: `${request.receiverName} таны ээлж солих хүсэлтийг зөвшөөрлөө.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: request.senderId,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      const receiverNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлт баталгаажлаа',
-        content: `Та ${request.senderName}-тай ээлж солих хүсэлтийг зөвшөөрлөө.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: csrProfile.id,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      addLocalItem('notifications', senderNotif);
-      addLocalItem('notifications', receiverNotif);
-
-      setIncomingTradeModal(null);
+      await fetchTradeRequests();
+      await fetchNotifications();
+      setTradingModal(null);
       triggerSuccess();
-      logAction('Trade Accepted', `Accepted trade from ${request.senderName}`);
-    } catch (error) {
-      console.error('Error accepting trade:', error);
-      alert('Хүсэлт зөвшөөрөхөд алдаа гарлаа.');
+      logAction('Trade Requested', `Sent trade request to ${receiverName}`);
+    } catch (error: any) {
+      console.error('Error sending trade request:', error);
+      alert(error.response?.data?.error || 'Хүсэлт илгээхэд алдаа гарлаа.');
     }
   };
 
-  const handleDeclineTrade = (request: TradeRequest) => {
+  const handleAcceptTrade = async (request: TradeRequest) => {
     try {
-      updateLocalItem('tradeRequests', request.id, { status: 'rejected' });
+      await apiClient.patch(`/trades/${request.id}/respond`, { status: 'accepted' });
+      await fetchTradeRequests();
+      await fetchNotifications();
+      setIncomingTradeModal(null);
+      triggerSuccess();
+      logAction('Trade Accepted', `Accepted trade from ${request.senderName}`);
+    } catch (error: any) {
+      console.error('Error accepting trade:', error);
+      alert(error.response?.data?.error || 'Хүсэлт зөвшөөрөхөд алдаа гарлаа.');
+    }
+  };
 
-      const senderNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлт татгалзлаа',
-        content: `${request.receiverName} таны ээлж солих хүсэлтээс татгалзлаа.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: request.senderId,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      const receiverNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлтээс татгалзлаа',
-        content: `Та ${request.senderName}-ийн ээлж солих хүсэлтээс татгалзлаа.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: csrProfile.id,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      addLocalItem('notifications', senderNotif);
-      addLocalItem('notifications', receiverNotif);
-
+  const handleDeclineTrade = async (request: TradeRequest) => {
+    try {
+      await apiClient.patch(`/trades/${request.id}/respond`, { status: 'rejected' });
+      await fetchTradeRequests();
+      await fetchNotifications();
       setIncomingTradeModal(null);
       logAction('Trade Declined', `Declined trade from ${request.senderName}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error declining trade:', error);
+      alert(error.response?.data?.error || 'Хүсэлт татгалзахад алдаа гарлаа.');
     }
   };
 
@@ -1427,7 +1376,7 @@ export default function CsrDashboard() {
     return '';
   }, [activeWeeklyRule, getMyWeeklyBookingStats, getShiftRuleHourKey]);
 
-  const handleBookShift = React.useCallback((dateKey: string, shiftId?: string, bookingWaveId?: string) => {
+  const handleBookShift = React.useCallback(async (dateKey: string, shiftId?: string, bookingWaveId?: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
 
@@ -1438,7 +1387,7 @@ export default function CsrDashboard() {
 
     const dayAccess = getDayBookingAccess(dayData, nowTick);
     if (!dayAccess.canBook) {
-      alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
+      return;
       return;
     }
 
@@ -1471,7 +1420,7 @@ export default function CsrDashboard() {
       : availableWaves[0];
 
     if (!targetWave || !isWaveCurrentlyOpen(targetWave, nowTick)) {
-      alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
+      return;
       return;
     }
 
@@ -1507,70 +1456,18 @@ export default function CsrDashboard() {
     });
 
     try {
-      const globalSchedules = getLocalData('schedules', {});
-      const globalDayData = globalSchedules[dateKey] || { shifts: [] };
-      const globalTargetShift = globalDayData.shifts.find((s: any) => s.id === targetShift.id);
-      if (!globalTargetShift) {
-        alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
-        return;
-      }
-      if ((globalDayData.shifts || []).some((s: any) => s.bookedBy?.some((b: any) => b.userId === csrProfile.id))) {
-        alert('Та энэ өдөр аль хэдийн ээлж захиалсан байна.');
-        return;
-      }
-      if (globalTargetShift.bookedSlots >= globalTargetShift.totalSlots) {
-        alert('Энэ ээлж дүүрсэн байна.');
-        return;
-      }
-
-      const globalRuleError = validateShiftRuleBeforeBooking(dateKey, globalTargetShift, globalSchedules);
-      if (globalRuleError) {
-        alert(globalRuleError);
-        return;
-      }
-
-      const globalTargetWave = getBookingWavesForShift(globalTargetShift, !!globalDayData.bookingOpen, globalDayData.bookingOpenAt || '', globalDayData.bookingCloseAt || '')
-        .find((wave: BookingWave) => wave.id === targetWave.id);
-      if (!globalTargetWave || !isWaveCurrentlyOpen(globalTargetWave, nowTick)) {
-        alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
-        return;
-      }
-      if (getWaveBookedCount(globalTargetShift, globalTargetWave.id) >= globalTargetWave.slotLimit) {
-        alert('Энэ захиалах эрхийн slot дүүрсэн байна.');
-        return;
-      }
-      
-      const updatedGlobalShifts = globalDayData.shifts.map((s: any) => {
-        if (s.id === targetShift.id) {
-          return {
-            ...s,
-            bookedSlots: s.bookedSlots + 1,
-            bookedBy: [...(s.bookedBy || []), bookingInfo]
-          };
-        }
-        return s;
+      await apiClient.post('/slots/book', {
+        slotId: targetShift.id,
+        bookingWaveId: targetWave.id,
       });
-
-      globalSchedules[dateKey] = {
-        ...globalDayData,
-        shifts: updatedGlobalShifts
-      };
-      
-      setLocalData('schedules', globalSchedules);
-      setSchedule(prev => ({
-        ...prev,
-        [dateKey]: {
-          ...dayData,
-          shifts: updatedShifts
-        }
-      }));
+      await fetchDbSchedule();
       logAction('Shift Booked', `Booked shift on ${dateKey} / ${targetWave.name}`);
       triggerSuccess();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error booking shift:', error);
-      alert('Ээлж захиалахад алдаа гарлаа.');
+      alert(error.response?.data?.error || 'Ээлж захиалахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking]);
+  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking, fetchDbSchedule]);
 
   const handleCancelShift = React.useCallback((dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];

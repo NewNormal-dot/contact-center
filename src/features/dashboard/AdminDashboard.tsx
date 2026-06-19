@@ -743,6 +743,68 @@ export default function AdminDashboard() {
     });
   };
 
+
+
+  const mapNotificationForUi = (raw: any): Notification => ({
+    id: String(raw.id),
+    title: raw.title || '',
+    content: raw.content || '',
+    desc: raw.content || raw.desc || '',
+    time: raw.createdAt || raw.created_at || new Date().toISOString(),
+    unread: !raw.readAt && !raw.read_at,
+    type: raw.type || 'general',
+    imageUrl: raw.imageUrl || raw.image_url || '',
+    deadline: raw.deadline || '',
+    createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
+    authorId: raw.authorId || raw.author_id || '',
+    authorName: raw.authorName || raw.author_name || 'System',
+    targetUserId: raw.targetUserId || raw.target_user_id,
+    relatedEntityType: raw.relatedEntityType || raw.related_entity_type,
+    relatedEntityId: raw.relatedEntityId || raw.related_entity_id,
+    tradeRequestId: raw.relatedEntityType === 'trade_requests' || raw.related_entity_type === 'trade_requests'
+      ? (raw.relatedEntityId || raw.related_entity_id)
+      : raw.tradeRequestId,
+    seenBy: [],
+  } as Notification);
+
+  const fetchNotificationsFromDb = async () => {
+    try {
+      const response = await apiClient.get('/broadcasts/notifications');
+      const data = (response.data || []).map(mapNotificationForUi);
+      setNotifications(data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      const local = getLocalData('notifications', []);
+      setNotifications(local);
+      return local;
+    }
+  };
+
+  const handleApproveTradeNotification = async (tradeId?: string) => {
+    if (!tradeId) return;
+    try {
+      await apiClient.patch(`/trades/${tradeId}/approve`);
+      await fetchNotificationsFromDb();
+      alert('Trade батлагдаж хуваарь автоматаар солигдлоо.');
+    } catch (error: any) {
+      console.error('Approve trade error:', error);
+      alert(error.response?.data?.error || 'Trade approve хийхэд алдаа гарлаа.');
+    }
+  };
+
+  const handleRejectTradeNotification = async (tradeId?: string) => {
+    if (!tradeId) return;
+    try {
+      await apiClient.patch(`/trades/${tradeId}/reject`);
+      await fetchNotificationsFromDb();
+      alert('Trade хүсэлт татгалзагдлаа.');
+    } catch (error: any) {
+      console.error('Reject trade error:', error);
+      alert(error.response?.data?.error || 'Trade reject хийхэд алдаа гарлаа.');
+    }
+  };
+
   const generateRandomPassword = (length = 10) => {
     const charset =
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+";
@@ -775,7 +837,7 @@ export default function AdminDashboard() {
 
     fetchCsrUsers().catch(() => undefined);
 
-    setNotifications(getLocalData("notifications", []));
+    fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
     setTrainingMaterials(getLocalData("trainingMaterials", []));
     setVacationRequests(getLocalData("vacationRequests", []));
     setSegments(getLocalData("segments", []));
@@ -918,7 +980,7 @@ export default function AdminDashboard() {
       if (currentHash !== lastDataRef.current) {
         lastDataRef.current = currentHash;
         setCsrs(u);
-        setNotifications(n);
+        fetchNotificationsFromDb().catch(() => setNotifications(n));
         setTrainingMaterials(tm);
         setVacationRequests(vr);
         setSegments(segs);
@@ -937,7 +999,7 @@ export default function AdminDashboard() {
 
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === "notifications") {
-        setNotifications(getLocalData("notifications", []));
+        fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
       }
     };
 
@@ -3017,6 +3079,22 @@ export default function AdminDashboard() {
                                 <p className="text-sm text-gray-400 leading-relaxed">
                                   {notif.content}
                                 </p>
+                                {(notif.relatedEntityType === "trade_requests" || notif.tradeRequestId) && (
+                                  <div className="flex flex-wrap items-center gap-2 pt-2">
+                                    <button
+                                      onClick={() => handleApproveTradeNotification(notif.tradeRequestId || notif.relatedEntityId)}
+                                      className="px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-[10px] font-black uppercase tracking-widest transition-all"
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectTradeNotification(notif.tradeRequestId || notif.relatedEntityId)}
+                                      className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-widest transition-all"
+                                    >
+                                      Reject
+                                    </button>
+                                  </div>
+                                )}
                                 <div className="flex items-center gap-3">
                                   <button
                                     onClick={() =>
@@ -3484,7 +3562,7 @@ export default function AdminDashboard() {
       );
     };
 
-    const setBookingAccessForDates = (dateKeys: string[], isOpen: boolean) => {
+    const setBookingAccessForDates = async (dateKeys: string[], isOpen: boolean) => {
       const pastDates = dateKeys.filter((dateKey) =>
         isPastScheduleDate(dateKey),
       );
@@ -3535,6 +3613,12 @@ export default function AdminDashboard() {
 
       setSchedules(newSchedules);
       setLocalData("schedules", newSchedules);
+      try {
+        await apiClient.post("/slots/sync-schedules", { schedules: newSchedules, dateKeys: datesWithSchedules });
+      } catch (error: any) {
+        console.error("Sync schedules to DB error:", error);
+        alert(error.response?.data?.error || "Хуваарь DB-д хадгалахад алдаа гарлаа.");
+      }
       setSelectedBookingDates([]);
       logAction(
         isOpen ? "Schedule Booking Opened" : "Schedule Booking Closed",
@@ -3543,7 +3627,7 @@ export default function AdminDashboard() {
     };
 
     const handleSetBookingAccessForSelected = (isOpen: boolean) => {
-      setBookingAccessForDates(selectedBookingDates, isOpen);
+      void setBookingAccessForDates(selectedBookingDates, isOpen);
     };
 
     const copyPreviousDayIntoDate = (currentDateKey: string, scheduleDraft: any) => {
