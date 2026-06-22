@@ -298,6 +298,53 @@ const createBookingWave = (
   bookingCloseAt,
 });
 
+type CreateWorkSlotForScheduleParams = {
+  dateKey: string;
+  time: string;
+  totalSlots: number;
+  segment?: string;
+  employmentType?: string;
+  bookingOpen: boolean;
+  bookingOpenAt?: string;
+  bookingCloseAt?: string;
+};
+
+const splitShiftTimeForApi = (time: string) => {
+  const [startHour, endHour] = time.split('-');
+  return {
+    startTime: `${startHour}:00`,
+    endTime: `${endHour}:00`,
+  };
+};
+
+const createWorkSlotForSchedule = async ({
+  dateKey,
+  time,
+  totalSlots,
+  segment,
+  employmentType,
+  bookingOpen,
+  bookingOpenAt,
+  bookingCloseAt,
+}: CreateWorkSlotForScheduleParams) => {
+  const { startTime, endTime } = splitShiftTimeForApi(time);
+  const response = await apiClient.post<{ id: string }>('/slots', {
+    date: dateKey,
+    startTime,
+    endTime,
+    capacity: totalSlots,
+    bookingDeadline: bookingCloseAt || undefined,
+    segment: segment || 'All',
+    employmentType: employmentType || 'Full Time',
+    bookingOpen,
+    bookingOpenAt: bookingOpen && bookingOpenAt ? bookingOpenAt : undefined,
+  });
+
+  const createdId = response.data?.id;
+  if (!createdId) throw new Error('Slot id was not returned');
+  return createdId;
+};
+
 const createDefaultBookingWaves = (
   totalSlots: number,
   bookingOpen = false,
@@ -7238,7 +7285,7 @@ export default function AdminDashboard() {
                       Болих
                     </button>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         const newSchedules = { ...schedules };
                         const {
                           dateKey,
@@ -7324,48 +7371,68 @@ export default function AdminDashboard() {
                           return;
                         }
 
-                        targetDateKeys.forEach((targetDateKey) => {
-                          if (!newSchedules[targetDateKey])
-                            newSchedules[targetDateKey] = { shifts: [] };
-                          const updatedShifts = [
-                            ...(newSchedules[targetDateKey].shifts || []),
-                          ];
+                          try {
+                            for (const targetDateKey of targetDateKeys) {
+                              if (!newSchedules[targetDateKey])
+                                newSchedules[targetDateKey] = { shifts: [] };
+                              const updatedShifts = [
+                                ...(newSchedules[targetDateKey].shifts || []),
+                              ];
 
-                          if (id && targetDateKey === dateKey) {
-                            const idx = updatedShifts.findIndex(
-                              (s: any) => s.id === id,
-                            );
-                            if (idx !== -1) {
-                              updatedShifts[idx] = {
-                                ...updatedShifts[idx],
-                                time,
-                                segment,
-                                employmentType,
-                                totalSlots: cleanTotalSlots,
-                                bookingWaves: cleanWaves,
+                              if (id && targetDateKey === dateKey) {
+                                const idx = updatedShifts.findIndex(
+                                  (s: any) => s.id === id,
+                                );
+                                if (idx !== -1) {
+                                  updatedShifts[idx] = {
+                                    ...updatedShifts[idx],
+                                    time,
+                                    segment,
+                                    employmentType,
+                                    totalSlots: cleanTotalSlots,
+                                    bookingWaves: cleanWaves,
+                                  };
+                                }
+                              } else {
+                                const anyBookingOpen = cleanWaves.some(
+                                  (wave) => wave.bookingOpen,
+                                );
+                                const createdSlotId = await createWorkSlotForSchedule({
+                                  dateKey: targetDateKey,
+                                  time,
+                                  totalSlots: cleanTotalSlots,
+                                  segment,
+                                  employmentType,
+                                  bookingOpen: anyBookingOpen,
+                                  bookingOpenAt: anyBookingOpen ? bookingOpenAtInput : '',
+                                  bookingCloseAt: anyBookingOpen ? bookingCloseAtInput : '',
+                                });
+
+                                updatedShifts.push({
+                                  id: createdSlotId,
+                                  time,
+                                  totalSlots: cleanTotalSlots,
+                                  bookedSlots: 0,
+                                  segment,
+                                  employmentType,
+                                  bookingWaves: cleanWaves.map((wave) => ({
+                                    ...wave,
+                                    id: Math.random().toString(36).substr(2, 9),
+                                  })),
+                                  bookedBy: [],
+                                });
+                              }
+
+                              newSchedules[targetDateKey] = {
+                                ...newSchedules[targetDateKey],
+                                shifts: updatedShifts,
                               };
                             }
-                          } else {
-                            updatedShifts.push({
-                              id: Math.random().toString(36).substr(2, 9),
-                              time,
-                              totalSlots: cleanTotalSlots,
-                              bookedSlots: 0,
-                              segment,
-                              employmentType,
-                              bookingWaves: cleanWaves.map((wave) => ({
-                                ...wave,
-                                id: Math.random().toString(36).substr(2, 9),
-                              })),
-                              bookedBy: [],
-                            });
+                          } catch (err: any) {
+                            console.error('Create slot from admin schedule error:', err);
+                            alert(err?.response?.data?.error || 'Shift хадгалахад алдаа гарлаа.');
+                            return;
                           }
-
-                          newSchedules[targetDateKey] = {
-                            ...newSchedules[targetDateKey],
-                            shifts: updatedShifts,
-                          };
-                        });
 
                         // Auto-add new time pattern to templates if not exists
                         if (
