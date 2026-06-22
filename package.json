@@ -13,8 +13,11 @@
     "start": "tsx server.ts",
     "clean": "node -e \"import('node:fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\"",
     "lint": "tsc --noEmit",
-    "migrate": "knex migrate:latest",
-    "seed": "knex seed:run"
+    "migrate": "knex migrate:latest --knexfile knexfile.ts",
+    "seed": "knex seed:run --knexfile knexfile.ts",
+    "migrate:status": "knex migrate:status --knexfile knexfile.ts",
+    "migrate:prod": "knex migrate:latest --knexfile knexfile.mssql.cjs --env production",
+    "migrate:prod:status": "knex migrate:status --knexfile knexfile.mssql.cjs --env production"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
