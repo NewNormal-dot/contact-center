@@ -202,6 +202,19 @@ const bookHandler = async (req: any, res: any) => {
     const slot = await db('work_slots').where({ id: slot_id }).first();
     if (!slot) return res.status(404).json({ error: 'Слот олдсонгүй' });
 
+    const bookingClosed =
+      slot.booking_is_open === false ||
+      slot.booking_is_open === 0 ||
+      slot.booking_is_open === '0';
+
+    if (bookingClosed) {
+      return res.status(400).json({ error: 'Захиалга хаалттай байна' });
+    }
+
+    if (slot.booking_open_at && new Date().getTime() < new Date(slot.booking_open_at).getTime()) {
+      return res.status(400).json({ error: 'Захиалга нээгдэх хугацаа болоогүй байна' });
+    }
+
     if (slot.booking_deadline && new Date().getTime() > new Date(slot.booking_deadline).getTime()) {
       return res.status(400).json({ error: 'Захиалга хийх хугацаа дууссан байна' });
     }
