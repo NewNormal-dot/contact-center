@@ -129,29 +129,60 @@ router.get('/', authenticate, async (req, res) => {
 
 // Create Slot (Admin/Superadmin)
 router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
-  const { date, startTime, endTime, start_time, end_time, capacity, bookingDeadline, booking_deadline } = req.body;
+  const {
+    date,
+    startTime,
+    endTime,
+    start_time,
+    end_time,
+    capacity,
+    bookingDeadline,
+    booking_deadline,
+    segment,
+    employmentType,
+    employment_type,
+    bookingOpen,
+    booking_is_open,
+    bookingOpenAt,
+    booking_open_at,
+  } = req.body;
   const finalStartTime = start_time || startTime;
   const finalEndTime = end_time || endTime;
   const finalDeadline = booking_deadline || bookingDeadline || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const finalCapacity = Number(capacity);
+  const finalSegment = String(segment || 'All').trim() || 'All';
+  const finalEmploymentType = String(employment_type || employmentType || 'Full Time').trim() || 'Full Time';
+  const finalBookingIsOpen = Boolean(booking_is_open ?? bookingOpen ?? false);
+  const finalBookingOpenAt = booking_open_at || bookingOpenAt || null;
 
   if (!date || !finalStartTime || !finalEndTime || !Number.isFinite(finalCapacity) || finalCapacity < 1) {
     return res.status(400).json({ error: 'Огноо, эхлэх/дуусах цаг, багтаамжийг зөв оруулна уу' });
   }
+
+    if (!['Full Time', 'Part Time'].includes(finalEmploymentType)) {
+      return res.status(400).json({ error: 'Ажиллах төрлийг зөв сонгоно уу' });
+    }
 
   try {
     const sqlSlotDate = toSqlDate(date);
     const sqlStartTime = toSqlTime(finalStartTime);
     const sqlEndTime = toSqlTime(finalEndTime);
     const sqlDeadline = toSqlDateTime(finalDeadline, new Date(Date.now() + 24 * 60 * 60 * 1000));
+      const sqlBookingOpenAt = finalBookingOpenAt ? toSqlDateTime(finalBookingOpenAt, new Date()) : null;
 
     if (!sqlSlotDate || !sqlStartTime || !sqlEndTime || !sqlDeadline) {
       return res.status(400).json({ error: 'Огноо болон цагийн формат буруу байна' });
     }
 
-    const duplicateSlot = await db('work_slots')
-      .where({ date: sqlSlotDate, start_time: sqlStartTime, end_time: sqlEndTime })
-      .first();
+      const duplicateSlot = await db('work_slots')
+        .where({
+          date: sqlSlotDate,
+          start_time: sqlStartTime,
+          end_time: sqlEndTime,
+          segment: finalSegment,
+          employment_type: finalEmploymentType,
+        })
+        .first();
 
     if (duplicateSlot) {
       return res.status(409).json({ error: 'Энэ цаг нэмэгдсэн байна. Нэг shift дээр олон захиалга авах бол capacity/slot тоогоо нэмнэ үү.' });
@@ -171,6 +202,10 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req, r
       duration,
       capacity: finalCapacity,
       booking_deadline: sqlDeadline,
+        segment: finalSegment,
+        employment_type: finalEmploymentType,
+        booking_is_open: finalBookingIsOpen,
+        booking_open_at: sqlBookingOpenAt,
     });
 
     res.status(201).json({ id });
