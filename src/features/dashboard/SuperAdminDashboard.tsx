@@ -43,6 +43,12 @@ import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalI
 import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
 
 type NewUserFormRow = Partial<CSR> & { formId: string };
+const VALID_LOCATIONS = ['Ulaanbaatar', 'Darkhan'] as const;
+
+const normalizeUserLocation = (value: unknown) => {
+  const normalized = String(value ?? '').trim();
+  return VALID_LOCATIONS.find(location => location.toLowerCase() === normalized.toLowerCase()) || '';
+};
 
 const createNewUserFormRow = (): NewUserFormRow => ({
   formId: Math.random().toString(36).slice(2, 11),
@@ -50,8 +56,9 @@ const createNewUserFormRow = (): NewUserFormRow => ({
   name: '',
   email: '',
   role: undefined,
+  location: '',
+  supervisorName: '',
   lineType: '',
-  location: 'Ulaanbaatar',
   employmentType: 'Full Time',
   status: 'offline',
   photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default',
@@ -123,6 +130,8 @@ export default function SuperAdminDashboard() {
         return {
           ...user,
           lineType: rawSegment === 'Full Time' || rawSegment === 'Part Time' ? '' : rawSegment,
+          location: normalizeUserLocation(user.location),
+          supervisorName: user.supervisorName || user.supervisor_name || '',
           status: user.status || 'active',
         };
       });
@@ -135,6 +144,8 @@ export default function SuperAdminDashboard() {
         return {
           ...user,
           lineType: rawSegment === 'Full Time' || rawSegment === 'Part Time' ? '' : rawSegment,
+          location: normalizeUserLocation(user.location),
+          supervisorName: user.supervisorName || user.supervisor_name || '',
         };
       });
       if (cachedUsers.length > 0) {
@@ -368,6 +379,13 @@ export default function SuperAdminDashboard() {
       if (updates.role !== undefined) {
         next.lineType = getSegmentForRole(updates.role as CSR['role'], row.lineType);
         next.employmentType = 'Full Time';
+        if (updates.role === 'csr') {
+          next.location = normalizeUserLocation(next.location) || 'Ulaanbaatar';
+          next.supervisorName = next.supervisorName || '';
+        } else {
+          next.location = '';
+          next.supervisorName = '';
+        }
       }
 
       return next;
@@ -419,6 +437,18 @@ export default function SuperAdminDashboard() {
       const employmentType = editingUser.role === 'csr'
         ? (editingUser.employmentType || 'Full Time')
         : 'Full Time';
+      const location = normalizeUserLocation(editingUser.location);
+      const supervisorName = String(editingUser.supervisorName || '').trim();
+
+      if (editingUser.role === 'csr' && !location) {
+        alert('CSR location must be Ulaanbaatar or Darkhan.');
+        return;
+      }
+
+      if (editingUser.role === 'csr' && !supervisorName) {
+        alert('CSR supervisor name is required.');
+        return;
+      }
 
       try {
         await apiClient.put(`/users/${editingUser.id}`, {
@@ -429,8 +459,10 @@ export default function SuperAdminDashboard() {
           segment,
           lineType: segment,
           code: editingUser.code,
+          location: editingUser.role === 'csr' ? location : '',
+          supervisorName: editingUser.role === 'csr' ? supervisorName : '',
         });
-        setCsrs(prev => prev.map(u => u.id === editingUser.id ? { ...editingUser, lineType: segment, employmentType } : u));
+        setCsrs(prev => prev.map(u => u.id === editingUser.id ? { ...editingUser, lineType: segment, employmentType, location, supervisorName } : u));
         await fetchUsers();
         logAction('User Update', `Updated user ${editingUser.name} (${editingUser.role})`);
         setEditingUser(null);
@@ -452,9 +484,10 @@ export default function SuperAdminDashboard() {
       const email = String(row.email || '').trim();
       const segment = getSegmentForRole(role, row.lineType);
       const employmentType = role === 'csr' ? (row.employmentType || 'Full Time') : 'Full Time';
-      const location = role === 'csr' ? (row.location || 'Ulaanbaatar') : '';
+      const location = role === 'csr' ? normalizeUserLocation(row.location) : '';
+      const supervisorName = role === 'csr' ? String(row.supervisorName || '').trim() : '';
 
-      return { index, role, code, name, email, segment, employmentType, location, row };
+      return { index, role, code, name, email, segment, employmentType, location, supervisorName, row };
     });
 
     for (const row of preparedRows) {
@@ -468,13 +501,18 @@ export default function SuperAdminDashboard() {
         return;
       }
 
-      if (row.role === 'csr' && !row.location) {
-        alert(`${row.index + 1}-р мөр дээр байршил сонгоно уу.`);
+      if (row.role === 'csr' && !row.employmentType) {
+        alert(`${row.index + 1}-р мөр дээр цагийн төрөл сонгоно уу.`);
         return;
       }
 
-      if (row.role === 'csr' && !row.employmentType) {
-        alert(`${row.index + 1}-р мөр дээр цагийн төрөл сонгоно уу.`);
+      if (row.role === 'csr' && !row.location) {
+        alert(`${row.index + 1}-r mur deer CSR location songono uu.`);
+        return;
+      }
+
+      if (row.role === 'csr' && !row.supervisorName) {
+        alert(`${row.index + 1}-r mur deer CSR supervisor name oruulna uu.`);
         return;
       }
 
@@ -505,8 +543,9 @@ export default function SuperAdminDashboard() {
           segment: row.segment,
           lineType: row.segment,
           employmentType: row.employmentType,
-          location: row.location,
           code: row.code,
+          location: row.location,
+          supervisorName: row.supervisorName,
         });
 
         createdUsers.push({
@@ -515,6 +554,7 @@ export default function SuperAdminDashboard() {
           lineType: row.segment,
           employmentType: row.employmentType,
           location: row.location,
+          supervisorName: row.supervisorName,
           photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${row.name}`,
           status: 'active',
         });
@@ -579,9 +619,15 @@ export default function SuperAdminDashboard() {
         const code = row['Код'] || row['Code'] || '';
         const segment = row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid';
         const employmentType = row['Цагийн төрөл'] || row['EmploymentType'] || row['Employment Type'] || 'Full Time';
-        const location = row['Байршил'] || row['Location'] || 'Ulaanbaatar';
+        const location = normalizeUserLocation(row['Байршил'] || row['Хот'] || row['Location'] || row['City'] || row['Bayrshil'] || '');
+        const supervisorName = String(row['Ахлах'] || row['Ахлах ажилтан'] || row['Supervisor'] || row['Supervisor Name'] || row['SupervisorName'] || '').trim();
 
         if (!email || !name || !role) {
+          invalidRows++;
+          return;
+        }
+
+        if (role === 'csr' && (!location || !supervisorName)) {
           invalidRows++;
           return;
         }
@@ -600,6 +646,7 @@ export default function SuperAdminDashboard() {
           lineType: segment,
           employmentType,
           location,
+          supervisorName,
           status: 'active',
           photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
           password: randomPassword,
@@ -617,17 +664,19 @@ export default function SuperAdminDashboard() {
               role: rowUser.role,
               status: rowUser.status,
               employmentType: rowUser.employmentType,
-              location: rowUser.location,
               segment: rowUser.lineType,
               lineType: rowUser.lineType,
               code: rowUser.code,
+              location: rowUser.location,
+              supervisorName: rowUser.supervisorName,
             });
             createdUsers.push({
               ...response.data,
               lineType: rowUser.lineType,
               employmentType: rowUser.employmentType,
-              location: rowUser.location,
               code: rowUser.code,
+              location: rowUser.location,
+              supervisorName: rowUser.supervisorName,
               photoUrl: rowUser.photoUrl,
               status: rowUser.status,
               password: rowUser.password,
@@ -820,12 +869,14 @@ export default function SuperAdminDashboard() {
       'Нэр': u.name,
       'И-мэйл': u.email || '',
       'Эрх': u.role,
+      'Байршил': u.location || '',
+      'Ахлах': u.supervisorName || '',
       'Сегмент': getDisplaySegment(u),
       'Цагийн төрөл': getDisplayTimeType(u)
     }));
 
     const ws = XLSX.utils.json_to_sheet(data, {
-      header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Сегмент', 'Цагийн төрөл']
+      header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Байршил', 'Ахлах', 'Сегмент', 'Цагийн төрөл']
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Users");
@@ -840,13 +891,15 @@ export default function SuperAdminDashboard() {
         'Нэр': '',
         'И-мэйл': '',
         'Эрх': 'csr',
+        'Байршил': 'Ulaanbaatar',
+        'Ахлах': '',
         'Сегмент': 'Postpaid',
         'Цагийн төрөл': 'Full Time'
       }
     ];
 
     const ws = XLSX.utils.json_to_sheet(templateRows, {
-      header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Сегмент', 'Цагийн төрөл']
+      header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Байршил', 'Ахлах', 'Сегмент', 'Цагийн төрөл']
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "BulkUploadTemplate");
@@ -1116,7 +1169,7 @@ export default function SuperAdminDashboard() {
     const filteredUsers = csrs.filter(u => {
       const q = userSearchQuery.trim().toLowerCase();
       if (!q) return true;
-      return [u.code, u.name, u.email, u.role, u.lineType, u.employmentType]
+      return [u.code, u.name, u.email, u.role, u.lineType, u.employmentType, u.location, u.supervisorName]
         .filter(Boolean)
         .some(field => field!.toLowerCase().includes(q));
     });
@@ -1191,6 +1244,11 @@ export default function SuperAdminDashboard() {
                             <h4 className="font-bold text-white">{user.name}</h4>
                             <p className="text-xs text-gray-500">{user.email || 'И-мэйл байхгүй'}</p>
                             <p className="text-[10px] text-blue-500 font-black uppercase mt-0.5">{user.lineType}</p>
+                            {user.role === 'csr' && (
+                              <p className="text-[10px] text-gray-500 mt-0.5">
+                                {[user.location, user.supervisorName].filter(Boolean).join(' / ')}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
@@ -2051,7 +2109,7 @@ export default function SuperAdminDashboard() {
                   const role = row.role as CSR['role'] | undefined;
                   const showSegment = role === 'admin' || role === 'csr';
                   const showEmploymentType = role === 'csr';
-                  const showLocation = role === 'csr';
+                  const showCsrDetails = role === 'csr';
                   const isLastRow = index === newUserRows.length - 1;
 
                   return (
@@ -2141,8 +2199,8 @@ export default function SuperAdminDashboard() {
                         </div>
                       </div>
 
-                      {(showSegment || showLocation || showEmploymentType) && (
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                      {(showSegment || showEmploymentType) && (
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                           {showSegment && (
                             <div>
                               <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
@@ -2154,21 +2212,6 @@ export default function SuperAdminDashboard() {
                               >
                                 <option value="">Сонгох</option>
                                 {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
-                              </select>
-                            </div>
-                          )}
-
-                          {showLocation && (
-                            <div>
-                              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Байршил</label>
-                              <select
-                                value={row.location || 'Ulaanbaatar'}
-                                onChange={(e) => updateNewUserRow(index, { location: e.target.value })}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
-                                required
-                              >
-                                <option value="Ulaanbaatar">Ulaanbaatar</option>
-                                <option value="Darkhan">Darkhan</option>
                               </select>
                             </div>
                           )}
@@ -2187,6 +2230,35 @@ export default function SuperAdminDashboard() {
                               </select>
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {showCsrDetails && (
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <div>
+                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Байршил</label>
+                            <select
+                              value={row.location || ''}
+                              onChange={(e) => updateNewUserRow(index, { location: e.target.value })}
+                              className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                              required
+                            >
+                              <option value="">Сонгох</option>
+                              {VALID_LOCATIONS.map(location => <option key={location} value={location}>{location}</option>)}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Ахлах</label>
+                            <input
+                              type="text"
+                              value={row.supervisorName || ''}
+                              onChange={(e) => updateNewUserRow(index, { supervisorName: e.target.value })}
+                              className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                              placeholder="Ахлахын нэр..."
+                              required
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
@@ -2238,6 +2310,8 @@ export default function SuperAdminDashboard() {
                         role,
                         lineType: getSegmentForRole(role, editingUser.lineType),
                         employmentType: 'Full Time',
+                        location: role === 'csr' ? normalizeUserLocation(editingUser.location) || 'Ulaanbaatar' : '',
+                        supervisorName: role === 'csr' ? editingUser.supervisorName || '' : '',
                       });
                     }}
                     className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
@@ -2263,6 +2337,27 @@ export default function SuperAdminDashboard() {
                       <option value="Full Time">Full Time</option>
                       <option value="Part Time">Part Time</option>
                     </select>
+                  </div>
+                )}
+                {editingUser.role === 'csr' && (
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Байршил</label>
+                    <select value={editingUser.location || ''} onChange={(e) => setEditingUser({...editingUser, location: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500">
+                      <option value="">Сонгох</option>
+                      {VALID_LOCATIONS.map(location => <option key={location} value={location}>{location}</option>)}
+                    </select>
+                  </div>
+                )}
+                {editingUser.role === 'csr' && (
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Ахлах</label>
+                    <input
+                      type="text"
+                      value={editingUser.supervisorName || ''}
+                      onChange={(e) => setEditingUser({...editingUser, supervisorName: e.target.value})}
+                      className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                      placeholder="Ахлахын нэр..."
+                    />
                   </div>
                 )}
                 <div className="flex gap-3 pt-4">

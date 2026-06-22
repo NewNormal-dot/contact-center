@@ -4,7 +4,7 @@ import { LazyMedia } from '../../components/LazyMedia';
 import Sidebar from '../../components/Sidebar';
 import ChatWindow from '../chat/ChatWindow';
 import { DigitalClock } from '../../components/DigitalClock';
-import { MessageCircle, Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
+import { MessageCircle, Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, Edit, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
 import { Notification as AppNotification, TrainingMaterial, VacationQuota, VacationRequest, TradeRequest, HourlyLeaveRequest } from '../../types';
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
@@ -48,17 +48,17 @@ function formatMonthKey(date: Date) {
 }
 
 type WeeklyShiftRule = {
-  totalHours: number;
-  sixHourShifts: number;
-  sevenHourShifts: number;
+  selectedDays: number;
   restDays: number;
+  hourCounts: Record<string, number>;
+  totalHours: number;
 };
 
 const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
-  totalHours: 40,
-  sixHourShifts: 3,
-  sevenHourShifts: 3,
-  restDays: 1,
+  selectedDays: 0,
+  restDays: 0,
+  hourCounts: {},
+  totalHours: 0,
 };
 
 const makeSegmentTypeKey = (segment: string, employmentType: string) =>
@@ -67,12 +67,33 @@ const makeSegmentTypeKey = (segment: string, employmentType: string) =>
 const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string) =>
   `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
 
-const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => ({
-  totalHours: Math.max(0, Number(value?.totalHours ?? DEFAULT_WEEKLY_SHIFT_RULE.totalHours) || 0),
-  sixHourShifts: Math.max(0, Number(value?.sixHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sixHourShifts) || 0),
-  sevenHourShifts: Math.max(0, Number(value?.sevenHourShifts ?? DEFAULT_WEEKLY_SHIFT_RULE.sevenHourShifts) || 0),
-  restDays: Math.max(0, Math.min(7, Number(value?.restDays ?? DEFAULT_WEEKLY_SHIFT_RULE.restDays) || 0)),
-});
+const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
+  const rawHourCounts = value?.hourCounts && typeof value.hourCounts === 'object' ? value.hourCounts : {};
+  const hourCounts: Record<string, number> = {};
+
+  Object.entries(rawHourCounts).forEach(([hour, count]) => {
+    const normalizedHour = String(hour);
+    if (!/^(?:[4-9]|rest)$/.test(normalizedHour)) return;
+    hourCounts[normalizedHour] = Math.max(0, Math.min(31, Number(count) || 0));
+  });
+
+  if (value?.sixHourShifts !== undefined && hourCounts['6'] === undefined) {
+    hourCounts['6'] = Math.max(0, Math.min(31, Number(value.sixHourShifts) || 0));
+  }
+  if (value?.sevenHourShifts !== undefined && hourCounts['7'] === undefined) {
+    hourCounts['7'] = Math.max(0, Math.min(31, Number(value.sevenHourShifts) || 0));
+  }
+
+  const restDays = Math.max(0, Math.min(31, Number(value?.restDays ?? hourCounts.rest ?? 0) || 0));
+  if (restDays > 0 || hourCounts.rest !== undefined) hourCounts.rest = restDays;
+
+  return {
+    selectedDays: Math.max(0, Math.min(31, Number(value?.selectedDays ?? 0) || 0)),
+    restDays,
+    hourCounts,
+    totalHours: Math.max(0, Math.min(744, Number(value?.totalHours ?? 0) || 0)),
+  };
+};
 
 const getWeekStartDateKey = (dateKey: string) => {
   const [year, month, day] = dateKey.split('-').map(Number);
@@ -148,10 +169,6 @@ interface DayData {
   bookingCloseAt?: string;
 }
 
-
-const isBackendSlotId = (value?: string) =>
-  typeof value === 'string' &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
 const getBookingWavesForShift = (
   shift: Shift | any,
@@ -460,14 +477,14 @@ const DayRow = React.memo(({
       ? `Захиалга ${bookingAccess.label.toLowerCase()}`
       : bookingAccess.state === 'expired'
         ? 'Захиалга хаагдсан'
-        : 'Захиалга хараахан нээгдээгүй байна';
+        : '';
   const disabledBookingLabel = bookingAccess.state === 'scheduled'
     ? bookingAccess.label
     : bookingAccess.state === 'expired'
       ? 'Хаагдсан'
       : bookingAccess.state === 'full'
         ? 'Дүүрсэн'
-        : 'Нээгдээгүй';
+        : 'Захиалах';
 
   return (
     <div 
@@ -490,7 +507,7 @@ const DayRow = React.memo(({
               : isYesterday
                 ? 'bg-gray-900/95 backdrop-blur-xl border border-orange-500/30'
                 : !hasData
-                  ? 'bg-gray-900/10 border border-gray-800/30 opacity-50'
+                  ? 'bg-gray-900/40 border border-gray-800'
                   : 'bg-gray-900/40 border border-gray-800'
       }`}>
         <div className="flex items-center gap-4 md:gap-8">
@@ -611,11 +628,20 @@ const DayRow = React.memo(({
                       </div>
                       {!isSubmitted && isBookingOpen && (
                         <button 
+                          onClick={() => onBookShift(dateKey)}
+                          className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
+                        >
+                          <Edit size={18} />
+                          Edit
+                        </button>
+                      )}
+                      {!isSubmitted && !isBookingOpen && bookingAccess.state === 'expired' && (
+                        <button 
                           onClick={() => onTradeShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
                         >
                           <ArrowRightLeft size={18} />
-                          Хуваарь солих
+                          Trade
                         </button>
                       )}
                     </>
@@ -902,6 +928,94 @@ export default function CsrDashboard() {
 
 
 
+
+
+  const mapSlotsToSchedule = React.useCallback((slots: any[]): Record<string, DayData> => {
+    const next: Record<string, DayData> = {};
+    (slots || []).forEach((slot: any) => {
+      const dateKey = String(slot.date || '').slice(0, 10);
+      if (!dateKey) return;
+      const matchesSegment = (slot.segment === 'All') || (slot.segment === csrProfile.lineType) || (csrProfile.lineType === 'VIP' && slot.segment === 'Premium');
+      const matchesEmployment = (slot.employmentType || slot.employment_type || 'Full Time') === csrProfile.employmentType;
+      if (!matchesSegment || !matchesEmployment) return;
+      const time = slot.isRest || slot.is_rest ? 'Амралт' : `${String(slot.startTime || '').slice(0,5)}-${String(slot.endTime || '').slice(0,5)}`;
+      const bookingOpen = Boolean(slot.bookingOpen ?? slot.booking_is_open);
+      const bookingOpenAt = slot.bookingOpenAt || slot.booking_open_at || '';
+      const bookingCloseAt = slot.bookingDeadline || slot.booking_deadline || '';
+      const bookedBy = (slot.bookings || []).map((b: any) => ({
+        userId: b.userId || b.user_id,
+        userName: b.userName || b.user_name || 'CSR',
+        userCode: b.userCode || b.user_code,
+        bookedAt: b.bookedAt || b.booked_at,
+      }));
+      const shift: Shift = {
+        id: String(slot.id),
+        time,
+        totalSlots: Number(slot.capacity || slot.totalSlots || 1),
+        bookedSlots: Number(slot.currentBookings ?? slot.current_bookings ?? bookedBy.length),
+        isBookedByMe: bookedBy.some((b: any) => b.userId === csrProfile.id),
+        bookedBy,
+        segment: slot.segment || csrProfile.lineType,
+        employmentType: slot.employmentType || slot.employment_type || csrProfile.employmentType,
+        bookingWaves: [{
+          id: 'default',
+          name: 'Нийт захиалах эрх',
+          slotLimit: Number(slot.capacity || 1),
+          bookingOpen,
+          bookingOpenAt,
+          bookingCloseAt,
+        }],
+      };
+      next[dateKey] = {
+        ...(next[dateKey] || { shifts: [] }),
+        bookingOpen: (next[dateKey]?.bookingOpen || bookingOpen),
+        bookingOpenAt: next[dateKey]?.bookingOpenAt || bookingOpenAt,
+        bookingCloseAt: next[dateKey]?.bookingCloseAt || bookingCloseAt,
+        shifts: [...(next[dateKey]?.shifts || []), shift],
+      };
+    });
+    return next;
+  }, [csrProfile]);
+
+  const fetchDbSchedule = React.useCallback(async () => {
+    try {
+      const response = await apiClient.get('/slots');
+      const dbSchedule = mapSlotsToSchedule(response.data || []);
+      if (Object.keys(dbSchedule).length > 0) {
+        setSchedule(dbSchedule);
+        return dbSchedule;
+      }
+    } catch (error) {
+      console.error('Error fetching DB schedule:', error);
+    }
+    return null;
+  }, [mapSlotsToSchedule]);
+
+  const fetchTradeRequests = React.useCallback(async () => {
+    try {
+      const response = await apiClient.get('/trades');
+      const mapped = (response.data || []).map((t: any) => ({
+        ...t,
+        senderId: t.senderId || t.sender_id,
+        receiverId: t.receiverId || t.receiver_id,
+        senderName: t.senderName || t.sender_name,
+        receiverName: t.receiverName || t.receiver_name,
+        senderShiftId: t.senderSlotId || t.sender_slot_id || t.senderShiftId,
+        receiverShiftId: t.receiverSlotId || t.receiver_slot_id || t.receiverShiftId,
+        senderSlotId: t.senderSlotId || t.sender_slot_id,
+        receiverSlotId: t.receiverSlotId || t.receiver_slot_id,
+        senderShiftTime: t.senderShiftTime || t.sender_shift_time,
+        receiverShiftTime: t.receiverShiftTime || t.receiver_shift_time,
+        createdAt: t.createdAt || t.created_at,
+      }));
+      setTradeRequests(mapped);
+      return mapped;
+    } catch (error) {
+      console.error('Error fetching trade requests:', error);
+      return [];
+    }
+  }, []);
+
   const fetchShiftRules = async () => {
     try {
       const response = await apiClient.get('/rules');
@@ -990,10 +1104,13 @@ export default function CsrDashboard() {
     fetchNotifications();
     fetchVacationRequests();
     fetchShiftRules();
-    const interval = setInterval(loadData, 2000);
+    fetchDbSchedule();
+    fetchTradeRequests();
+    const interval = setInterval(() => { loadData(); fetchDbSchedule(); }, 5000);
     const notificationInterval = setInterval(fetchNotifications, 10000);
     const vacationInterval = setInterval(fetchVacationRequests, 10000);
     const shiftRuleInterval = setInterval(fetchShiftRules, 5000);
+    const tradeInterval = setInterval(fetchTradeRequests, 5000);
     
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
@@ -1007,6 +1124,7 @@ export default function CsrDashboard() {
       clearInterval(notificationInterval);
       clearInterval(vacationInterval);
       clearInterval(shiftRuleInterval);
+      clearInterval(tradeInterval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);
@@ -1066,9 +1184,7 @@ export default function CsrDashboard() {
     }
   };
 
-  const handleSendTradeRequest = (receiverId: string, receiverName: string, receiverShiftId: string, receiverShiftTime: string, dateKey: string) => {
-    // Find my shift on that day or any day? Usually same day or similar.
-    // Let's find any shift booked by me.
+  const handleSendTradeRequest = async (receiverId: string, receiverName: string, receiverShiftId: string, receiverShiftTime: string, dateKey: string) => {
     let myShift: { date: string, shift: Shift } | null = null;
     Object.entries(schedule).forEach(([date, data]) => {
       const dayData = data as DayData;
@@ -1081,194 +1197,47 @@ export default function CsrDashboard() {
       return;
     }
 
-    const newRequest: TradeRequest = {
-      id: Math.random().toString(36).substr(2, 9),
-      senderId: csrProfile.id,
-      senderName: csrProfile.name,
-      receiverId,
-      receiverName,
-      date: dateKey,
-      senderShiftId: myShift.shift.id,
-      senderShiftTime: myShift.shift.time,
-      receiverShiftId,
-      receiverShiftTime,
-      status: 'pending',
-      createdAt: new Date().toISOString()
-    };
-
-    const saveTradeRequest = () => {
-      try {
-        addLocalItem('tradeRequests', newRequest);
-        
-        // Add notification for receiver
-        const receiverNotif: AppNotification = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: 'Ээлж солих хүсэлт',
-          content: `${csrProfile.name} тантай ээлж солих хүсэлт ирүүллээ.`,
-          deadline: '',
-          createdAt: new Date().toISOString(),
-          authorId: csrProfile.id,
-          authorName: csrProfile.name,
-          type: 'general',
-          targetUserId: receiverId,
-          tradeRequestId: newRequest.id,
-          seenBy: []
-        };
-
-        // Add notification for sender
-        const senderNotif: AppNotification = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: 'Ээлж солих хүсэлт илгээгдлээ',
-          content: `Та ${receiverName} руу ээлж солих хүсэлт илгээлээ.`,
-          deadline: '',
-          createdAt: new Date().toISOString(),
-          authorId: csrProfile.id,
-          authorName: csrProfile.name,
-          type: 'general',
-          targetUserId: csrProfile.id,
-          seenBy: []
-        };
-
-        addLocalItem('notifications', receiverNotif);
-        addLocalItem('notifications', senderNotif);
-        
-        setTradingModal(null);
-        triggerSuccess();
-        logAction('Trade Requested', `Sent trade request to ${receiverName}`);
-      } catch (error) {
-        console.error('Error sending trade request:', error);
-        alert('Хүсэлт илгээхэд алдаа гарлаа.');
-      }
-    };
-
-    saveTradeRequest();
-  };
-
-  const handleAcceptTrade = (request: TradeRequest) => {
     try {
-      // 1. Update trade request status
-      updateLocalItem('tradeRequests', request.id, { status: 'approved' });
-
-      // 2. Update schedules (swap)
-      let senderDateKey = '';
-      Object.entries(schedule).forEach(([date, data]) => {
-        const dayData = data as DayData;
-        if (dayData.shifts.some(s => s.id === request.senderShiftId)) senderDateKey = date;
+      await apiClient.post('/trades', {
+        receiver_id: receiverId,
+        sender_slot_id: myShift.shift.id,
+        receiver_slot_id: receiverShiftId,
       });
-
-      if (senderDateKey && schedule[senderDateKey] && schedule[request.date]) {
-        const updatedSenderDay = {
-          ...schedule[senderDateKey],
-          shifts: schedule[senderDateKey].shifts.map(s => {
-            if (s.id === request.senderShiftId) {
-              return {
-                ...s,
-                bookedBy: (s.bookedBy || []).map(b => b.userId === request.senderId ? { userId: request.receiverId, userName: request.receiverName } : b)
-              };
-            }
-            return s;
-          })
-        };
-
-        const updatedReceiverDay = {
-          ...schedule[request.date],
-          shifts: schedule[request.date].shifts.map(s => {
-            if (s.id === request.receiverShiftId) {
-              return {
-                ...s,
-                bookedBy: (s.bookedBy || []).map(b => b.userId === request.receiverId ? { userId: request.senderId, userName: request.senderName } : b)
-              };
-            }
-            return s;
-          })
-        };
-
-        const schedules = getLocalData('schedules', {});
-        schedules[senderDateKey] = updatedSenderDay;
-        schedules[request.date] = updatedReceiverDay;
-        setLocalData('schedules', schedules);
-      }
-
-      // 3. Add notifications
-      const senderNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлт зөвшөөрөгдлөө',
-        content: `${request.receiverName} таны ээлж солих хүсэлтийг зөвшөөрлөө.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: request.senderId,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      const receiverNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлт баталгаажлаа',
-        content: `Та ${request.senderName}-тай ээлж солих хүсэлтийг зөвшөөрлөө.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: csrProfile.id,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      addLocalItem('notifications', senderNotif);
-      addLocalItem('notifications', receiverNotif);
-
-      setIncomingTradeModal(null);
+      await fetchTradeRequests();
+      await fetchNotifications();
+      setTradingModal(null);
       triggerSuccess();
-      logAction('Trade Accepted', `Accepted trade from ${request.senderName}`);
-    } catch (error) {
-      console.error('Error accepting trade:', error);
-      alert('Хүсэлт зөвшөөрөхөд алдаа гарлаа.');
+      logAction('Trade Requested', `Sent trade request to ${receiverName}`);
+    } catch (error: any) {
+      console.error('Error sending trade request:', error);
+      alert(error.response?.data?.error || 'Хүсэлт илгээхэд алдаа гарлаа.');
     }
   };
 
-  const handleDeclineTrade = (request: TradeRequest) => {
+  const handleAcceptTrade = async (request: TradeRequest) => {
     try {
-      updateLocalItem('tradeRequests', request.id, { status: 'rejected' });
+      await apiClient.patch(`/trades/${request.id}/respond`, { status: 'accepted' });
+      await fetchTradeRequests();
+      await fetchNotifications();
+      setIncomingTradeModal(null);
+      triggerSuccess();
+      logAction('Trade Accepted', `Accepted trade from ${request.senderName}`);
+    } catch (error: any) {
+      console.error('Error accepting trade:', error);
+      alert(error.response?.data?.error || 'Хүсэлт зөвшөөрөхөд алдаа гарлаа.');
+    }
+  };
 
-      const senderNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлт татгалзлаа',
-        content: `${request.receiverName} таны ээлж солих хүсэлтээс татгалзлаа.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: request.senderId,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      const receiverNotif: AppNotification = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: 'Ээлж солих хүсэлтээс татгалзлаа',
-        content: `Та ${request.senderName}-ийн ээлж солих хүсэлтээс татгалзлаа.`,
-        deadline: '',
-        createdAt: new Date().toISOString(),
-        authorId: csrProfile.id,
-        authorName: csrProfile.name,
-        type: 'general',
-        targetUserId: csrProfile.id,
-        tradeRequestId: request.id,
-        seenBy: []
-      };
-
-      addLocalItem('notifications', senderNotif);
-      addLocalItem('notifications', receiverNotif);
-
+  const handleDeclineTrade = async (request: TradeRequest) => {
+    try {
+      await apiClient.patch(`/trades/${request.id}/respond`, { status: 'rejected' });
+      await fetchTradeRequests();
+      await fetchNotifications();
       setIncomingTradeModal(null);
       logAction('Trade Declined', `Declined trade from ${request.senderName}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error declining trade:', error);
+      alert(error.response?.data?.error || 'Хүсэлт татгалзахад алдаа гарлаа.');
     }
   };
 
@@ -1357,10 +1326,15 @@ export default function CsrDashboard() {
     }
   }, [activeTab]);
 
+  const getShiftRuleHourKey = React.useCallback((shift: Shift) => {
+    if (shift.time === 'Амралт') return 'rest';
+    const roundedHours = String(Math.round(calculateHours(shift.time)));
+    return /^[4-9]$/.test(roundedHours) ? roundedHours : '';
+  }, []);
+
   const getMyWeeklyBookingStats = React.useCallback((dateKey: string, sourceSchedule: Record<string, DayData>) => {
     const weekDateKeys = getWeekDateKeys(dateKey);
-    let sixHourShifts = 0;
-    let sevenHourShifts = 0;
+    const hourCounts: Record<string, number> = {};
     let bookedDays = 0;
     let hours = 0;
 
@@ -1369,35 +1343,41 @@ export default function CsrDashboard() {
         shift.bookedBy?.some((booking) => booking.userId === csrProfile.id),
       );
       if (!bookedShift) return;
+      const hourKey = getShiftRuleHourKey(bookedShift);
       const shiftHours = calculateHours(bookedShift.time);
       hours += shiftHours;
       bookedDays += 1;
-      if (Math.round(shiftHours) === 6) sixHourShifts += 1;
-      if (Math.round(shiftHours) === 7) sevenHourShifts += 1;
+      if (hourKey) hourCounts[hourKey] = (hourCounts[hourKey] || 0) + 1;
     });
 
-    return { sixHourShifts, sevenHourShifts, bookedDays, hours };
-  }, [csrProfile.id]);
+    return { hourCounts, bookedDays, hours };
+  }, [csrProfile.id, getShiftRuleHourKey]);
 
   const validateShiftRuleBeforeBooking = React.useCallback((dateKey: string, targetShift: Shift, sourceSchedule: Record<string, DayData>) => {
-    const shiftHours = calculateHours(targetShift.time);
     const weekStats = getMyWeeklyBookingStats(dateKey, sourceSchedule);
-    const maxWorkingDays = Math.max(0, 7 - activeWeeklyRule.restDays);
+    const targetHourKey = getShiftRuleHourKey(targetShift);
+    const maxSelectedDays = Number(activeWeeklyRule.selectedDays) || 0;
 
-    if (maxWorkingDays > 0 && weekStats.bookedDays + 1 > maxWorkingDays) {
-      return `Энэ 7 хоногт ${activeWeeklyRule.restDays} өдөр амрах тохиргоотой тул нийт ${maxWorkingDays} өдрөөс илүү shift сонгох боломжгүй.`;
+    if (maxSelectedDays > 0 && weekStats.bookedDays + 1 > maxSelectedDays) {
+      return `Энэ 7 хоногт нийт ${maxSelectedDays} өдөр сонгох тохиргоотой.`;
     }
 
-    if (Math.round(shiftHours) === 6 && weekStats.sixHourShifts + 1 > activeWeeklyRule.sixHourShifts) {
-      return `Энэ 7 хоногт 6 цагтай shift хамгийн ихдээ ${activeWeeklyRule.sixHourShifts} удаа сонгоно.`;
-    }
-
-    if (Math.round(shiftHours) === 7 && weekStats.sevenHourShifts + 1 > activeWeeklyRule.sevenHourShifts) {
-      return `Энэ 7 хоногт 7 цагтай shift хамгийн ихдээ ${activeWeeklyRule.sevenHourShifts} удаа сонгоно.`;
+    if (targetHourKey) {
+      const maxForHour = Number((activeWeeklyRule.hourCounts || {})[targetHourKey] || 0);
+      if (maxForHour > 0 && (weekStats.hourCounts[targetHourKey] || 0) + 1 > maxForHour) {
+        return targetHourKey === 'rest'
+          ? `Энэ 7 хоногт амралтын өдөр хамгийн ихдээ ${maxForHour} удаа сонгоно.`
+          : `Энэ 7 хоногт ${targetHourKey} цагтай shift хамгийн ихдээ ${maxForHour} удаа сонгоно.`;
+      }
+      if (maxForHour === 0 && Object.keys(activeWeeklyRule.hourCounts || {}).length > 0) {
+        return targetHourKey === 'rest'
+          ? 'Энэ 7 хоногт амралтын өдөр сонгох боломжгүй.'
+          : `Энэ 7 хоногт ${targetHourKey} цагтай shift сонгох боломжгүй.`;
+      }
     }
 
     return '';
-  }, [activeWeeklyRule, getMyWeeklyBookingStats]);
+  }, [activeWeeklyRule, getMyWeeklyBookingStats, getShiftRuleHourKey]);
 
   const handleBookShift = React.useCallback(async (dateKey: string, shiftId?: string, bookingWaveId?: string) => {
     const dayData = schedule[dateKey];
@@ -1410,7 +1390,7 @@ export default function CsrDashboard() {
 
     const dayAccess = getDayBookingAccess(dayData, nowTick);
     if (!dayAccess.canBook) {
-      alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
+      return;
       return;
     }
 
@@ -1443,7 +1423,7 @@ export default function CsrDashboard() {
       : availableWaves[0];
 
     if (!targetWave || !isWaveCurrentlyOpen(targetWave, nowTick)) {
-      alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
+      return;
       return;
     }
 
@@ -1479,79 +1459,18 @@ export default function CsrDashboard() {
     });
 
     try {
-      const globalSchedules = getLocalData('schedules', {});
-      const globalDayData = globalSchedules[dateKey] || { shifts: [] };
-      const globalTargetShift = globalDayData.shifts.find((s: any) => s.id === targetShift.id);
-      if (!globalTargetShift) {
-        alert('Энэ өдрийн захиалга хараахан нээгдээгүй байна.');
-        return;
-      }
-      if ((globalDayData.shifts || []).some((s: any) => s.bookedBy?.some((b: any) => b.userId === csrProfile.id))) {
-        alert('Та энэ өдөр аль хэдийн ээлж захиалсан байна.');
-        return;
-      }
-      if (globalTargetShift.bookedSlots >= globalTargetShift.totalSlots) {
-        alert('Энэ ээлж дүүрсэн байна.');
-        return;
-      }
-
-      const globalRuleError = validateShiftRuleBeforeBooking(dateKey, globalTargetShift, globalSchedules);
-      if (globalRuleError) {
-        alert(globalRuleError);
-        return;
-      }
-
-      const globalTargetWave = getBookingWavesForShift(globalTargetShift, !!globalDayData.bookingOpen, globalDayData.bookingOpenAt || '', globalDayData.bookingCloseAt || '')
-        .find((wave: BookingWave) => wave.id === targetWave.id);
-      if (!globalTargetWave || !isWaveCurrentlyOpen(globalTargetWave, nowTick)) {
-        alert('Энэ захиалах эрх хараахан нээгдээгүй байна.');
-        return;
-      }
-      if (getWaveBookedCount(globalTargetShift, globalTargetWave.id) >= globalTargetWave.slotLimit) {
-        alert('Энэ захиалах эрхийн slot дүүрсэн байна.');
-        return;
-      }
-      
-        if (!isBackendSlotId(targetShift.id)) {
-          alert('Энэ shift backend slot-той холбогдоогүй байна. Admin шинэ shift үүсгээд дахин оролдоно уу.');
-          return;
-        }
-
-        await apiClient.post(`/slots/${targetShift.id}/book`, {
-          bookingWaveId: targetWave.id,
-        });
-
-      const updatedGlobalShifts = globalDayData.shifts.map((s: any) => {
-        if (s.id === targetShift.id) {
-          return {
-            ...s,
-            bookedSlots: s.bookedSlots + 1,
-            bookedBy: [...(s.bookedBy || []), bookingInfo]
-          };
-        }
-        return s;
+      await apiClient.post('/slots/book', {
+        slotId: targetShift.id,
+        bookingWaveId: targetWave.id,
       });
-
-      globalSchedules[dateKey] = {
-        ...globalDayData,
-        shifts: updatedGlobalShifts
-      };
-      
-      setLocalData('schedules', globalSchedules);
-      setSchedule(prev => ({
-        ...prev,
-        [dateKey]: {
-          ...dayData,
-          shifts: updatedShifts
-        }
-      }));
+      await fetchDbSchedule();
       logAction('Shift Booked', `Booked shift on ${dateKey} / ${targetWave.name}`);
       triggerSuccess();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error booking shift:', error);
-      alert('Ээлж захиалахад алдаа гарлаа.');
+      alert(error.response?.data?.error || 'Ээлж захиалахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking]);
+  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking, fetchDbSchedule]);
 
   const handleCancelShift = React.useCallback(async (dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
@@ -1562,61 +1481,16 @@ export default function CsrDashboard() {
       return;
     }
 
-    const updatedShifts = dayData.shifts.map(shift => {
-      const isBookedByMe = shift.bookedBy?.some(b => b.userId === csrProfile.id);
-      if (shift.id === shiftId && isBookedByMe) {
-        return { 
-          ...shift, 
-          bookedSlots: shift.bookedSlots - 1,
-          bookedBy: (shift.bookedBy || []).filter(b => b.userId !== csrProfile.id)
-        };
-      }
-      return shift;
-    });
-
     try {
-      const globalSchedules = getLocalData('schedules', {});
-      const globalDayData = globalSchedules[dateKey];
-      if (!globalDayData) return;
-
-        const globalTargetShift = globalDayData.shifts.find((s: any) => s.id === shiftId);
-        const isGloballyBookedByMe = globalTargetShift?.bookedBy?.some((b: any) => b.userId === csrProfile.id);
-        if (!globalTargetShift || !isGloballyBookedByMe) {
-          alert('Цуцлах захиалга олдсонгүй.');
-          return;
-        }
-
-        if (!isBackendSlotId(shiftId)) {
-          alert('Энэ shift backend slot-той холбогдоогүй байна. Admin шинэ shift үүсгээд дахин оролдоно уу.');
-          return;
-        }
-
-        await apiClient.post(`/slots/${shiftId}/cancel`);
-
-      const updatedGlobalShifts = globalDayData.shifts.map((s: any) => {
-        const isBookedByMe = s.bookedBy?.some((b: any) => b.userId === csrProfile.id);
-        if (s.id === shiftId && isBookedByMe) {
-          return {
-            ...s,
-            bookedSlots: Math.max(0, s.bookedSlots - 1),
-            bookedBy: (s.bookedBy || []).filter((b: any) => b.userId !== csrProfile.id)
-          };
-        }
-        return s;
-      });
-
-      globalSchedules[dateKey] = {
-        ...globalDayData,
-        shifts: updatedGlobalShifts
-      };
-
-      setLocalData('schedules', globalSchedules);
+      await apiClient.post(`/slots/${shiftId}/cancel`, { slotId: shiftId });
+      await fetchDbSchedule();
       logAction('Shift Cancelled', `Cancelled shift for ${dateKey}`);
       triggerSuccess();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error cancelling shift:', error);
+      alert(error.response?.data?.error || 'Ээлж цуцлахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile]);
+  }, [schedule, submittedMonths, currentMonthKey, csrProfile, fetchDbSchedule]);
 
   const handleTradeShift = React.useCallback((dateKey: string) => {
     setTradingModal({ isOpen: true, dateKey, step: 'times' });
@@ -1639,18 +1513,19 @@ export default function CsrDashboard() {
     for (const weekStartKey of monthWeekKeys) {
       const weekStats = getMyWeeklyBookingStats(weekStartKey, schedule);
       if (weekStats.bookedDays === 0) continue;
-      const maxWorkingDays = Math.max(0, 7 - activeWeeklyRule.restDays);
-      if (maxWorkingDays > 0 && weekStats.bookedDays > maxWorkingDays) {
-        alert(`${weekStartKey}-с эхлэх 7 хоногт амралтын өдрийн тохиргоо зөрчсөн байна.`);
+      const maxSelectedDays = Number(activeWeeklyRule.selectedDays) || 0;
+      if (maxSelectedDays > 0 && weekStats.bookedDays > maxSelectedDays) {
+        alert(`${weekStartKey}-с эхлэх 7 хоногт нийт сонгох өдөр ${maxSelectedDays}-аас их байна.`);
         return;
       }
-      if (weekStats.sixHourShifts > activeWeeklyRule.sixHourShifts) {
-        alert(`${weekStartKey}-с эхлэх 7 хоногт 6 цагтай shift ${activeWeeklyRule.sixHourShifts}-аас их байна.`);
-        return;
-      }
-      if (weekStats.sevenHourShifts > activeWeeklyRule.sevenHourShifts) {
-        alert(`${weekStartKey}-с эхлэх 7 хоногт 7 цагтай shift ${activeWeeklyRule.sevenHourShifts}-аас их байна.`);
-        return;
+      for (const [hourKey, maxCount] of Object.entries(activeWeeklyRule.hourCounts || {})) {
+        const currentCount = weekStats.hourCounts[hourKey] || 0;
+        if (Number(maxCount) > 0 && currentCount > Number(maxCount)) {
+          alert(hourKey === 'rest'
+            ? `${weekStartKey}-с эхлэх 7 хоногт амралтын өдөр ${maxCount}-аас их байна.`
+            : `${weekStartKey}-с эхлэх 7 хоногт ${hourKey} цагтай shift ${maxCount}-аас их байна.`);
+          return;
+        }
       }
     }
 

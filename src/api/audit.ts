@@ -12,7 +12,7 @@ router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
     const queryStartDate = startDate ? new Date(startDate as string) : defaultStart;
 
     let query = db('audit_logs')
-      .join('users', 'audit_logs.user_id', '=', 'users.id')
+      .leftJoin('users', 'audit_logs.user_id', '=', 'users.id')
       .select('audit_logs.*', 'users.name as user_name', 'users.role as user_role');
 
     query = query.where('audit_logs.created_at', '>=', queryStartDate.toISOString());

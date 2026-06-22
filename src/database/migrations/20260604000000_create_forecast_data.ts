@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { tableExists } from '../schemaUtils';
+import { tableExists } from '../schemaUtils.ts';
 
 export async function up(knex: Knex): Promise<void> {
   const exists = await tableExists(knex, 'forecast_data');
