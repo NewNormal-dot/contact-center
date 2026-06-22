@@ -231,7 +231,14 @@ router.patch('/:id/reject', authenticate, authorize(['admin', 'superadmin']), as
   try {
     const trade = await baseTradeQuery().where('trade_requests.id', req.params.id).first();
     if (!trade) return res.status(404).json({ error: 'Trade хүсэлт олдсонгүй' });
-    await db('trade_requests').where({ id: req.params.id }).update({ status: 'rejected', approved_by: req.user.id, admin_decided_at: db.fn.now(), updated_at: db.fn.now() });
+    if (trade.status === 'approved') {
+      return res.status(400).json({ error: 'Батлагдсан арилжааг татгалзах боломжгүй' });
+    }
+    const rejected = await db('trade_requests')
+      .where({ id: req.params.id })
+      .whereNot({ status: 'approved' })
+      .update({ status: 'rejected', approved_by: req.user.id, admin_decided_at: db.fn.now(), updated_at: db.fn.now() });
+    if (!rejected) return res.status(409).json({ error: 'Арилжааны төлөв өөрчлөгдсөн байна' });
     await createNotification({ title: 'Trade хүсэлт татгалзлаа', content: 'Admin таны trade хүсэлтээс татгалзлаа.', authorId: req.user.id, targetUserId: trade.sender_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' });
     await createNotification({ title: 'Trade хүсэлт татгалзлаа', content: 'Admin таны оролцсон trade хүсэлтээс татгалзлаа.', authorId: req.user.id, targetUserId: trade.receiver_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' });
     await logAction(req.user.id, 'REJECT_TRADE', 'trade_requests', req.params.id, 'Trade rejected');
@@ -294,7 +301,14 @@ router.patch('/:id/approve', authenticate, authorize(['admin', 'superadmin']), a
 
     await trx('slot_bookings').where({ id: senderBooking.id }).update({ slot_id: senderNewSlot.id, booked_at: trx.fn.now() });
     await trx('slot_bookings').where({ id: receiverBooking.id }).update({ slot_id: receiverNewSlot.id, booked_at: trx.fn.now() });
-    await trx('trade_requests').where({ id: req.params.id }).update({ status: 'approved', approved_by: req.user.id, admin_decided_at: trx.fn.now(), updated_at: trx.fn.now() });
+    const tradeUpdated = await trx('trade_requests')
+      .where({ id: req.params.id, status: 'accepted' })
+      .update({ status: 'approved', approved_by: req.user.id, admin_decided_at: trx.fn.now(), updated_at: trx.fn.now() });
+
+    if (tradeUpdated !== 1) {
+      await trx.rollback();
+      return res.status(409).json({ error: 'Арилжааны төлөв өөрчлөгдсөн байна' });
+    }
 
     await createNotification({ title: 'Trade батлагдлаа', content: `Таны шинэ хуваарь: ${displayDate(senderNewSlot.date)} ${slotTimeLabel(senderNewSlot)}.`, authorId: req.user.id, targetUserId: trade.sender_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' }, trx);
     await createNotification({ title: 'Trade батлагдлаа', content: `Таны шинэ хуваарь: ${displayDate(receiverNewSlot.date)} ${slotTimeLabel(receiverNewSlot)}.`, authorId: req.user.id, targetUserId: trade.receiver_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' }, trx);
