@@ -199,62 +199,73 @@ const bookHandler = async (req: any, res: any) => {
   if (!slot_id) return res.status(400).json({ error: 'Слот ID шаардлагатай' });
 
   try {
-    const slot = await db('work_slots').where({ id: slot_id }).first();
-    if (!slot) return res.status(404).json({ error: 'Слот олдсонгүй' });
+    const result = await db.transaction(async (trx) => {
+      const slot = await trx('work_slots').where({ id: slot_id }).first();
+      if (!slot) {
+        return { status: 404, body: { error: 'Слот олдсонгүй' } };
+      }
 
-    const bookingClosed =
-      slot.booking_is_open === false ||
-      slot.booking_is_open === 0 ||
-      slot.booking_is_open === '0';
+      const bookingClosed =
+        slot.booking_is_open === false ||
+        slot.booking_is_open === 0 ||
+        slot.booking_is_open === '0';
 
-    if (bookingClosed) {
-      return res.status(400).json({ error: 'Захиалга хаалттай байна' });
-    }
+      if (bookingClosed) {
+        return { status: 400, body: { error: 'Захиалга хаалттай байна' } };
+      }
 
-    if (slot.booking_open_at && new Date().getTime() < new Date(slot.booking_open_at).getTime()) {
-      return res.status(400).json({ error: 'Захиалга нээгдэх хугацаа болоогүй байна' });
-    }
+      if (slot.booking_open_at && new Date().getTime() < new Date(slot.booking_open_at).getTime()) {
+        return { status: 400, body: { error: 'Захиалга нээгдэх хугацаа болоогүй байна' } };
+      }
 
-    if (slot.booking_deadline && new Date().getTime() > new Date(slot.booking_deadline).getTime()) {
-      return res.status(400).json({ error: 'Захиалга хийх хугацаа дууссан байна' });
-    }
+      if (slot.booking_deadline && new Date().getTime() > new Date(slot.booking_deadline).getTime()) {
+        return { status: 400, body: { error: 'Захиалга хийх хугацаа дууссан байна' } };
+      }
 
-    const [{ count }] = await db('slot_bookings')
-      .where({ slot_id, status: 'confirmed' })
-      .count('id as count');
+      const alreadyBookedThis = await trx('slot_bookings')
+        .where({ slot_id, user_id: userId, status: 'confirmed' })
+        .first();
 
-    if (Number(count) >= Number(slot.capacity)) {
-      return res.status(400).json({ error: 'Орон тоо дүүрсэн байна' });
-    }
+      if (alreadyBookedThis) {
+        return { status: 400, body: { error: 'Та энэ ээлжийг аль хэдийн захиалсан байна' } };
+      }
 
-    const alreadyBookedThis = await db('slot_bookings')
-      .where({ slot_id, user_id: userId, status: 'confirmed' })
-      .first();
-    if (alreadyBookedThis) {
-      return res.status(400).json({ error: 'Та энэ ээлжийг аль хэдийн захиалсан байна' });
-    }
+      const existingOnSameDay = await trx('slot_bookings')
+        .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
+        .where({
+          'slot_bookings.user_id': userId,
+          'work_slots.date': slot.date,
+          'slot_bookings.status': 'confirmed',
+        })
+        .first();
 
-    const existingOnSameDay = await db('slot_bookings')
-      .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
-      .where({ 'slot_bookings.user_id': userId, 'work_slots.date': slot.date, 'slot_bookings.status': 'confirmed' })
-      .first();
+      if (existingOnSameDay) {
+        return { status: 400, body: { error: 'Энэ өдөр аль хэдийн захиалга хийсэн байна' } };
+      }
 
-    if (existingOnSameDay) {
-      return res.status(400).json({ error: 'Энэ өдөр аль хэдийн захиалга хийсэн байна' });
-    }
+      const [{ count }] = await trx('slot_bookings')
+        .where({ slot_id, status: 'confirmed' })
+        .count('id as count');
 
-    const id = uuidv4();
-    await db('slot_bookings').insert({
-      id,
-      slot_id,
-      user_id: userId,
-      status: 'confirmed',
+      if (Number(count) >= Number(slot.capacity)) {
+        return { status: 400, body: { error: 'Орон тоо дүүрсэн байна' } };
+      }
+
+      const id = uuidv4();
+      await trx('slot_bookings').insert({
+        id,
+        slot_id,
+        user_id: userId,
+        status: 'confirmed',
+      });
+
+      return { status: 201, body: { id } };
     });
 
-    res.status(201).json({ id });
+    return res.status(result.status).json(result.body);
   } catch (err) {
     console.error('Book slot error:', err);
-    res.status(500).json({ error: 'Захиалга хийхэд алдаа гарлаа' });
+    return res.status(500).json({ error: 'Захиалга хийхэд алдаа гарлаа' });
   }
 };
 
