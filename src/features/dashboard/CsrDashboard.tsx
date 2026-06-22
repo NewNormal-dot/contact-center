@@ -149,6 +149,10 @@ interface DayData {
 }
 
 
+const isBackendSlotId = (value?: string) =>
+  typeof value === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
 const getBookingWavesForShift = (
   shift: Shift | any,
   dayBookingOpen = false,
@@ -1395,7 +1399,7 @@ export default function CsrDashboard() {
     return '';
   }, [activeWeeklyRule, getMyWeeklyBookingStats]);
 
-  const handleBookShift = React.useCallback((dateKey: string, shiftId?: string, bookingWaveId?: string) => {
+  const handleBookShift = React.useCallback(async (dateKey: string, shiftId?: string, bookingWaveId?: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
 
@@ -1508,6 +1512,15 @@ export default function CsrDashboard() {
         return;
       }
       
+        if (!isBackendSlotId(targetShift.id)) {
+          alert('Энэ shift backend slot-той холбогдоогүй байна. Admin шинэ shift үүсгээд дахин оролдоно уу.');
+          return;
+        }
+
+        await apiClient.post(`/slots/${targetShift.id}/book`, {
+          bookingWaveId: targetWave.id,
+        });
+
       const updatedGlobalShifts = globalDayData.shifts.map((s: any) => {
         if (s.id === targetShift.id) {
           return {
@@ -1540,7 +1553,7 @@ export default function CsrDashboard() {
     }
   }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking]);
 
-  const handleCancelShift = React.useCallback((dateKey: string, shiftId: string) => {
+  const handleCancelShift = React.useCallback(async (dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
 
@@ -1565,6 +1578,20 @@ export default function CsrDashboard() {
       const globalSchedules = getLocalData('schedules', {});
       const globalDayData = globalSchedules[dateKey];
       if (!globalDayData) return;
+
+        const globalTargetShift = globalDayData.shifts.find((s: any) => s.id === shiftId);
+        const isGloballyBookedByMe = globalTargetShift?.bookedBy?.some((b: any) => b.userId === csrProfile.id);
+        if (!globalTargetShift || !isGloballyBookedByMe) {
+          alert('Цуцлах захиалга олдсонгүй.');
+          return;
+        }
+
+        if (!isBackendSlotId(shiftId)) {
+          alert('Энэ shift backend slot-той холбогдоогүй байна. Admin шинэ shift үүсгээд дахин оролдоно уу.');
+          return;
+        }
+
+        await apiClient.post(`/slots/${shiftId}/cancel`);
 
       const updatedGlobalShifts = globalDayData.shifts.map((s: any) => {
         const isBookedByMe = s.bookedBy?.some((b: any) => b.userId === csrProfile.id);
