@@ -268,8 +268,13 @@ const cancelHandler = async (req: any, res: any) => {
       return res.status(400).json({ error: 'Цуцлах хугацаа дууссан байна. Зөвхөн арилжаа хийх боломжтой.' });
     }
 
-    await db('slot_bookings').where({ id: booking.id }).delete();
-    res.json({ message: 'Захиалга цуцлагдлаа' });
+      const updated = await db('slot_bookings')
+        .where({ id: booking.id, user_id: userId, status: 'confirmed' })
+        .update({ status: 'cancelled' });
+
+      if (!updated) return res.status(404).json({ error: 'Идэвхтэй захиалга олдсонгүй' });
+
+      res.json({ message: 'Захиалга цуцлагдлаа' });
   } catch (err) {
     console.error('Cancel booking error:', err);
     res.status(500).json({ error: 'Цуцлахад алдаа гарлаа' });
