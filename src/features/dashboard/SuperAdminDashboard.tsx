@@ -51,6 +51,7 @@ const createNewUserFormRow = (): NewUserFormRow => ({
   email: '',
   role: undefined,
   lineType: '',
+  location: 'Ulaanbaatar',
   employmentType: 'Full Time',
   status: 'offline',
   photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=default',
@@ -451,8 +452,9 @@ export default function SuperAdminDashboard() {
       const email = String(row.email || '').trim();
       const segment = getSegmentForRole(role, row.lineType);
       const employmentType = role === 'csr' ? (row.employmentType || 'Full Time') : 'Full Time';
+      const location = role === 'csr' ? (row.location || 'Ulaanbaatar') : '';
 
-      return { index, role, code, name, email, segment, employmentType, row };
+      return { index, role, code, name, email, segment, employmentType, location, row };
     });
 
     for (const row of preparedRows) {
@@ -463,6 +465,11 @@ export default function SuperAdminDashboard() {
 
       if ((row.role === 'admin' || row.role === 'csr') && !row.segment) {
         alert(`${row.index + 1}-р мөр дээр segment сонгоно уу.`);
+        return;
+      }
+
+      if (row.role === 'csr' && !row.location) {
+        alert(`${row.index + 1}-р мөр дээр байршил сонгоно уу.`);
         return;
       }
 
@@ -498,6 +505,7 @@ export default function SuperAdminDashboard() {
           segment: row.segment,
           lineType: row.segment,
           employmentType: row.employmentType,
+          location: row.location,
           code: row.code,
         });
 
@@ -506,6 +514,7 @@ export default function SuperAdminDashboard() {
           code: row.code,
           lineType: row.segment,
           employmentType: row.employmentType,
+          location: row.location,
           photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${row.name}`,
           status: 'active',
         });
@@ -570,6 +579,7 @@ export default function SuperAdminDashboard() {
         const code = row['Код'] || row['Code'] || '';
         const segment = row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid';
         const employmentType = row['Цагийн төрөл'] || row['EmploymentType'] || row['Employment Type'] || 'Full Time';
+        const location = row['Байршил'] || row['Location'] || 'Ulaanbaatar';
 
         if (!email || !name || !role) {
           invalidRows++;
@@ -589,6 +599,7 @@ export default function SuperAdminDashboard() {
           role: role as any,
           lineType: segment,
           employmentType,
+          location,
           status: 'active',
           photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
           password: randomPassword,
@@ -606,6 +617,7 @@ export default function SuperAdminDashboard() {
               role: rowUser.role,
               status: rowUser.status,
               employmentType: rowUser.employmentType,
+              location: rowUser.location,
               segment: rowUser.lineType,
               lineType: rowUser.lineType,
               code: rowUser.code,
@@ -614,6 +626,7 @@ export default function SuperAdminDashboard() {
               ...response.data,
               lineType: rowUser.lineType,
               employmentType: rowUser.employmentType,
+              location: rowUser.location,
               code: rowUser.code,
               photoUrl: rowUser.photoUrl,
               status: rowUser.status,
@@ -2038,6 +2051,7 @@ export default function SuperAdminDashboard() {
                   const role = row.role as CSR['role'] | undefined;
                   const showSegment = role === 'admin' || role === 'csr';
                   const showEmploymentType = role === 'csr';
+                  const showLocation = role === 'csr';
                   const isLastRow = index === newUserRows.length - 1;
 
                   return (
@@ -2127,8 +2141,8 @@ export default function SuperAdminDashboard() {
                         </div>
                       </div>
 
-                      {(showSegment || showEmploymentType) && (
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      {(showSegment || showLocation || showEmploymentType) && (
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                           {showSegment && (
                             <div>
                               <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Сегмент</label>
@@ -2140,6 +2154,21 @@ export default function SuperAdminDashboard() {
                               >
                                 <option value="">Сонгох</option>
                                 {segments.map((s, idx) => <option key={`${s}-${idx}`} value={s}>{s}</option>)}
+                              </select>
+                            </div>
+                          )}
+
+                          {showLocation && (
+                            <div>
+                              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Байршил</label>
+                              <select
+                                value={row.location || 'Ulaanbaatar'}
+                                onChange={(e) => updateNewUserRow(index, { location: e.target.value })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500"
+                                required
+                              >
+                                <option value="Ulaanbaatar">Ulaanbaatar</option>
+                                <option value="Darkhan">Darkhan</option>
                               </select>
                             </div>
                           )}
