@@ -93,7 +93,11 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
       return res.status(400).json({ error: 'Зөвхөн хүлээгдэж буй хүсэлтэд хариу өгөх боломжтой' });
     }
 
-    await db('trade_requests').where({ id }).update({ status, updated_at: db.fn.now() });
+    await db('trade_requests').where({ id }).update({
+      status,
+      receiver_responded_at: db.fn.now(),
+      updated_at: db.fn.now(),
+    });
     res.json({ message: 'Амжилттай хариу илгээлээ' });
   } catch (err) {
     res.status(500).json({ error: 'Алдаа гарлаа' });
@@ -106,11 +110,21 @@ router.patch('/:id/reject', authenticate, authorize(['admin', 'superadmin']), as
   const actingUserId = req.user.id;
 
   try {
-    await db('trade_requests').where({ id }).update({
+    const trade = await db('trade_requests').where({ id }).first();
+    if (!trade) return res.status(404).json({ error: 'Арилжааны хүсэлт олдсонгүй' });
+    if (trade.status === 'approved') {
+      return res.status(400).json({ error: 'Батлагдсан арилжааг татгалзах боломжгүй' });
+    }
+
+    const updated = await db('trade_requests').where({ id }).update({
       status: 'rejected',
       approved_by: actingUserId,
+      admin_decided_at: db.fn.now(),
       updated_at: db.fn.now()
     });
+
+    if (!updated) return res.status(404).json({ error: 'Арилжааны хүсэлт олдсонгүй' });
+
     await logAction(actingUserId, 'REJECT_TRADE', 'trade_requests', id, 'Trade rejected');
     res.json({ message: 'Арилжааны хүсэлт татгалзагдлаа' });
   } catch (err) {
@@ -138,19 +152,30 @@ router.patch('/:id/approve', authenticate, authorize(['admin', 'superadmin']), a
     // Simplified: Swap the user_id in the slot_bookings for the respective slots.
     // If the durations differ, we assume the system allows it for now or the admin handles it.
     
-    await trx('slot_bookings')
-      .where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id })
+    const senderUpdated = await trx('slot_bookings')
+      .where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id, status: 'confirmed' })
       .update({ user_id: trade.receiver_id });
 
-    await trx('slot_bookings')
-      .where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id })
+    const receiverUpdated = await trx('slot_bookings')
+      .where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' })
       .update({ user_id: trade.sender_id });
 
-    await trx('trade_requests').where({ id }).update({
+    if (senderUpdated !== 1 || receiverUpdated !== 1) {
+      await trx.rollback();
+      return res.status(409).json({ error: 'Арилжааны захиалга шинэчлэхэд зөрчил гарлаа' });
+    }
+
+    const tradeUpdated = await trx('trade_requests').where({ id, status: 'accepted' }).update({
       status: 'approved',
       approved_by: actingUserId,
+      admin_decided_at: db.fn.now(),
       updated_at: db.fn.now()
     });
+
+    if (tradeUpdated !== 1) {
+      await trx.rollback();
+      return res.status(409).json({ error: 'Арилжааны төлөв өөрчлөгдсөн байна' });
+    }
 
     await trx.commit();
     await logAction(actingUserId, 'APPROVE_TRADE', 'trade_requests', id, `Trade approved between ${trade.sender_id} and ${trade.receiver_id}`);
