@@ -14,23 +14,9 @@ import auditRoutes from "./src/api/audit";
 import tradeRoutes from "./src/api/trades";
 import forecastRoutes from "./src/api/forecast";
 import ruleRoutes from "./src/api/rules";
-import db from "./src/database/db";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-async function runProductionMigrations() {
-  if (process.env.NODE_ENV !== "production" || process.env.SKIP_DB_MIGRATIONS === "true") {
-    return;
-  }
-
-  const [batchNo, migrations] = await db.migrate.latest();
-  if (migrations.length > 0) {
-    console.log(`Database migrations applied in batch ${batchNo}: ${migrations.join(", ")}`);
-  } else {
-    console.log("Database migrations already up to date");
-  }
-}
 
 async function startServer() {
   const app = express();
@@ -95,10 +81,6 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  });
-
-  runProductionMigrations().catch((err) => {
-    console.error('Database migrations failed after server start:', err);
   });
 }
 
