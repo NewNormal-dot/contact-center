@@ -530,13 +530,10 @@ export default function SuperAdminDashboard() {
 
     try {
       const createdUsers: CSR[] = [];
-      const passwordLines: string[] = [];
 
       for (const row of preparedRows) {
-        const randomPassword = generateRandomPassword();
         const response = await apiClient.post('/users', {
           email: row.email,
-          password: randomPassword,
           name: row.name,
           role: row.role,
           status: 'active',
@@ -558,12 +555,11 @@ export default function SuperAdminDashboard() {
           photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${row.name}`,
           status: 'active',
         });
-        passwordLines.push(`${row.email}: ${randomPassword}`);
-        logAction('User Creation', `Created new user: ${row.name} (${row.role}). Password sent to ${row.email}`);
+        logAction('User Creation', `Created new user: ${row.name} (${row.role}) and sent setup link to ${row.email}`);
       }
 
       setCsrs(prev => [...prev, ...createdUsers]);
-      alert(`Хэрэглэгч амжилттай үүсгэгдлээ.\n\n${passwordLines.join('\n')}`);
+      alert('Хэрэглэгч амжилттай үүсгэгдэж, нууц үг тохируулах холбоос и-мэйлээр илгээгдлээ.');
 
       closeAddUserModal();
       await fetchUsers();
@@ -608,7 +604,7 @@ export default function SuperAdminDashboard() {
       const ws = wb.Sheets[wsname];
       const data = XLSX.utils.sheet_to_json(ws) as any[];
 
-      const newUsers: Array<Partial<CSR> & { password: string }> = [];
+      const newUsers: Array<Partial<CSR>> = [];
       let duplicates = 0;
       let invalidRows = 0;
 
@@ -637,7 +633,6 @@ export default function SuperAdminDashboard() {
           return;
         }
 
-        const randomPassword = generateRandomPassword();
         newUsers.push({
           code,
           name,
@@ -649,7 +644,6 @@ export default function SuperAdminDashboard() {
           supervisorName,
           status: 'active',
           photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
-          password: randomPassword,
         });
       });
 
@@ -659,7 +653,6 @@ export default function SuperAdminDashboard() {
           try {
             const response = await apiClient.post('/users', {
               email: rowUser.email,
-              password: rowUser.password,
               name: rowUser.name,
               role: rowUser.role,
               status: rowUser.status,
@@ -679,7 +672,6 @@ export default function SuperAdminDashboard() {
               supervisorName: rowUser.supervisorName,
               photoUrl: rowUser.photoUrl,
               status: rowUser.status,
-              password: rowUser.password,
             });
           } catch (err: any) {
             duplicates++;
@@ -691,7 +683,7 @@ export default function SuperAdminDashboard() {
           await fetchUsers();
           await fetchLogs();
           logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
-          alert(`${createdUsers.length} хэрэглэгч амжилттай нэмэгдлээ. ${duplicates} давхардсан, ${invalidRows} форматын алдаатай мөрүүд алгасагдлаа.`);
+          alert(`${createdUsers.length} хэрэглэгч амжилттай нэмэгдэж, нууц үг тохируулах холбоосууд и-мэйлээр илгээгдлээ. ${duplicates} давхардсан, ${invalidRows} форматын алдаатай мөрүүд алгасагдлаа.`);
           triggerSuccess();
         } else {
           alert(`Файл доторх мөрүүдийн аль нь ч шинээр нэмэгдсэнгүй. ${duplicates} давхардсан, ${invalidRows} алдаатай мөр.`);
@@ -789,11 +781,10 @@ export default function SuperAdminDashboard() {
   };
 
   const handleResetUserPassword = async (user: CSR) => {
-    const newPass = Math.random().toString(36).substr(2, 8);
     try {
-      await apiClient.post(`/users/${user.id}/reset-password`, { password: newPass });
-      logAction('Password Reset', `Reset password for ${user.name}. New password sent to ${user.email}`);
-      alert(`Шинэ нууц үг ${user.email} хаяг руу илгээгдлээ: ${newPass}`);
+      const response = await apiClient.post(`/users/${user.id}/reset-password`);
+      logAction('Password Reset Link', `Sent password setup link to ${user.name} (${user.email})`);
+      alert(response.data?.message || `${user.email} хаяг руу нууц үг тохируулах холбоос илгээгдлээ.`);
       triggerSuccess();
       fetchLogs();
     } catch (error: any) {

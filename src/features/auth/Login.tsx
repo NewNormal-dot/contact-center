@@ -16,6 +16,9 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotMessage, setForgotMessage] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -45,6 +48,27 @@ export default function Login() {
           'Нэвтрэлт амжилтгүй. Дахин оролдоно уу.'
       );
       setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: FormEvent) => {
+    e.preventDefault();
+
+    if (!forgotEmail) {
+      setForgotMessage('И-мэйл хаягаа оруулна уу.');
+      return;
+    }
+
+    setForgotLoading(true);
+    setForgotMessage('');
+
+    try {
+      const response = await apiClient.post('/auth/forgot-password', { email: forgotEmail });
+      setForgotMessage(response.data?.message || 'Нууц үг тохируулах холбоос илгээгдлээ.');
+    } catch (err: any) {
+      setForgotMessage(err.response?.data?.error || 'И-мэйл илгээхэд алдаа гарлаа.');
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -157,39 +181,49 @@ export default function Login() {
                   </button>
                 </form>
               ) : (
-                <div className="text-center py-6">
+                <form onSubmit={handleForgotPassword} className="text-center py-6">
                   <h3 className="text-xl font-bold mb-4">Нууц үг сэргээх</h3>
                   <p className="text-gray-400 text-sm mb-6">
-                    Бүртгэлтэй и-мэйл хаягаа оруулан нууц үг сэргээх холбоос
-                    хүлээн авна уу.
+                    Бүртгэлтэй и-мэйл хаягаа оруулна уу. Нууц үг тохируулах
+                    хамгаалалттай холбоос таны и-мэйл рүү илгээгдэнэ.
                   </p>
 
                   <div className="space-y-4">
+                    {forgotMessage && (
+                      <div className="p-3 bg-blue-500/20 border border-blue-500/40 rounded-xl text-blue-100 text-sm">
+                        {forgotMessage}
+                      </div>
+                    )}
+
                     <input
                       type="email"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
                       className="w-full px-4 py-3 bg-black/50 border border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400/50 transition-all"
                       placeholder="И-мэйл хаяг"
+                      required
                     />
 
                     <button
-                      type="button"
-                      className="w-full py-3 bg-blue-600 rounded-xl font-bold"
-                      onClick={() =>
-                        alert('Сэргээх и-мэйл илгээгдлээ. (Azure Communication Services demo)')
-                      }
+                      type="submit"
+                      disabled={forgotLoading}
+                      className="w-full py-3 bg-blue-600 rounded-xl font-bold disabled:bg-gray-700 disabled:text-gray-400"
                     >
-                      Илгээх
+                      {forgotLoading ? 'Илгээж байна...' : 'Холбоос илгээх'}
                     </button>
 
                     <button
                       type="button"
-                      onClick={() => setIsForgotPassword(false)}
+                      onClick={() => {
+                        setIsForgotPassword(false);
+                        setForgotMessage('');
+                      }}
                       className="block w-full text-center text-gray-400 hover:text-white text-sm font-bold"
                     >
                       Буцах
                     </button>
                   </div>
-                </div>
+                </form>
               )}
 
               <div className="mt-8 pt-6 border-t border-white/5 flex flex-col items-center gap-2">

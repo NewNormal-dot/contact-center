@@ -6,15 +6,37 @@ import db from '../database/db';
 import { authenticate } from '../middleware/auth';
 import { logAction } from './audit';
 import { getJwtSecret } from '../utils/jwtSecret';
+import { buildPasswordSetupUrl, sendPasswordSetupEmail } from '../utils/email';
+import { createPasswordSetupToken, hashPasswordSetupToken, validateNewPassword } from '../utils/password';
+import { columnExists } from '../database/schemaUtils';
 
 const router = express.Router();
+
+async function hasPasswordSetupColumns() {
+  return columnExists(db, 'users', 'password_setup_token_hash');
+}
+
+function formatUserForClient(user: any) {
+  const { password_hash, password_setup_token_hash, ...userResult } = user;
+  return {
+    ...userResult,
+    photoUrl: user.photo_url,
+    employmentType: user.employment_type,
+    weeklyRuleId: user.weekly_rule_id,
+    createdAt: user.created_at,
+    passwordChangedAt: user.password_changed_at,
+    invitedAt: user.invited_at,
+    invitationSentAt: user.invitation_sent_at,
+  };
+}
 
 router.post('/change-password', authenticate, async (req: any, res) => {
   const { oldPassword, newPassword } = req.body;
   const userId = req.user.id;
 
-  if (!oldPassword || !newPassword || String(newPassword).length < 6) {
-    return res.status(400).json({ error: 'Нууц үг хамгийн багадаа 6 тэмдэгт байх ёстой' });
+  const validationError = validateNewPassword(newPassword);
+  if (!oldPassword || validationError) {
+    return res.status(400).json({ error: validationError || 'Одоогийн нууц үг шаардлагатай' });
   }
 
   try {
@@ -29,15 +51,114 @@ router.post('/change-password', authenticate, async (req: any, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await db('users').where({ id: userId }).update({
-      password_hash: hashedPassword
-    });
+    const updates: any = {
+      password_hash: hashedPassword,
+      updated_at: db.fn.now(),
+    };
+
+    if (await hasPasswordSetupColumns()) {
+      updates.password_setup_token_hash = null;
+      updates.password_setup_expires_at = null;
+      updates.password_changed_at = db.fn.now();
+    }
+
+    await db('users').where({ id: userId }).update(updates);
 
     await logAction(userId, 'CHANGE_PASSWORD', 'users', userId, 'User changed their password');
     res.json({ message: 'Нууц үг амжилттай солигдлоо' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
+  }
+});
+
+router.post('/setup-password', async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  if (!token) {
+    return res.status(400).json({ error: 'Нууц үг тохируулах холбоос буруу байна' });
+  }
+
+  const validationError = validateNewPassword(newPassword);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+
+  try {
+    if (!(await hasPasswordSetupColumns())) {
+      return res.status(500).json({ error: 'Password setup migration хийгдээгүй байна' });
+    }
+
+    const tokenHash = hashPasswordSetupToken(String(token));
+    const user = await db('users')
+      .where({ password_setup_token_hash: tokenHash })
+      .first();
+
+    if (!user || !user.password_setup_expires_at) {
+      return res.status(400).json({ error: 'Холбоос буруу эсвэл хүчингүй болсон байна' });
+    }
+
+    const expiresAt = new Date(user.password_setup_expires_at);
+    if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() < Date.now()) {
+      return res.status(400).json({ error: 'Холбоосын хүчинтэй хугацаа дууссан байна. Админаас дахин link илгээхийг хүснэ үү.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+    await db('users').where({ id: user.id }).update({
+      password_hash: hashedPassword,
+      password_setup_token_hash: null,
+      password_setup_expires_at: null,
+      password_changed_at: db.fn.now(),
+      status: 'active',
+      updated_at: db.fn.now(),
+    });
+
+    await logAction(user.id, 'SETUP_PASSWORD', 'users', user.id, `User set password via email setup link: ${user.email}`);
+    res.json({ message: 'Нууц үг амжилттай тохирлоо. Одоо шинэ нууц үгээрээ нэвтэрнэ үү.' });
+  } catch (err) {
+    console.error('Setup Password Error:', err);
+    res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
+  }
+});
+
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'И-мэйл хаяг шаардлагатай' });
+  }
+
+  try {
+    if (!(await hasPasswordSetupColumns())) {
+      return res.status(500).json({ error: 'Password setup migration хийгдээгүй байна' });
+    }
+
+    const user = await db('users').where({ email }).first();
+    if (user && user.status !== 'inactive') {
+      const setup = createPasswordSetupToken();
+      const setupUrl = buildPasswordSetupUrl(setup.token);
+
+      await db('users').where({ id: user.id }).update({
+        password_setup_token_hash: setup.tokenHash,
+        password_setup_expires_at: setup.expiresAt,
+        invitation_sent_at: db.fn.now(),
+        updated_at: db.fn.now(),
+      });
+
+      await sendPasswordSetupEmail({
+        to: user.email,
+        name: user.name,
+        setupUrl,
+        expiresAt: setup.expiresAt,
+      });
+
+      await logAction(user.id, 'REQUEST_PASSWORD_RESET', 'users', user.id, `Password setup link requested for ${user.email}`);
+    }
+
+    res.json({ message: 'Хэрэв энэ и-мэйл бүртгэлтэй бол нууц үг тохируулах холбоос илгээгдэнэ.' });
+  } catch (err) {
+    console.error('Forgot Password Error:', err);
+    res.status(500).json({ error: 'Нууц үг сэргээх холбоос илгээхэд алдаа гарлаа' });
   }
 });
 
@@ -67,17 +188,9 @@ router.post('/login', async (req, res) => {
 
     await logAction(user.id, 'LOGIN_SUCCESS', 'users', user.id, `User logged in: ${user.email}`);
 
-    const { password_hash, ...userResult } = user;
-    const formattedUser = {
-      ...userResult,
-      photoUrl: user.photo_url,
-      employmentType: user.employment_type,
-      weeklyRuleId: user.weekly_rule_id,
-      createdAt: user.created_at
-    };
-    res.json({ token, user: formattedUser });
+    res.json({ token, user: formatUserForClient(user) });
   } catch (err) {
-    console.error("Login Error:", err);
+    console.error('Login Error:', err);
     res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
   }
 });
@@ -101,8 +214,7 @@ router.post('/register-initial', async (req, res) => {
 
     const id = uuidv4();
     const hashedPassword = await bcrypt.hash(initialPassword, 10);
-    
-    await db('users').insert({
+    const insertData: any = {
       id,
       email: initialEmail,
       password_hash: hashedPassword,
@@ -110,7 +222,13 @@ router.post('/register-initial', async (req, res) => {
       role: 'superadmin',
       status: 'active',
       employment_type: 'Full Time'
-    });
+    };
+
+    if (await hasPasswordSetupColumns()) {
+      insertData.password_changed_at = db.fn.now();
+    }
+    
+    await db('users').insert(insertData);
 
     res.json({ message: 'Superadmin created successfully.' });
   } catch (err) {
