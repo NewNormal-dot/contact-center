@@ -6,6 +6,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './features/auth/Login';
+import SetupPassword from './features/auth/SetupPassword';
 import AdminDashboard from './features/dashboard/AdminDashboard';
 import CsrDashboard from './features/dashboard/CsrDashboard';
 import SuperAdminDashboard from './features/dashboard/SuperAdminDashboard';
@@ -40,6 +41,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Login />} />
+          <Route path="/setup-password" element={<SetupPassword />} />
           <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
           <Route path="/csr" element={<ProtectedRoute role="csr"><CsrDashboard /></ProtectedRoute>} />
           <Route path="/superadmin" element={<ProtectedRoute role="superadmin"><SuperAdminDashboard /></ProtectedRoute>} />

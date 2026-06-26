@@ -1,6 +1,8 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
+import { buildPasswordSetupUrl, sendPasswordSetupEmail } from '../utils/email';
+import { createLockedPasswordValue, createPasswordSetupToken } from '../utils/password';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { logAction } from './audit';
@@ -46,6 +48,10 @@ async function hasUserLocationColumn() {
 
 async function hasUserSupervisorNameColumn() {
   return columnExists(db, 'users', 'supervisor_name');
+}
+
+async function hasPasswordSetupColumns() {
+  return columnExists(db, 'users', 'password_setup_token_hash');
 }
 
 function userSelectColumns(includeLocation: boolean, includeSupervisorName: boolean, includeCreatedAt = false) {
@@ -113,7 +119,7 @@ router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req,
 
 // Create User
 router.post('/', authenticate, async (req: any, res) => {
-  const { email, password, name, role, status, employment_type, employmentType, code, location, segment, lineType, supervisorName, supervisor_name } = req.body;
+  const { email, name, role, status, employment_type, employmentType, code, location, segment, lineType, supervisorName, supervisor_name } = req.body;
   const actingUserRole = req.user.role;
   const finalRole = role || 'csr';
   const finalStatus = status || 'active';
@@ -122,10 +128,6 @@ router.post('/', authenticate, async (req: any, res) => {
 
   if (!email || !name) {
     return res.status(400).json({ error: 'И-мэйл болон нэр шаардлагатай' });
-  }
-
-  if (!password || String(password).length < 8) {
-    return res.status(400).json({ error: 'Нууц үг хамгийн багадаа 8 тэмдэгт байх ёстой' });
   }
 
   if (!isValidRole(finalRole)) {
@@ -171,38 +173,69 @@ router.post('/', authenticate, async (req: any, res) => {
     const existing = await db('users').where({ email }).first();
     if (existing) return res.status(400).json({ error: 'Имэйл бүртгэлтэй байна' });
 
+    if (!(await hasPasswordSetupColumns())) {
+      return res.status(500).json({ error: 'Password setup migration хийгдээгүй байна' });
+    }
+
     const id = uuidv4();
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const setup = createPasswordSetupToken();
+    const setupUrl = buildPasswordSetupUrl(setup.token);
+    const lockedPasswordHash = await bcrypt.hash(createLockedPasswordValue(), 10);
     const includeLocation = await hasUserLocationColumn();
     const includeSupervisorName = await hasUserSupervisorNameColumn();
 
-    const insertData: any = {
+    await db.transaction(async (trx) => {
+      const insertData: any = {
+        id,
+        email,
+        password_hash: lockedPasswordHash,
+        password_setup_token_hash: setup.tokenHash,
+        password_setup_expires_at: setup.expiresAt,
+        invited_at: trx.fn.now(),
+        name,
+        role: finalRole,
+        status: finalStatus,
+        employment_type: finalEmploymentType,
+        segment: finalSegment || null,
+        code,
+      };
+
+      if (includeLocation) {
+        insertData.location = finalLocation || null;
+      }
+
+      if (includeSupervisorName) {
+        insertData.supervisor_name = finalSupervisorName || null;
+      }
+
+      await trx('users').insert(insertData);
+      await sendPasswordSetupEmail({
+        to: email,
+        name,
+        setupUrl,
+        expiresAt: setup.expiresAt,
+      });
+      await trx('users').where({ id }).update({ invitation_sent_at: trx.fn.now() });
+    });
+
+    await logAction(req.user.id, 'CREATE_USER_INVITE', 'users', id, `Created user ${name} (${finalRole}) and sent password setup link to ${email}`);
+    res.status(201).json({
       id,
       email,
-      password_hash: hashedPassword,
       name,
       role: finalRole,
       status: finalStatus,
-      employment_type: finalEmploymentType,
-      segment: finalSegment || null,
+      lineType: finalSegment,
+      employmentType: finalEmploymentType,
       code,
-    };
-
-    if (includeLocation) {
-      insertData.location = finalLocation || null;
-    }
-
-    if (includeSupervisorName) {
-      insertData.supervisor_name = finalSupervisorName || null;
-    }
-
-    await db('users').insert(insertData);
-
-    await logAction(req.user.id, 'CREATE_USER', 'users', id, `Created user ${name} (${finalRole})`);
-    res.status(201).json({ id, email, name, role: finalRole, status: finalStatus, lineType: finalSegment, employmentType: finalEmploymentType, code, location: finalLocation || '', supervisorName: finalSupervisorName || '' });
+      location: finalLocation || '',
+      supervisorName: finalSupervisorName || '',
+      invitationSent: true,
+      message: 'Хэрэглэгч үүсэж, нууц үг тохируулах холбоос и-мэйлээр илгээгдлээ',
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Алдаа гарлаа' });
+    console.error('Create User Invite Error:', err);
+    res.status(500).json({ error: 'Хэрэглэгч үүсгэх эсвэл invitation и-мэйл илгээхэд алдаа гарлаа' });
   }
 });
 
@@ -308,41 +341,56 @@ router.put('/:id', authenticate, async (req: any, res) => {
 });
 
 // Reset Password: Superadmin can reset users; admin can reset CSR users only.
+// This does not expose a password to admins. It sends a secure setup link to the user's email.
 router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin']), async (req: any, res) => {
   const { id } = req.params;
-  const { password } = req.body;
   const actingUser = req.user;
 
-  if (!password || String(password).length < 8) {
-    return res.status(400).json({ error: 'Нууц үг хамгийн багадаа 8 тэмдэгт байх ёстой' });
-  }
-
   try {
+    if (!(await hasPasswordSetupColumns())) {
+      return res.status(500).json({ error: 'Password setup migration хийгдээгүй байна' });
+    }
+
     const userToUpdate = await db('users').where({ id }).first();
     if (!userToUpdate) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
 
     const isRoot = actingUser.email === 'enkhtur.a@mobicom.mn' || actingUser.email === 'Enkhtur040607@gmail.com';
 
     if (actingUser.role === 'admin' && userToUpdate.role !== 'csr') {
-      return res.status(403).json({ error: 'Админ зөвхөн CSR хэрэглэгчийн нууц үгийг солих эрхтэй' });
+      return res.status(403).json({ error: 'Админ зөвхөн CSR хэрэглэгчийн нууц үгийг сэргээх эрхтэй' });
     }
     
     // Rule: Superadmin cannot reset other Superadmin's password unless they are Root
     if (userToUpdate.role === 'superadmin' && !isRoot && actingUser.id !== id) {
-      return res.status(403).json({ error: 'Та өөр супер админы нууц үгийг солих эрхгүй' });
+      return res.status(403).json({ error: 'Та өөр супер админы нууц үгийг сэргээх эрхгүй' });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await db('users').where({ id }).update({ 
-      password_hash: hashedPassword,
-      updated_at: db.fn.now()
+    const setup = createPasswordSetupToken();
+    const setupUrl = buildPasswordSetupUrl(setup.token);
+    const lockedPasswordHash = await bcrypt.hash(createLockedPasswordValue(), 10);
+
+    await db.transaction(async (trx) => {
+      await trx('users').where({ id }).update({
+        password_hash: lockedPasswordHash,
+        password_setup_token_hash: setup.tokenHash,
+        password_setup_expires_at: setup.expiresAt,
+        invitation_sent_at: trx.fn.now(),
+        updated_at: trx.fn.now(),
+      });
+
+      await sendPasswordSetupEmail({
+        to: userToUpdate.email,
+        name: userToUpdate.name,
+        setupUrl,
+        expiresAt: setup.expiresAt,
+      });
     });
 
-    await logAction(actingUser.id, 'RESET_PASSWORD', 'users', id, `Reset password for ${userToUpdate.email || userToUpdate.name}`);
-    res.json({ message: 'Нууц үг амжилттай солигдлоо' });
+    await logAction(actingUser.id, 'SEND_PASSWORD_SETUP_LINK', 'users', id, `Sent password setup link to ${userToUpdate.email || userToUpdate.name}`);
+    res.json({ message: 'Нууц үг тохируулах холбоос хэрэглэгчийн и-мэйл рүү илгээгдлээ' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Алдаа гарлаа' });
+    console.error('Reset Password Link Error:', err);
+    res.status(500).json({ error: 'Нууц үг тохируулах холбоос илгээхэд алдаа гарлаа' });
   }
 });
 

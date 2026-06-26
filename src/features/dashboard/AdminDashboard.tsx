@@ -1775,18 +1775,13 @@ export default function AdminDashboard() {
       return;
     }
 
-    const newPass = generateRandomPassword();
     try {
-      await apiClient.post(`/users/${user.id}/reset-password`, {
-        password: newPass,
-      });
+      const response = await apiClient.post(`/users/${user.id}/reset-password`);
       logAction(
-        "Password Reset",
-        `Reset password for CSR ${user.name}. New password sent to ${user.email}`,
+        "Password Reset Link",
+        `Sent password setup link to CSR ${user.name} (${user.email})`,
       );
-      alert(
-        `Шинэ нууц үг ${user.email || user.name} хэрэглэгчид үүсгэгдлээ: ${newPass}`,
-      );
+      alert(response.data?.message || `${user.email || user.name} хэрэглэгчийн и-мэйл рүү нууц үг тохируулах холбоос илгээгдлээ.`);
       await fetchCsrUsers();
     } catch (error: any) {
       console.error("Error resetting CSR password:", error);
@@ -1996,7 +1991,6 @@ export default function AdminDashboard() {
       return;
     }
 
-    const randomPassword = generateRandomPassword();
     try {
       const response = await apiClient.post("/users", {
         code: newUser.code,
@@ -2004,7 +1998,6 @@ export default function AdminDashboard() {
         email: newUser.email,
         location: normalizedLocation,
         supervisorName: String(newUser.supervisorName || "").trim(),
-        password: randomPassword,
         role: "csr",
         status: "active",
         segment: newUser.lineType,
@@ -2033,7 +2026,7 @@ export default function AdminDashboard() {
           "https://api.dicebear.com/7.x/avataaars/svg?seed=" + Math.random(),
       });
       logAction("Employee Added", `Added employee: ${newUser.name}`);
-      alert(`CSR амжилттай нэмэгдлээ. Нууц үг: ${randomPassword}`);
+      alert(response.data?.message || `CSR амжилттай нэмэгдэж, ${newUser.email} хаяг руу нууц үг тохируулах холбоос илгээгдлээ.`);
       await fetchCsrUsers();
     } catch (error: any) {
       console.error("Error adding CSR user:", error);
@@ -2308,14 +2301,12 @@ export default function AdminDashboard() {
 
       const usersToAdd: CSR[] = [];
       for (const user of validUsers) {
-        const randomPassword = generateRandomPassword();
         const response = await apiClient.post("/users", {
           code: user.code,
           name: user.name,
           email: user.email,
           location: user.location,
           supervisorName: user.supervisorName,
-          password: randomPassword,
           role: "csr",
           status: "active",
           segment: user.lineType,
@@ -2341,7 +2332,7 @@ export default function AdminDashboard() {
         `${usersToAdd.length} ажилтан Excel-ээр олноор нэмэгдлээ.`,
       );
       await fetchCsrUsers();
-      alert(`${usersToAdd.length} CSR амжилттай нэмэгдлээ.`);
+      alert(`${usersToAdd.length} CSR амжилттай нэмэгдэж, нууц үг тохируулах холбоосууд и-мэйлээр илгээгдлээ.`);
     } catch (error: any) {
       console.error("Error bulk adding CSR users:", error);
       alert(
