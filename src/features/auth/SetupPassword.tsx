@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff, Lock } from 'lucide-react';
 import { motion } from 'motion/react';
 import apiClient from '../../lib/api-client';
+import { validatePasswordStrength } from '../../utils/passwordValidation';
 
 export default function SetupPassword() {
   const navigate = useNavigate();
@@ -30,8 +31,9 @@ export default function SetupPassword() {
       return;
     }
 
-    if (newPassword.length < 8) {
-      setError('Нууц үг хамгийн багадаа 8 тэмдэгт байх ёстой.');
+    const passwordError = validatePasswordStrength(newPassword);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 

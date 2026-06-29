@@ -209,16 +209,31 @@ router.post('/', authenticate, async (req: any, res) => {
       }
 
       await trx('users').insert(insertData);
+    });
+
+    let invitationSent = false;
+    try {
       await sendPasswordSetupEmail({
         to: email,
         name,
         setupUrl,
         expiresAt: setup.expiresAt,
       });
-      await trx('users').where({ id }).update({ invitation_sent_at: trx.fn.now() });
-    });
+      await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
+      invitationSent = true;
+    } catch (emailErr) {
+      console.error('Create user invite email failed:', emailErr);
+    }
 
-    await logAction(req.user.id, 'CREATE_USER_INVITE', 'users', id, `Created user ${name} (${finalRole}) and sent password setup link to ${email}`);
+    await logAction(
+      req.user.id,
+      'CREATE_USER_INVITE',
+      'users',
+      id,
+      invitationSent
+        ? `Created user ${name} (${finalRole}) and sent password setup link to ${email}`
+        : `Created user ${name} (${finalRole}); password setup email failed for ${email}`
+    );
     res.status(201).json({
       id,
       email,
@@ -230,8 +245,10 @@ router.post('/', authenticate, async (req: any, res) => {
       code,
       location: finalLocation || '',
       supervisorName: finalSupervisorName || '',
-      invitationSent: true,
-      message: 'Хэрэглэгч үүсэж, нууц үг тохируулах холбоос и-мэйлээр илгээгдлээ',
+      invitationSent,
+      message: invitationSent
+        ? 'Хэрэглэгч үүсэж, нууц үг тохируулах холбоос и-мэйлээр илгээгдлээ'
+        : 'Хэрэглэгч үүссэн боловч и-мэйл илгээгдсэнгүй. Reset товчоор холбоосыг дахин илгээнэ үү.',
     });
   } catch (err) {
     console.error('Create User Invite Error:', err);
@@ -367,24 +384,25 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
 
     const setup = createPasswordSetupToken();
     const setupUrl = buildPasswordSetupUrl(setup.token);
-    const lockedPasswordHash = await bcrypt.hash(createLockedPasswordValue(), 10);
 
-    await db.transaction(async (trx) => {
-      await trx('users').where({ id }).update({
-        password_hash: lockedPasswordHash,
-        password_setup_token_hash: setup.tokenHash,
-        password_setup_expires_at: setup.expiresAt,
-        invitation_sent_at: trx.fn.now(),
-        updated_at: trx.fn.now(),
-      });
+    await db('users').where({ id }).update({
+      password_setup_token_hash: setup.tokenHash,
+      password_setup_expires_at: setup.expiresAt,
+      updated_at: db.fn.now(),
+    });
 
+    try {
       await sendPasswordSetupEmail({
         to: userToUpdate.email,
         name: userToUpdate.name,
         setupUrl,
         expiresAt: setup.expiresAt,
       });
-    });
+      await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
+    } catch (emailErr) {
+      console.error('Reset password link email failed:', emailErr);
+      return res.status(502).json({ error: 'Нууц үг тохируулах холбоос үүссэн боловч и-мэйл илгээхэд алдаа гарлаа. Дахин оролдоно уу.' });
+    }
 
     await logAction(actingUser.id, 'SEND_PASSWORD_SETUP_LINK', 'users', id, `Sent password setup link to ${userToUpdate.email || userToUpdate.name}`);
     res.json({ message: 'Нууц үг тохируулах холбоос хэрэглэгчийн и-мэйл рүү илгээгдлээ' });

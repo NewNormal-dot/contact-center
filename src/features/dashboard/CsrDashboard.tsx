@@ -11,6 +11,7 @@ import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalI
 import { useAuth } from '../../contexts/AuthContext';
 import apiClient from '../../lib/api-client';
 import { SHOW_VACATION_FEATURE } from '../../config/features';
+import { validatePasswordStrength } from '../../utils/passwordValidation';
 
 const WEEKDAYS = ['Ням', 'Даваа', 'Мягмар', 'Лхагва', 'Пүрэв', 'Баасан', 'Бямба'];
 const MONTHS = [
@@ -1161,8 +1162,9 @@ export default function CsrDashboard() {
       return;
     }
 
-    if (passwordForm.new.length < 6) {
-      alert('Шинэ нууц үг хамгийн багадаа 6 тэмдэгт байх ёстой!');
+    const passwordError = validatePasswordStrength(passwordForm.new);
+    if (passwordError) {
+      alert(passwordError);
       return;
     }
 

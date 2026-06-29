@@ -34,7 +34,7 @@ jobs:
         run: |
           rm -rf release release.zip
           mkdir -p release
-          cp package.json package-lock.json server.ts knexfile.ts release/
+          cp package.json package-lock.json server.ts knexfile.ts knexfile.mssql.cjs release/
           cp -r dist src node_modules release/
           [ -f tsconfig.json ] && cp tsconfig.json release/
           cd release

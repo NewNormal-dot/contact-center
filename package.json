@@ -16,8 +16,8 @@
     "migrate": "knex migrate:latest --knexfile knexfile.ts",
     "seed": "knex seed:run --knexfile knexfile.ts",
     "migrate:status": "knex migrate:status --knexfile knexfile.ts",
-    "migrate:prod": "knex migrate:latest --knexfile knexfile.mssql.cjs --env production",
-    "migrate:prod:status": "knex migrate:status --knexfile knexfile.mssql.cjs --env production"
+    "migrate:prod": "tsx node_modules/knex/bin/cli.js migrate:latest --knexfile knexfile.mssql.cjs --env production",
+    "migrate:prod:status": "tsx node_modules/knex/bin/cli.js migrate:status --knexfile knexfile.mssql.cjs --env production"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

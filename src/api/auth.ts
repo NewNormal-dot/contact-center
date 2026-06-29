@@ -141,7 +141,6 @@ router.post('/forgot-password', async (req, res) => {
       await db('users').where({ id: user.id }).update({
         password_setup_token_hash: setup.tokenHash,
         password_setup_expires_at: setup.expiresAt,
-        invitation_sent_at: db.fn.now(),
         updated_at: db.fn.now(),
       });
 
@@ -151,6 +150,7 @@ router.post('/forgot-password', async (req, res) => {
         setupUrl,
         expiresAt: setup.expiresAt,
       });
+      await db('users').where({ id: user.id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
 
       await logAction(user.id, 'REQUEST_PASSWORD_RESET', 'users', user.id, `Password setup link requested for ${user.email}`);
     }

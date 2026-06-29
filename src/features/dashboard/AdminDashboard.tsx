@@ -67,6 +67,7 @@ import {
 } from "../../utils/localStorage";
 import apiClient from "../../lib/api-client";
 import { SHOW_VACATION_FEATURE } from "../../config/features";
+import { validatePasswordStrength } from "../../utils/passwordValidation";
 import {
   groupNotificationsByDay,
   groupTrainingMaterialsByDay,
@@ -1560,8 +1561,9 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (passwordForm.new.length < 6) {
-      alert("Шинэ нууц үг хамгийн багадаа 6 тэмдэгт байх ёстой!");
+    const passwordError = validatePasswordStrength(passwordForm.new);
+    if (passwordError) {
+      alert(passwordError);
       return;
     }
 

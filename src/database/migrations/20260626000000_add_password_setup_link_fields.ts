@@ -1,11 +1,12 @@
 import type { Knex } from 'knex';
+import { columnExists } from '../schemaUtils.ts';
 
 export async function up(knex: Knex): Promise<void> {
-  const hasSetupHash = await knex.schema.hasColumn('users', 'password_setup_token_hash');
-  const hasSetupExpires = await knex.schema.hasColumn('users', 'password_setup_expires_at');
-  const hasInvitedAt = await knex.schema.hasColumn('users', 'invited_at');
-  const hasInvitationSentAt = await knex.schema.hasColumn('users', 'invitation_sent_at');
-  const hasPasswordChangedAt = await knex.schema.hasColumn('users', 'password_changed_at');
+  const hasSetupHash = await columnExists(knex, 'users', 'password_setup_token_hash');
+  const hasSetupExpires = await columnExists(knex, 'users', 'password_setup_expires_at');
+  const hasInvitedAt = await columnExists(knex, 'users', 'invited_at');
+  const hasInvitationSentAt = await columnExists(knex, 'users', 'invitation_sent_at');
+  const hasPasswordChangedAt = await columnExists(knex, 'users', 'password_changed_at');
 
   await knex.schema.alterTable('users', (table) => {
     if (!hasSetupHash) table.string('password_setup_token_hash', 128).nullable().index();
@@ -25,9 +26,16 @@ export async function down(knex: Knex): Promise<void> {
     'password_changed_at',
   ];
 
-  await knex.schema.alterTable('users', (table) => {
-    for (const column of columns) {
-      table.dropColumn(column);
+  const existingColumns = [];
+  for (const column of columns) {
+    if (await columnExists(knex, 'users', column)) {
+      existingColumns.push(column);
     }
+  }
+
+  if (existingColumns.length === 0) return;
+
+  await knex.schema.alterTable('users', (table) => {
+    for (const column of existingColumns) table.dropColumn(column);
   });
 }

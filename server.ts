@@ -14,9 +14,36 @@ import auditRoutes from "./src/api/audit";
 import tradeRoutes from "./src/api/trades";
 import forecastRoutes from "./src/api/forecast";
 import ruleRoutes from "./src/api/rules";
+import db from "./src/database/db";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+let migrationStatus: "skipped" | "running" | "complete" | "failed" = "skipped";
+let migrationError: string | null = null;
+
+async function runProductionMigrationsSafely() {
+  if (process.env.NODE_ENV !== "production" || process.env.SKIP_DB_MIGRATIONS === "true") {
+    migrationStatus = "skipped";
+    return;
+  }
+
+  migrationStatus = "running";
+  migrationError = null;
+  try {
+    const [batchNo, migrations] = await db.migrate.latest();
+    migrationStatus = "complete";
+    if (migrations.length > 0) {
+      console.log(`Database migrations applied in batch ${batchNo}: ${migrations.join(", ")}`);
+    } else {
+      console.log("Database migrations already up to date");
+    }
+  } catch (err: any) {
+    migrationStatus = "failed";
+    migrationError = err?.message || String(err);
+    console.error("Database migrations failed; server will continue running:", err);
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -43,7 +70,15 @@ async function startServer() {
 
   // API Health Check
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString(), env: process.env.NODE_ENV });
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      env: process.env.NODE_ENV,
+      migrations: {
+        status: migrationStatus,
+        error: process.env.NODE_ENV === "production" ? undefined : migrationError,
+      },
+    });
   });
 
   // Vite integration for development
@@ -81,6 +116,7 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    void runProductionMigrationsSafely();
   });
 }
 

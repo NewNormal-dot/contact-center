@@ -41,6 +41,7 @@ import { logAction } from '../../utils/logger';
 import apiClient from '../../lib/api-client';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
+import { validatePasswordStrength } from '../../utils/passwordValidation';
 
 type NewUserFormRow = Partial<CSR> & { formId: string };
 const VALID_LOCATIONS = ['Ulaanbaatar', 'Darkhan'] as const;
@@ -410,8 +411,9 @@ export default function SuperAdminDashboard() {
       return;
     }
 
-    if (myPasswordForm.new.length < 6) {
-      alert('Шинэ нууц үг хамгийн багадаа 6 тэмдэгт байх ёстой!');
+    const passwordError = validatePasswordStrength(myPasswordForm.new);
+    if (passwordError) {
+      alert(passwordError);
       return;
     }
 
@@ -797,6 +799,11 @@ export default function SuperAdminDashboard() {
     e.preventDefault();
     if (myPasswordForm.new !== myPasswordForm.confirm) {
       alert('Нууц үг зөрүүтэй байна!');
+      return;
+    }
+    const passwordError = validatePasswordStrength(myPasswordForm.new);
+    if (passwordError) {
+      alert(passwordError);
       return;
     }
     try {

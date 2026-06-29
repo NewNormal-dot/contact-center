@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Settings, X, Sun, Moon, Key, CheckCircle, AlertCircle } from 'lucide-react';
 import apiClient from '../lib/api-client';
+import { validatePasswordStrength } from '../utils/passwordValidation';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -36,6 +37,11 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     e.preventDefault();
     if (passwords.new !== passwords.confirm) {
       setToast({ message: 'Шинэ нууц үгнүүд тохирохгүй байна', type: 'error' });
+      return;
+    }
+    const passwordError = validatePasswordStrength(passwords.new);
+    if (passwordError) {
+      setToast({ message: passwordError, type: 'error' });
       return;
     }
     try {
