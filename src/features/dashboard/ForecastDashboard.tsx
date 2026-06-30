@@ -77,33 +77,6 @@ const currentDayKey = () => formatDayKey(today());
 
 
 const FORECAST_LOCAL_STORAGE_KEY = 'contact_center_forecast_rows_v2';
-const FORECAST_UI_STATE_KEY = 'contact_center_forecast_ui_state_v1';
-
-type ForecastUiState = {
-  selectedMonth?: string;
-  selectedSegment?: string;
-  selectedDay?: string;
-  fileName?: string;
-};
-
-const readForecastUiState = (): ForecastUiState => {
-  try {
-    const raw = window.localStorage.getItem(FORECAST_UI_STATE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
-const writeForecastUiState = (state: ForecastUiState) => {
-  try {
-    window.localStorage.setItem(FORECAST_UI_STATE_KEY, JSON.stringify(state));
-  } catch {
-    // Ignore localStorage failures. Filter state can safely fall back to defaults.
-  }
-};
 
 const rowToPayload = (row: ForecastRow) => ({
   date: row.date.toISOString(),
@@ -252,7 +225,7 @@ function ForecastComboChart({
   });
 
   return (
-    <div className="rounded-[28px] border border-sky-500/15 bg-[#07111f]/95 p-5 shadow-2xl shadow-black/30">
+    <div className="rounded-[24px] sm:rounded-[28px] border border-sky-500/15 bg-[#07111f]/95 p-3 sm:p-5 shadow-2xl shadow-black/30">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-[12px] font-black uppercase tracking-[0.30em] text-sky-400">{title}</p>
@@ -425,11 +398,10 @@ function ForecastComboChart({
 
 export default function ForecastDashboard() {
   const [rows, setRows] = useState<ForecastRow[]>([]);
-  const initialUiState = useMemo(() => readForecastUiState(), []);
-  const [selectedMonth, setSelectedMonth] = useState<string>(initialUiState.selectedMonth || '');
-  const [selectedSegment, setSelectedSegment] = useState<string>(initialUiState.selectedSegment || 'All');
-  const [selectedDay, setSelectedDay] = useState<string>(initialUiState.selectedDay || '');
-  const [fileName, setFileName] = useState<string>(initialUiState.fileName || '');
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
+  const [selectedSegment, setSelectedSegment] = useState<string>('All');
+  const [selectedDay, setSelectedDay] = useState<string>('');
+  const [fileName, setFileName] = useState<string>('');
   const [storageStatus, setStorageStatus] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -479,38 +451,13 @@ export default function ForecastDashboard() {
     };
   }, []);
 
-  useEffect(() => {
-    writeForecastUiState({ selectedMonth, selectedSegment, selectedDay, fileName });
-  }, [selectedMonth, selectedSegment, selectedDay, fileName]);
-
   const segments = useMemo(() => {
     const unique = Array.from(new Set(rows.map(row => row.segment).filter(Boolean))).sort();
     return ['All', ...unique];
   }, [rows]);
 
   const months = useMemo(() => Array.from(new Set(rows.map(row => formatMonthKey(row.date)))).sort(), [rows]);
-  const activeMonth = useMemo(() => {
-    if (selectedMonth && (!months.length || months.includes(selectedMonth))) return selectedMonth;
-
-    const thisMonth = currentMonthKey();
-    if (months.includes(thisMonth)) return thisMonth;
-
-    // When the user comes back to Forecast after uploading a different month, keep the page on existing data
-    // instead of falling back to the current month and showing an empty chart.
-    return months[months.length - 1] || thisMonth;
-  }, [months, selectedMonth]);
-
-  useEffect(() => {
-    if (months.length && (!selectedMonth || !months.includes(selectedMonth))) {
-      setSelectedMonth(activeMonth);
-    }
-  }, [activeMonth, months, selectedMonth]);
-
-  useEffect(() => {
-    if (selectedSegment !== 'All' && !segments.includes(selectedSegment)) {
-      setSelectedSegment('All');
-    }
-  }, [segments, selectedSegment]);
+  const activeMonth = selectedMonth || currentMonthKey();
 
   const filteredRows = useMemo(() => rows.filter(row => {
     const monthOk = formatMonthKey(row.date) === activeMonth;
@@ -640,20 +587,20 @@ export default function ForecastDashboard() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-[28px] border border-sky-500/15 bg-[#07111f]/95 p-5 shadow-2xl shadow-black/30">
-        <div className="flex flex-wrap items-center gap-4">
+    <div className="safe-x space-y-4 sm:space-y-6">
+      <div className="rounded-[24px] sm:rounded-[28px] border border-sky-500/15 bg-[#07111f]/95 p-3 sm:p-5 shadow-2xl shadow-black/30">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
           <select
             value={selectedSegment}
             onChange={(event) => { setSelectedSegment(event.target.value); setSelectedDay(''); }}
-            className="h-12 min-w-[190px] rounded-2xl border border-sky-500/20 bg-black/40 px-5 text-sm font-black uppercase tracking-widest text-sky-300 outline-none"
+            className="h-12 w-full sm:w-auto sm:min-w-[190px] rounded-2xl border border-sky-500/20 bg-black/40 px-4 sm:px-5 text-sm font-black uppercase tracking-widest text-sky-300 outline-none"
           >
             {segments.map(segment => <option key={segment} value={segment}>{segment === 'All' ? 'All segments' : segment}</option>)}
           </select>
 
           <button
             onClick={() => inputRef.current?.click()}
-            className="ml-auto flex h-12 items-center gap-2 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-6 text-sm font-black uppercase tracking-widest text-emerald-300 transition hover:bg-emerald-500/20"
+            className="flex h-12 w-full sm:w-auto sm:ml-auto items-center justify-center gap-2 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 sm:px-6 text-sm font-black uppercase tracking-widest text-emerald-300 transition hover:bg-emerald-500/20"
           >
             <Upload size={16} /> Upload
           </button>
@@ -663,19 +610,19 @@ export default function ForecastDashboard() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div className="overflow-hidden rounded-[24px] border border-white/5 bg-[#07111f]/95 shadow-xl shadow-black/20">
-          <div className="grid grid-cols-[76px_1fr_1fr_1fr]">
-            <div className="flex items-center justify-center border-r border-white/5 bg-cyan-400/5">
+          <div className="grid grid-cols-1 sm:grid-cols-[76px_1fr_1fr_1fr]">
+            <div className="hidden sm:flex items-center justify-center border-r border-white/5 bg-cyan-400/5">
               <PhoneCall className="text-cyan-300" size={26} />
             </div>
             <div className="p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Сарын нийт дуудлага</p>
               <p className="mt-1 text-2xl font-black text-white">{totals.totalCalls.toLocaleString()}</p>
             </div>
-            <div className="border-l border-white/5 p-4">
+            <div className="border-t sm:border-t-0 sm:border-l border-white/5 p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Сарын дундаж дуудлага</p>
               <p className="mt-1 text-2xl font-black text-white">{totals.averageCalls.toLocaleString()}</p>
             </div>
-            <div className="border-l border-white/5 p-4">
+            <div className="border-t sm:border-t-0 sm:border-l border-white/5 p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Хамгийн их дуудлага</p>
               <p className="mt-1 text-2xl font-black text-white">{totals.peakCalls.toLocaleString()}</p>
             </div>
@@ -683,19 +630,19 @@ export default function ForecastDashboard() {
         </div>
 
         <div className="overflow-hidden rounded-[24px] border border-white/5 bg-[#07111f]/95 shadow-xl shadow-black/20">
-          <div className="grid grid-cols-[76px_1fr_1fr_1fr]">
-            <div className="flex items-center justify-center border-r border-white/5 bg-rose-400/5">
+          <div className="grid grid-cols-1 sm:grid-cols-[76px_1fr_1fr_1fr]">
+            <div className="hidden sm:flex items-center justify-center border-r border-white/5 bg-rose-400/5">
               <Users className="text-rose-300" size={27} />
             </div>
             <div className="p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Хамгийн их ажиллах HR</p>
               <p className="mt-1 text-2xl font-black text-rose-300">{totals.maxHr.toLocaleString()}</p>
             </div>
-            <div className="border-l border-white/5 p-4">
+            <div className="border-t sm:border-t-0 sm:border-l border-white/5 p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Хамгийн бага ажиллах HR</p>
               <p className="mt-1 text-2xl font-black text-rose-300">{totals.minHr.toLocaleString()}</p>
             </div>
-            <div className="border-l border-white/5 p-4">
+            <div className="border-t sm:border-t-0 sm:border-l border-white/5 p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Сарын дундаж HR</p>
               <p className="mt-1 text-2xl font-black text-rose-300">{totals.averageHr.toLocaleString()}</p>
             </div>

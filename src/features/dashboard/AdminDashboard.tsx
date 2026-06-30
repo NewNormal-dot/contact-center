@@ -5270,7 +5270,7 @@ export default function AdminDashboard() {
   }) => (
     <button
       onClick={() => setActiveTab(id)}
-      className={`w-full flex items-center gap-3 px-4 py-4 rounded-2xl transition-all relative group ${activeTab === id ? "bg-blue-600/10 text-blue-400 border border-blue-500/20 shadow-xl shadow-blue-500/5" : "text-gray-500 hover:text-gray-200 hover:bg-white/5 border border-transparent"}`}
+      className={`w-full flex items-center gap-3 px-3 sm:px-4 py-3 lg:py-4 rounded-2xl transition-all relative group ${activeTab === id ? "bg-blue-600/10 text-blue-400 border border-blue-500/20 shadow-xl shadow-blue-500/5" : "text-gray-500 hover:text-gray-200 hover:bg-white/5 border border-transparent"}`}
     >
       <div
         className={`p-2 rounded-xl transition-colors ${activeTab === id ? "bg-blue-600 text-white shadow-lg shadow-blue-500/40" : "bg-gray-800/50 group-hover:bg-gray-800"}`}
@@ -5292,14 +5292,14 @@ export default function AdminDashboard() {
   );
 
   return (
-    <div className="flex h-screen bg-[#0a0a0a] text-gray-100 font-sans overflow-hidden">
+    <div className="flex min-h-screen flex-col lg:flex-row bg-[#0a0a0a] text-gray-100 font-sans overflow-x-hidden">
       {/* Sidebar */}
       <aside
-        className={`bg-gray-900/40 backdrop-blur-xl border-r border-gray-800 transition-all duration-500 flex flex-col ${isSidebarCollapsed ? "w-24" : "w-80"} relative z-50`}
+        className={`bg-gray-900/40 backdrop-blur-xl border-b lg:border-b-0 lg:border-r border-gray-800 transition-all duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} w-full max-h-[46vh] lg:max-h-none relative z-50 shrink-0`}
       >
         <button
           onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          className="absolute -right-3 top-10 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform border border-white/20"
+          className="hidden lg:flex absolute -right-3 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform border border-white/20"
         >
           {isSidebarCollapsed ? (
             <ChevronRight size={14} />
@@ -5308,7 +5308,7 @@ export default function AdminDashboard() {
           )}
         </button>
         <div
-          className={`p-6 border-b border-gray-800 flex items-center gap-4 bg-black/20 ${isSidebarCollapsed ? "justify-center" : ""}`}
+          className={`p-4 sm:p-6 border-b border-gray-800 flex items-center gap-4 bg-black/20 ${isSidebarCollapsed ? "lg:justify-center" : ""}`}
         >
           <div
             className="relative group cursor-pointer"
@@ -5357,7 +5357,7 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        <nav className="flex-1 px-6 space-y-3 overflow-y-auto custom-scrollbar pt-8">
+        <nav className="flex-1 px-3 sm:px-6 space-y-2 lg:space-y-3 overflow-y-auto custom-scrollbar py-3 lg:pt-8">
           <SidebarItem id="users" icon={Users} label="Ажилтны удирдлага" />
           <SidebarItem
             id="schedule"
@@ -5401,8 +5401,8 @@ export default function AdminDashboard() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col relative overflow-hidden">
-        <header className="h-14 border-b border-gray-800/50 flex items-center justify-between gap-6 px-4 lg:px-6 bg-gray-900/20 backdrop-blur-2xl z-10 shrink-0">
+      <main className="flex-1 min-w-0 flex flex-col relative overflow-hidden">
+        <header className="min-h-14 border-b border-gray-800/50 flex flex-wrap items-center justify-between gap-3 px-3 sm:px-4 lg:px-6 py-3 bg-gray-900/20 backdrop-blur-2xl z-10 shrink-0">
           <div>
             <h1 className="text-[clamp(1.25rem,2vw,1.75rem)] font-black text-white tracking-tighter capitalize whitespace-nowrap leading-none">
               {activeTab === "users"
@@ -5423,7 +5423,7 @@ export default function AdminDashboard() {
             </h1>
           </div>
 
-          <div className="flex items-center gap-8 relative">
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-4 relative">
             {activeTab === "users" && (
               <div className="relative" ref={filterRef}>
                 <button
@@ -5583,7 +5583,7 @@ export default function AdminDashboard() {
           </div>
         </header>
 
-        <div className="flex-1 p-2 lg:p-3 overflow-y-auto custom-scrollbar relative">
+        <div className="flex-1 min-w-0 p-2 lg:p-3 overflow-y-auto custom-scrollbar relative">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}

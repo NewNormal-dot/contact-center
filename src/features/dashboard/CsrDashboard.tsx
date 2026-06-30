@@ -2254,7 +2254,7 @@ export default function CsrDashboard() {
   );
 
   return (
-    <div className="flex h-screen bg-[#0a0a0a] text-white overflow-hidden font-sans">
+    <div className="flex min-h-screen flex-col lg:flex-row bg-[#0a0a0a] text-white overflow-x-hidden font-sans">
       <Sidebar 
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
@@ -2266,13 +2266,13 @@ export default function CsrDashboard() {
         role="csr"
       />
       
-      <main className="flex-1 flex flex-col relative overflow-hidden">
-        <header className="h-16 sm:h-20 border-b border-gray-800 flex items-center justify-between px-4 sm:px-8 bg-gray-900/30 backdrop-blur-md z-40 relative">
+      <main className="flex-1 min-w-0 flex flex-col relative overflow-hidden">
+        <header className="min-h-16 sm:min-h-20 border-b border-gray-800 flex flex-wrap items-center justify-between gap-3 px-3 sm:px-8 py-3 bg-gray-900/30 backdrop-blur-md z-40 relative">
           <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
             {activeTab === 'schedule' ? 'Ажлын хуваарь' : SHOW_VACATION_FEATURE && activeTab === 'vacation' ? 'Ээлжийн амралт' : activeTab === 'hourlyLeave' ? 'Чөлөө' : activeTab === 'training' ? 'Сургалт' : 'Мэдэгдэл'}
           </h1>
           
-          <div className="flex items-center gap-6">
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-4">
             {activeTab === 'schedule' && (
               <div className="relative">
                 <button 
