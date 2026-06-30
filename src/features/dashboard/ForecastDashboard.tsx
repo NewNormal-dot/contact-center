@@ -77,6 +77,33 @@ const currentDayKey = () => formatDayKey(today());
 
 
 const FORECAST_LOCAL_STORAGE_KEY = 'contact_center_forecast_rows_v2';
+const FORECAST_UI_STATE_KEY = 'contact_center_forecast_ui_state_v1';
+
+type ForecastUiState = {
+  selectedMonth?: string;
+  selectedSegment?: string;
+  selectedDay?: string;
+  fileName?: string;
+};
+
+const readForecastUiState = (): ForecastUiState => {
+  try {
+    const raw = window.localStorage.getItem(FORECAST_UI_STATE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeForecastUiState = (state: ForecastUiState) => {
+  try {
+    window.localStorage.setItem(FORECAST_UI_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore localStorage failures. Filter state can safely fall back to defaults.
+  }
+};
 
 const rowToPayload = (row: ForecastRow) => ({
   date: row.date.toISOString(),
@@ -398,10 +425,11 @@ function ForecastComboChart({
 
 export default function ForecastDashboard() {
   const [rows, setRows] = useState<ForecastRow[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState<string>('');
-  const [selectedSegment, setSelectedSegment] = useState<string>('All');
-  const [selectedDay, setSelectedDay] = useState<string>('');
-  const [fileName, setFileName] = useState<string>('');
+  const initialUiState = useMemo(() => readForecastUiState(), []);
+  const [selectedMonth, setSelectedMonth] = useState<string>(initialUiState.selectedMonth || '');
+  const [selectedSegment, setSelectedSegment] = useState<string>(initialUiState.selectedSegment || 'All');
+  const [selectedDay, setSelectedDay] = useState<string>(initialUiState.selectedDay || '');
+  const [fileName, setFileName] = useState<string>(initialUiState.fileName || '');
   const [storageStatus, setStorageStatus] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -451,13 +479,38 @@ export default function ForecastDashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    writeForecastUiState({ selectedMonth, selectedSegment, selectedDay, fileName });
+  }, [selectedMonth, selectedSegment, selectedDay, fileName]);
+
   const segments = useMemo(() => {
     const unique = Array.from(new Set(rows.map(row => row.segment).filter(Boolean))).sort();
     return ['All', ...unique];
   }, [rows]);
 
   const months = useMemo(() => Array.from(new Set(rows.map(row => formatMonthKey(row.date)))).sort(), [rows]);
-  const activeMonth = selectedMonth || currentMonthKey();
+  const activeMonth = useMemo(() => {
+    if (selectedMonth && (!months.length || months.includes(selectedMonth))) return selectedMonth;
+
+    const thisMonth = currentMonthKey();
+    if (months.includes(thisMonth)) return thisMonth;
+
+    // When the user comes back to Forecast after uploading a different month, keep the page on existing data
+    // instead of falling back to the current month and showing an empty chart.
+    return months[months.length - 1] || thisMonth;
+  }, [months, selectedMonth]);
+
+  useEffect(() => {
+    if (months.length && (!selectedMonth || !months.includes(selectedMonth))) {
+      setSelectedMonth(activeMonth);
+    }
+  }, [activeMonth, months, selectedMonth]);
+
+  useEffect(() => {
+    if (selectedSegment !== 'All' && !segments.includes(selectedSegment)) {
+      setSelectedSegment('All');
+    }
+  }, [segments, selectedSegment]);
 
   const filteredRows = useMemo(() => rows.filter(row => {
     const monthOk = formatMonthKey(row.date) === activeMonth;
