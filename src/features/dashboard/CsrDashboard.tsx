@@ -2266,7 +2266,7 @@ export default function CsrDashboard() {
         role="csr"
       />
       
-      <main className="flex-1 min-w-0 flex flex-col relative overflow-hidden">
+      <main className="flex-1 min-w-0 flex flex-col relative overflow-x-hidden overflow-y-auto">
         <header className="min-h-16 sm:min-h-20 border-b border-gray-800 flex flex-wrap items-center justify-between gap-3 px-3 sm:px-8 py-3 bg-gray-900/30 backdrop-blur-md z-40 relative">
           <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
             {activeTab === 'schedule' ? 'Ажлын хуваарь' : SHOW_VACATION_FEATURE && activeTab === 'vacation' ? 'Ээлжийн амралт' : activeTab === 'hourlyLeave' ? 'Чөлөө' : activeTab === 'training' ? 'Сургалт' : 'Мэдэгдэл'}

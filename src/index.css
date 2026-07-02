@@ -215,9 +215,11 @@ input[type="password"]::-ms-clear {
     max-width: 100%;
     overflow-x: hidden;
   }
+  html, body {
+    overflow-y: auto;
+  }
   body {
     min-width: 320px;
-    overscroll-behavior-y: none;
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }

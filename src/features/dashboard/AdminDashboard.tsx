@@ -5401,7 +5401,7 @@ export default function AdminDashboard() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 min-w-0 flex flex-col relative overflow-hidden">
+      <main className="flex-1 min-w-0 flex flex-col relative overflow-x-hidden overflow-y-auto">
         <header className="min-h-14 border-b border-gray-800/50 flex flex-wrap items-center justify-between gap-3 px-3 sm:px-4 lg:px-6 py-3 bg-gray-900/20 backdrop-blur-2xl z-10 shrink-0">
           <div>
             <h1 className="text-[clamp(1.25rem,2vw,1.75rem)] font-black text-white tracking-tighter capitalize whitespace-nowrap leading-none">
