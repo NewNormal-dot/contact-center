@@ -238,7 +238,23 @@ export default function SuperAdminDashboard() {
       setTrainingMaterials(getLocalData('trainingMaterials', []));
     }, 2000);
 
-    return () => clearInterval(interval);
+    const handleStorageUpdate = (event: StorageEvent) => {
+      if (event.key === 'users') {
+        fetchUsers();
+      }
+      if (event.key === 'notifications') {
+        fetchNotifications();
+      }
+      if (event.key === 'trainingMaterials') {
+        setTrainingMaterials(getLocalData('trainingMaterials', []));
+      }
+    };
+
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, [profile]);
 
   useEffect(() => {

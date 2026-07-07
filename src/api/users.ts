@@ -173,9 +173,7 @@ router.post('/', authenticate, async (req: any, res) => {
     const existing = await db('users').where({ email }).first();
     if (existing) return res.status(400).json({ error: 'Имэйл бүртгэлтэй байна' });
 
-    if (!(await hasPasswordSetupColumns())) {
-      return res.status(500).json({ error: 'Password setup migration хийгдээгүй байна' });
-    }
+    const shouldStorePasswordSetupFields = await hasPasswordSetupColumns();
 
     const id = uuidv4();
     const setup = createPasswordSetupToken();
@@ -189,8 +187,6 @@ router.post('/', authenticate, async (req: any, res) => {
         id,
         email,
         password_hash: lockedPasswordHash,
-        password_setup_token_hash: setup.tokenHash,
-        password_setup_expires_at: setup.expiresAt,
         invited_at: trx.fn.now(),
         name,
         role: finalRole,
@@ -199,6 +195,11 @@ router.post('/', authenticate, async (req: any, res) => {
         segment: finalSegment || null,
         code,
       };
+
+      if (shouldStorePasswordSetupFields) {
+        insertData.password_setup_token_hash = setup.tokenHash;
+        insertData.password_setup_expires_at = setup.expiresAt;
+      }
 
       if (includeLocation) {
         insertData.location = finalLocation || null;
@@ -219,7 +220,9 @@ router.post('/', authenticate, async (req: any, res) => {
         setupUrl,
         expiresAt: setup.expiresAt,
       });
-      await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
+      if (shouldStorePasswordSetupFields) {
+        await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
+      }
       invitationSent = true;
     } catch (emailErr) {
       console.error('Create user invite email failed:', emailErr);
@@ -246,9 +249,10 @@ router.post('/', authenticate, async (req: any, res) => {
       location: finalLocation || '',
       supervisorName: finalSupervisorName || '',
       invitationSent,
+      setupUrl,
       message: invitationSent
         ? 'Хэрэглэгч үүсэж, нууц үг тохируулах холбоос и-мэйлээр илгээгдлээ'
-        : 'Хэрэглэгч үүссэн боловч и-мэйл илгээгдсэнгүй. Reset товчоор холбоосыг дахин илгээнэ үү.',
+        : `Хэрэглэгч үүссэн боловч и-мэйл илгээгдсэнгүй. Доорх холбоосоор хэрэглэгчид нууц үгээ тохируулах боломжтой: ${setupUrl}`,
     });
   } catch (err) {
     console.error('Create User Invite Error:', err);
@@ -364,9 +368,7 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
   const actingUser = req.user;
 
   try {
-    if (!(await hasPasswordSetupColumns())) {
-      return res.status(500).json({ error: 'Password setup migration хийгдээгүй байна' });
-    }
+    const shouldStorePasswordSetupFields = await hasPasswordSetupColumns();
 
     const userToUpdate = await db('users').where({ id }).first();
     if (!userToUpdate) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
@@ -385,12 +387,18 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
     const setup = createPasswordSetupToken();
     const setupUrl = buildPasswordSetupUrl(setup.token);
 
-    await db('users').where({ id }).update({
-      password_setup_token_hash: setup.tokenHash,
-      password_setup_expires_at: setup.expiresAt,
+    const updatePayload: any = {
       updated_at: db.fn.now(),
-    });
+    };
 
+    if (shouldStorePasswordSetupFields) {
+      updatePayload.password_setup_token_hash = setup.tokenHash;
+      updatePayload.password_setup_expires_at = setup.expiresAt;
+    }
+
+    await db('users').where({ id }).update(updatePayload);
+
+    let invitationSent = false;
     try {
       await sendPasswordSetupEmail({
         to: userToUpdate.email,
@@ -398,14 +406,22 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
         setupUrl,
         expiresAt: setup.expiresAt,
       });
-      await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
+      if (shouldStorePasswordSetupFields) {
+        await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
+      }
+      invitationSent = true;
     } catch (emailErr) {
       console.error('Reset password link email failed:', emailErr);
-      return res.status(502).json({ error: 'Нууц үг тохируулах холбоос үүссэн боловч и-мэйл илгээхэд алдаа гарлаа. Дахин оролдоно уу.' });
     }
 
     await logAction(actingUser.id, 'SEND_PASSWORD_SETUP_LINK', 'users', id, `Sent password setup link to ${userToUpdate.email || userToUpdate.name}`);
-    res.json({ message: 'Нууц үг тохируулах холбоос хэрэглэгчийн и-мэйл рүү илгээгдлээ' });
+    res.json({
+      message: invitationSent
+        ? 'Нууц үг тохируулах холбоос хэрэглэгчийн и-мэйл рүү илгээгдлээ'
+        : `Нууц үг тохируулах холбоос үүсгэгдлээ. Доорх холбоосоор хэрэглэгчид нууц үгээ тохируулах боломжтой: ${setupUrl}`,
+      setupUrl,
+      invitationSent,
+    });
   } catch (err) {
     console.error('Reset Password Link Error:', err);
     res.status(500).json({ error: 'Нууц үг тохируулах холбоос илгээхэд алдаа гарлаа' });

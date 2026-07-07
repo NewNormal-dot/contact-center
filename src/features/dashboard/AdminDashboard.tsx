@@ -1124,6 +1124,9 @@ export default function AdminDashboard() {
       if (event.key === "notifications") {
         fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
       }
+      if (event.key === "users") {
+        fetchCsrUsers().catch(() => undefined);
+      }
     };
 
     window.addEventListener("storage", handleStorageUpdate);

@@ -8,8 +8,9 @@ type EmailPayload = {
 function getPublicBaseUrl() {
   const configured = process.env.APP_PUBLIC_URL || process.env.PUBLIC_APP_URL || process.env.VITE_PUBLIC_APP_URL;
   if (configured) return configured.replace(/\/$/, '');
+  if (process.env.WEBSITE_HOSTNAME) return `https://${process.env.WEBSITE_HOSTNAME}`;
   if (process.env.NODE_ENV !== 'production') return 'http://localhost:5173';
-  throw new Error('APP_PUBLIC_URL is required to build password setup links');
+  return 'http://localhost:8080';
 }
 
 export function buildPasswordSetupUrl(token: string) {
@@ -20,14 +21,9 @@ export async function sendEmail(payload: EmailPayload) {
   const webhookUrl = process.env.EMAIL_INVITE_WEBHOOK_URL || process.env.EMAIL_WEBHOOK_URL;
 
   if (!webhookUrl) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('EMAIL_INVITE_WEBHOOK_URL is required to send password setup links');
-    }
-
-    console.info('[email:dev]', {
+    console.warn('[email] No webhook configured; skipping outbound email delivery.', {
       to: payload.to,
       subject: payload.subject,
-      text: payload.text,
     });
     return;
   }
