@@ -13,10 +13,10 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
 
       - name: Set up Node.js version
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
           node-version: '22.x'
           cache: 'npm'
@@ -56,7 +56,7 @@ jobs:
           unzip -l release.zip | grep "src/database/migrations/20260619000000_add_user_supervisor_name.ts"
 
       - name: Upload artifact for deployment job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v2
         with:
           name: node-app
           path: release.zip
@@ -70,12 +70,12 @@ jobs:
 
     steps:
       - name: Download artifact from build job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v2
         with:
           name: node-app
 
       - name: Login to Azure
-        uses: azure/login@v2
+        uses: azure/login@v1
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_75E7311A0A234F78920C8F58457BD0E1 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E818FF295088428588714610EB52173C }}
