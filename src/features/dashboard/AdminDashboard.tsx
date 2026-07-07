@@ -4262,11 +4262,12 @@ export default function AdminDashboard() {
 
               const checkedDateKeys = [...selectedBookingDates].filter(Boolean).sort();
               const selectedKeys = checkedDateKeys;
-              const isMultiSelect = checkedDateKeys.length > 0;
-              const hasSelectedDays = selectedKeys.length > 0;
-              const holidayTargetDates = selectedKeys;
-              const holidayTargetLabel = formatSelectedDateRange(selectedKeys);
-              const canEditSelection = selectedKeys.some((dateKey) => !isPastScheduleDate(dateKey));
+              const selectedDateKeys = selectedKeys.length > 0 ? selectedKeys : [selectedDateSchedule].filter(Boolean);
+              const isMultiSelect = selectedKeys.length > 0;
+              const hasSelectedDays = selectedDateKeys.length > 0;
+              const holidayTargetDates = selectedDateKeys;
+              const holidayTargetLabel = formatSelectedDateRange(selectedDateKeys);
+              const canEditSelection = selectedDateKeys.some((dateKey) => !isPastScheduleDate(dateKey));
               const getMatchingShiftsForDate = (dateKey: string) =>
                 (schedules[dateKey]?.shifts || []).filter(
                   (shift: any) =>
@@ -4363,7 +4364,7 @@ export default function AdminDashboard() {
               };
 
               const handleBulkShiftCreate = () => {
-                const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
+                const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
                 if (targetDateKeys.length === 0) {
                   alert("Shift оруулах ирээдүй эсвэл өнөөдрийн өдөр сонгоно уу.");
                   return;
@@ -4392,7 +4393,7 @@ export default function AdminDashboard() {
 
               const addShiftFromTemplateToSelection = (templateTime: string) => {
                 const normalizedTime = normalizeShiftTime(templateTime);
-                const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
+                const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
 
                 if (normalizedTime !== REST_SHIFT_LABEL && (!normalizedTime || !isValidShiftTime(normalizedTime))) {
                   alert("Shift загварын цаг буруу байна.");
@@ -4458,7 +4459,7 @@ export default function AdminDashboard() {
                 waveKind: "morning" | "evening",
                 value: number,
               ) => {
-                const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
+                const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
                 const cleanSlots = Math.max(0, Number(value) || 0);
                 const targetTime = getShiftTimeKey(targetShift.time);
                 const newSchedules = { ...schedules };
@@ -4499,7 +4500,9 @@ export default function AdminDashboard() {
                   };
                 });
 
-                void persistSchedules(newSchedules, targetDateKeys);
+                if (targetDateKeys.length > 0) {
+                  void persistSchedules(newSchedules, targetDateKeys);
+                }
               };
 
               const toggleWaveSelection = (shift: any, wave: BookingWaveDraft) => {
@@ -4512,7 +4515,7 @@ export default function AdminDashboard() {
               };
 
               const setBookingAccessForSelectedWaves = (isOpen: boolean) => {
-                const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
+                const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
                 if (targetDateKeys.length === 0) {
                   alert("Захиалга нээх ирээдүйн өдөр сонгоно уу.");
                   return;
