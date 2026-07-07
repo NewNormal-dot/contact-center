@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate TypeScript
+        run: npm run lint
+
       - name: Build app
         run: npm run build --if-present
 
@@ -36,6 +39,7 @@ jobs:
           mkdir -p release
           cp package.json package-lock.json server.ts knexfile.ts knexfile.mssql.cjs release/
           cp -r dist src node_modules release/
+          cp -r src/database/migrations release/src/database/migrations
           [ -f tsconfig.json ] && cp tsconfig.json release/
           cd release
           zip -rq ../release.zip .
@@ -44,8 +48,12 @@ jobs:
         run: |
           test -f release/node_modules/express/package.json
           test -f release/node_modules/tsx/dist/cli.mjs
+          test -f release/src/database/migrations/20260603000000_add_user_location.ts
+          test -f release/src/database/migrations/20260619000000_add_user_supervisor_name.ts
           unzip -l release.zip | grep "node_modules/express/package.json"
           unzip -l release.zip | grep "node_modules/tsx/dist/cli.mjs"
+          unzip -l release.zip | grep "src/database/migrations/20260603000000_add_user_location.ts"
+          unzip -l release.zip | grep "src/database/migrations/20260619000000_add_user_supervisor_name.ts"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4

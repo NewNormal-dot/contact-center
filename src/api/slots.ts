@@ -26,6 +26,31 @@ function normalizeTime(value: unknown) {
   return sql || '';
 }
 
+function parseShiftTimeRange(value: string) {
+  const trimmed = String(value || '').trim();
+  const match = trimmed.match(/^([0-1]?\d|2[0-3])(?::(\d{2}))?\s*[-–—]\s*([0-1]?\d|2[0-3])(?::(\d{2}))?$/);
+  if (!match) return null;
+
+  const startHour = Number(match[1]);
+  const startMinute = Number(match[2] || '0');
+  const endHour = Number(match[3]);
+  const endMinute = Number(match[4] || '0');
+
+  if (
+    startHour < 0 || startHour > 23 ||
+    endHour < 0 || endHour > 23 ||
+    startMinute < 0 || startMinute > 59 ||
+    endMinute < 0 || endMinute > 59
+  ) {
+    return null;
+  }
+
+  return {
+    startTime: `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`,
+    endTime: `${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`,
+  };
+}
+
 function calculateDuration(startTime: string, endTime: string, explicitDuration?: unknown) {
   if (Number.isFinite(Number(explicitDuration)) && Number(explicitDuration) > 0) return Number(explicitDuration);
   const start = new Date(`1970-01-01T${startTime}`);
@@ -370,14 +395,32 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
         const incomingSlots: any[] = [];
         for (const shift of day?.shifts || []) {
           const rest = shift.time === 'Амралт' || shift.isRest || shift.is_rest;
-          const timeMatch = String(shift.time || '').match(/(\d{1,2})(?::\d{2})?\s*-\s*(\d{1,2})(?::\d{2})?/);
-          const startTime = rest ? '00:00' : `${String(timeMatch?.[1] || '').padStart(2, '0')}:00`;
-          const endTime = rest ? '00:00' : `${String(timeMatch?.[2] || '').padStart(2, '0')}:00`;
-          if (!rest && (!timeMatch || !startTime || !endTime)) continue;
+          let startTime = '00:00';
+          let endTime = '00:00';
+          const rawShiftTime = String(shift.time || shift.startTime || shift.start_time || '').trim();
+
+          if (!rest) {
+            const parsed = parseShiftTimeRange(rawShiftTime);
+            if (parsed) {
+              startTime = parsed.startTime;
+              endTime = parsed.endTime;
+            } else if (String(shift.startTime || shift.start_time || '').trim() && String(shift.endTime || shift.end_time || '').trim()) {
+              startTime = String(shift.startTime || shift.start_time).trim();
+              endTime = String(shift.endTime || shift.end_time).trim();
+            } else {
+              console.warn('Skipping invalid work slot time during sync:', { dateKey, rawShiftTime, shift });
+              continue;
+            }
+          }
+
           const segment = normalizeSegment(shift.segment);
           const employmentType = normalizeEmploymentType(shift.employmentType || shift.employment_type);
           const sqlStart = rest ? '00:00:00' : normalizeTime(startTime);
           const sqlEnd = rest ? '00:00:00' : normalizeTime(endTime);
+          if (!rest && (!sqlStart || !sqlEnd)) {
+            console.warn('Skipping work slot with invalid normalized time during sync:', { dateKey, startTime, endTime, shift });
+            continue;
+          }
           const bookingWindow = resolveBookingWindow(day, shift);
           incomingSlots.push({
             id: shift.id || uuidv4(),

@@ -22,11 +22,32 @@ const __dirname = dirname(__filename);
 let migrationStatus: "skipped" | "running" | "complete" | "failed" = "skipped";
 let migrationError: string | null = null;
 
-async function runProductionMigrationsSafely() {
-  if (process.env.NODE_ENV !== "production" || process.env.SKIP_DB_MIGRATIONS === "true") {
-    migrationStatus = "skipped";
-    return;
+function validateProductionDbEnv() {
+  const required = [
+    'DB_SERVER',
+    'DB_NAME',
+    'DB_USER',
+    'DB_PASSWORD',
+  ];
+  const missing = required.filter((name) => !process.env[name]);
+  if (missing.length > 0) {
+    throw new Error(`Missing required production DB env vars: ${missing.join(', ')}`);
   }
+}
+
+async function runProductionMigrationsSafely() {
+  if (process.env.NODE_ENV !== "production") {
+    migrationStatus = "skipped";
+    return true;
+  }
+
+  if (process.env.SKIP_DB_MIGRATIONS === "true") {
+    migrationStatus = "skipped";
+    console.log('Skipping production DB migrations because SKIP_DB_MIGRATIONS=true');
+    return true;
+  }
+
+  validateProductionDbEnv();
 
   migrationStatus = "running";
   migrationError = null;
@@ -38,10 +59,12 @@ async function runProductionMigrationsSafely() {
     } else {
       console.log("Database migrations already up to date");
     }
+    return true;
   } catch (err: any) {
     migrationStatus = "failed";
     migrationError = err?.message || String(err);
-    console.error("Database migrations failed; server will continue running:", err);
+    console.error("Database migrations failed:", err);
+    return false;
   }
 }
 
@@ -113,11 +136,21 @@ async function startServer() {
     });
   }) as express.ErrorRequestHandler);
 
+  if (process.env.NODE_ENV === "production") {
+    const migrated = await runProductionMigrationsSafely();
+    if (!migrated) {
+      console.error('Production startup aborted because DB migrations failed.');
+      process.exit(1);
+    }
+  }
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    void runProductionMigrationsSafely();
   });
 }
 
-startServer().catch(console.error);
+startServer().catch((error) => {
+  console.error('Server failed to start:', error);
+  process.exit(1);
+});
