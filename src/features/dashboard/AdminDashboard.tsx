@@ -4363,9 +4363,9 @@ export default function AdminDashboard() {
               };
 
               const handleBulkShiftCreate = () => {
-                const futureDates = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
-                if (futureDates.length === 0) {
-                  alert("Ээлж оруулах ирээдүйн өдөр сонгоно уу.");
+                const targetDateKeys = selectedKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
+                if (targetDateKeys.length === 0) {
+                  alert("Shift оруулах ирээдүй эсвэл өнөөдрийн өдөр сонгоно уу.");
                   return;
                 }
                 const normalizedBulkShiftTime = normalizeShiftTime(bulkQuickShiftTime) || "09-18";
@@ -4374,9 +4374,9 @@ export default function AdminDashboard() {
                   alert("Slot тоо 1 ба түүнээс дээш байх ёстой.");
                   return;
                 }
-                setBulkShiftDateKeys(futureDates);
+                setBulkShiftDateKeys(targetDateKeys);
                 setEditingShiftData({
-                  dateKey: futureDates[0],
+                  dateKey: targetDateKeys[0],
                   time: normalizedBulkShiftTime,
                   segment: activeSegmentView,
                   employmentType: activeEmploymentView,
@@ -4400,7 +4400,7 @@ export default function AdminDashboard() {
                 }
 
                 if (targetDateKeys.length === 0) {
-                  alert("Shift оруулах ирээдүйн өдөр сонгоно уу.");
+                  alert("Shift оруулах ирээдүй эсвэл өнөөдрийн өдөр сонгоно уу.");
                   return;
                 }
 
