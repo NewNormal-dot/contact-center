@@ -237,4 +237,23 @@ router.post('/register-initial', async (req, res) => {
   }
 });
 
+// Confirm current authenticated user's password (used for sensitive actions)
+router.post('/confirm-password', authenticate, async (req: any, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'Password is required' });
+
+  try {
+    const user = await db('users').where({ id: req.user.id }).first();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const isMatch = await bcrypt.compare(String(password), user.password_hash);
+    if (!isMatch) return res.status(401).json({ error: 'Invalid password' });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Confirm password error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
 export default router;

@@ -1299,7 +1299,8 @@ export default function AdminDashboard() {
       title,
       description,
       onConfirm,
-      username: "admin",
+      // Prefill with the current profile email so admin sees their own account
+      username: profile?.email || profile?.name || "admin",
       password: "",
     });
   };
@@ -5803,12 +5804,7 @@ export default function AdminDashboard() {
                       <input
                         type="text"
                         value={secureConfirmAction.username || ""}
-                        onChange={(e) =>
-                          setSecureConfirmAction((prev) => ({
-                            ...prev!,
-                            username: e.target.value,
-                          }))
-                        }
+                        readOnly
                         className="w-full bg-gray-800 border border-gray-700 rounded-2xl py-4 px-5 text-white focus:outline-none focus:border-red-500/50 transition-all shadow-inner placeholder:text-gray-600"
                         placeholder="admin"
                       />
@@ -5827,22 +5823,16 @@ export default function AdminDashboard() {
                             password: e.target.value,
                           }))
                         }
-                        onKeyDown={(e) => {
+                        onKeyDown={async (e) => {
                           if (e.key === "Enter") {
-                            const isValid =
-                              (secureConfirmAction.username?.toLowerCase() ===
-                                "admin" ||
-                                secureConfirmAction.username?.toLowerCase() ===
-                                  "admin@mobicom.mn") &&
-                              secureConfirmAction.password &&
-                              secureConfirmAction.password.length > 0;
-                            if (isValid) {
+                            try {
+                              await apiClient.post('/auth/confirm-password', { password: secureConfirmAction.password });
                               secureConfirmAction.onConfirm();
                               setSecureConfirmAction(null);
-                            } else {
+                            } catch (err: any) {
                               setSecureConfirmAction((prev) => ({
                                 ...prev!,
-                                error: "Нэвтрэх нэр эсвэл нууц үг буруу байна.",
+                                error: err.response?.data?.error || 'Нэвтрэх нэр эсвэл нууц үг буруу байна.',
                               }));
                             }
                           }
@@ -5861,21 +5851,15 @@ export default function AdminDashboard() {
                       Болих
                     </button>
                     <button
-                      onClick={() => {
-                        const isValid =
-                          (secureConfirmAction.username?.toLowerCase() ===
-                            "admin" ||
-                            secureConfirmAction.username?.toLowerCase() ===
-                              "admin@mobicom.mn") &&
-                          secureConfirmAction.password &&
-                          secureConfirmAction.password.length > 0;
-                        if (isValid) {
+                      onClick={async () => {
+                        try {
+                          await apiClient.post('/auth/confirm-password', { password: secureConfirmAction.password });
                           secureConfirmAction.onConfirm();
                           setSecureConfirmAction(null);
-                        } else {
+                        } catch (err: any) {
                           setSecureConfirmAction((prev) => ({
                             ...prev!,
-                            error: "Нэвтрэх нэр эсвэл нууц үг буруу байна.",
+                            error: err.response?.data?.error || 'Нэвтрэх нэр эсвэл нууц үг буруу байна.',
                           }));
                         }
                       }}
