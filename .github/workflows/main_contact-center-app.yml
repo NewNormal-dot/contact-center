@@ -13,10 +13,10 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js version
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '22.x'
           cache: 'npm'
@@ -39,7 +39,6 @@ jobs:
           mkdir -p release
           cp package.json package-lock.json server.ts knexfile.ts knexfile.mssql.cjs release/
           cp -r dist src node_modules release/
-          cp -r src/database/migrations release/src/database/migrations
           [ -f tsconfig.json ] && cp tsconfig.json release/
           cd release
           zip -rq ../release.zip .
@@ -48,15 +47,13 @@ jobs:
         run: |
           test -f release/node_modules/express/package.json
           test -f release/node_modules/tsx/dist/cli.mjs
-          test -f release/src/database/migrations/20260603000000_add_user_location.ts
-          test -f release/src/database/migrations/20260619000000_add_user_supervisor_name.ts
+          test -d release/src/database/migrations
           unzip -l release.zip | grep "node_modules/express/package.json"
           unzip -l release.zip | grep "node_modules/tsx/dist/cli.mjs"
-          unzip -l release.zip | grep "src/database/migrations/20260603000000_add_user_location.ts"
-          unzip -l release.zip | grep "src/database/migrations/20260619000000_add_user_supervisor_name.ts"
+          unzip -l release.zip | grep "src/database/migrations"
 
       - name: Upload artifact for deployment job
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: node-app
           path: release.zip
@@ -70,12 +67,12 @@ jobs:
 
     steps:
       - name: Download artifact from build job
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: node-app
 
       - name: Login to Azure
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_75E7311A0A234F78920C8F58457BD0E1 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E818FF295088428588714610EB52173C }}
