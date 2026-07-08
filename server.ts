@@ -139,8 +139,7 @@ async function startServer() {
   if (process.env.NODE_ENV === "production") {
     const migrated = await runProductionMigrationsSafely();
     if (!migrated) {
-      console.error('Production startup aborted because DB migrations failed.');
-      process.exit(1);
+      console.error('Production startup warning: DB migrations failed, but server is continuing to start. Some features may be unavailable.');
     }
   }
 

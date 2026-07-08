@@ -471,10 +471,13 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
     });
     res.json({ synced, deleted });
   } catch (err) {
-    console.error('Sync schedules error:', err);
-    res.status(500).json({ error: 'Хуваарь DB-д хадгалахад алдаа гарлаа' });
+    console.error('Sync schedules error detail:', err);
+    res.status(500).json({ 
+      error: 'Хуваарь DB-д хадгалахад алдаа гарлаа.',
+      details: process.env.NODE_ENV === 'production' ? undefined : err?.message 
+    });
   }
-});
+  });
 
 router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
   try {

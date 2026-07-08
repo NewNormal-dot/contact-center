@@ -179,8 +179,6 @@ router.post('/', authenticate, async (req: any, res) => {
     const setup = createPasswordSetupToken();
     const setupUrl = buildPasswordSetupUrl(setup.token);
     const lockedPasswordHash = await bcrypt.hash(createLockedPasswordValue(), 10);
-    const includeLocation = await hasUserLocationColumn();
-    const includeSupervisorName = await hasUserSupervisorNameColumn();
 
     await db.transaction(async (trx) => {
       const insertData: any = {
@@ -194,19 +192,13 @@ router.post('/', authenticate, async (req: any, res) => {
         employment_type: finalEmploymentType,
         segment: finalSegment || null,
         code,
+        location: finalLocation || null,
+        supervisor_name: finalSupervisorName || null,
       };
 
       if (shouldStorePasswordSetupFields) {
         insertData.password_setup_token_hash = setup.tokenHash;
         insertData.password_setup_expires_at = setup.expiresAt;
-      }
-
-      if (includeLocation) {
-        insertData.location = finalLocation || null;
-      }
-
-      if (includeSupervisorName) {
-        insertData.supervisor_name = finalSupervisorName || null;
       }
 
       await trx('users').insert(insertData);
@@ -299,16 +291,14 @@ router.put('/:id', authenticate, async (req: any, res) => {
     }
 
     const updates: any = {};
-    const includeLocation = await hasUserLocationColumn();
-    const includeSupervisorName = await hasUserSupervisorNameColumn();
     const finalLocation = location === undefined ? undefined : normalizeLocation(location);
-    if (includeLocation && location !== undefined && effectiveRole === 'csr' && !finalLocation) {
+    if (location !== undefined && effectiveRole === 'csr' && !finalLocation) {
       return res.status(400).json({ error: 'Location заавал Ulaanbaatar эсвэл Darkhan байна' });
     }
 
     const requestedSupervisorName = supervisorName ?? supervisor_name;
     const finalSupervisorName = requestedSupervisorName === undefined ? undefined : String(requestedSupervisorName || '').trim();
-    if (includeSupervisorName && requestedSupervisorName !== undefined && effectiveRole === 'csr' && !finalSupervisorName) {
+    if (requestedSupervisorName !== undefined && effectiveRole === 'csr' && !finalSupervisorName) {
       return res.status(400).json({ error: 'Ахлах ажилтны нэр шаардлагатай' });
     }
 
@@ -331,11 +321,11 @@ router.put('/:id', authenticate, async (req: any, res) => {
       updates.code = code || null;
     }
 
-    if (includeLocation && location !== undefined) {
+    if (location !== undefined) {
       updates.location = finalLocation || null;
     }
 
-    if (includeSupervisorName && requestedSupervisorName !== undefined) {
+    if (requestedSupervisorName !== undefined) {
       updates.supervisor_name = finalSupervisorName || null;
     }
 
