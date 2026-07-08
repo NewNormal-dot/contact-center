@@ -459,6 +459,10 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
         const staleRows = existingRows.filter((row: any) => !keptIds.has(String(row.id)));
         if (staleRows.length > 0) {
           const staleIds = staleRows.map((row: any) => row.id);
+          await trx('trade_requests')
+            .whereIn('sender_slot_id', staleIds)
+            .orWhereIn('receiver_slot_id', staleIds)
+            .delete();
           await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
           await trx('work_slots').whereIn('id', staleIds).delete();
           deleted += staleRows.length;
@@ -474,6 +478,10 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
 
 router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
   try {
+    await db('trade_requests')
+      .where({ sender_slot_id: req.params.id })
+      .orWhere({ receiver_slot_id: req.params.id })
+      .delete();
     await db('slot_bookings').where({ slot_id: req.params.id }).delete();
     await db('work_slots').where({ id: req.params.id }).delete();
     res.json({ message: 'Слот устгагдлаа' });
