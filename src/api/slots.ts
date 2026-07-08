@@ -353,7 +353,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
 
     const duration = rest ? 0 : calculateDuration(sqlStartTime, sqlEndTime, req.body.duration);
     if (duplicateSlot) {
-      await db('work_slots').where({ id: duplicateSlot.id }).update({ capacity: finalCapacity, booking_open_at: sqlOpenAt, booking_is_open: finalBookingOpen ? 1 : 0, booking_deadline: finalBookingOpen ? sqlDeadline : new Date(0), updated_at: db.fn.now() });
+      await db('work_slots').where({ id: duplicateSlot.id }).update({ capacity: finalCapacity, booking_open_at: sqlOpenAt, booking_is_open: finalBookingOpen ? 1 : 0, booking_deadline: finalBookingOpen ? sqlDeadline : null, updated_at: db.fn.now() });
       return res.json({ id: duplicateSlot.id });
     }
 
@@ -367,7 +367,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
       capacity: finalCapacity,
       booking_open_at: sqlOpenAt,
       booking_is_open: finalBookingOpen ? 1 : 0,
-      booking_deadline: finalBookingOpen ? sqlDeadline : new Date(0),
+      booking_deadline: finalBookingOpen ? sqlDeadline : null,
       segment: finalSegment,
       employment_type: finalEmploymentType,
       is_rest: rest ? 1 : 0,
