@@ -86,7 +86,7 @@ function resolveBookingWindow(day: any, shift: any) {
     bookingOpenAt: bookingOpen ? toSqlDateTime(openAt) : null,
     bookingDeadline: bookingOpen
       ? toSqlDateTime(closeAt, new Date(Date.now() + 24 * 60 * 60 * 1000))
-      : new Date(0),
+      : null,
   };
 }
 
@@ -445,40 +445,58 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
         const keptIds = new Set<string>();
 
         for (const payload of incomingSlots) {
-          const existing = existingById.get(String(payload.id)) || existingByIdentity.get(slotIdentity(payload));
-          if (existing) {
-            const { id: _, ...updateData } = payload;
-            await trx('work_slots').where({ id: existing.id }).update(updateData);
-            keptIds.add(String(existing.id));
-          } else {
-            await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
-            keptIds.add(String(payload.id));
+          try {
+            const existing = existingById.get(String(payload.id)) || existingByIdentity.get(slotIdentity(payload));
+            if (existing) {
+              const { id: _, ...updateData } = payload;
+              await trx('work_slots').where({ id: existing.id }).update(updateData);
+              keptIds.add(String(existing.id));
+            } else {
+              await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
+              keptIds.add(String(payload.id));
+            }
+            synced += 1;
+          } catch (slotErr: any) {
+            console.error('Slot operation failed:', {
+              date: dateKey,
+              payload,
+              error: slotErr.message
+            });
+            throw slotErr; // Rethrow to abort transaction
           }
-          synced += 1;
         }
 
         const staleRows = existingRows.filter((row: any) => !keptIds.has(String(row.id)));
         if (staleRows.length > 0) {
           const staleIds = staleRows.map((row: any) => row.id);
-          await trx('trade_requests')
-            .whereIn('sender_slot_id', staleIds)
-            .orWhereIn('receiver_slot_id', staleIds)
-            .delete();
-          await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
-          await trx('work_slots').whereIn('id', staleIds).delete();
-          deleted += staleRows.length;
+          try {
+            await trx('trade_requests')
+              .whereIn('sender_slot_id', staleIds)
+              .orWhereIn('receiver_slot_id', staleIds)
+              .delete();
+            await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
+            await trx('work_slots').whereIn('id', staleIds).delete();
+            deleted += staleRows.length;
+          } catch (staleErr: any) {
+            console.error('Stale rows deletion failed:', {
+              date: dateKey,
+              staleIds,
+              error: staleErr.message
+            });
+            throw staleErr;
+          }
         }
       }
     });
     res.json({ synced, deleted });
-  } catch (err) {
-    console.error('Sync schedules error detail:', err);
+  } catch (err: any) {
+    console.error('Sync schedules FATAL error:', err);
     res.status(500).json({ 
       error: 'Хуваарь DB-д хадгалахад алдаа гарлаа.',
       details: process.env.NODE_ENV === 'production' ? undefined : err?.message 
     });
   }
-  });
+});
 
 router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
   try {
