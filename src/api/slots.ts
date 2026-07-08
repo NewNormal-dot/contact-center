@@ -447,7 +447,8 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
         for (const payload of incomingSlots) {
           const existing = existingById.get(String(payload.id)) || existingByIdentity.get(slotIdentity(payload));
           if (existing) {
-            await trx('work_slots').where({ id: existing.id }).update(payload);
+            const { id: _, ...updateData } = payload;
+            await trx('work_slots').where({ id: existing.id }).update(updateData);
             keptIds.add(String(existing.id));
           } else {
             await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
