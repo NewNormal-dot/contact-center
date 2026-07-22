@@ -573,6 +573,14 @@ const bookHandler = async (req: any, res: any) => {
     if (ruleError) return res.status(400).json({ error: ruleError });
 
     const bookingResult = await db.transaction(async trx => {
+      // Lock the target slot row for the duration of this transaction so that
+      // concurrent booking attempts on the SAME slot are serialized instead of
+      // racing each other on the capacity check below (prevents overbooking).
+      const lockedSlot = await trx('work_slots').where({ id: slot_id }).forUpdate().first();
+      if (!lockedSlot) {
+        return { status: 404, error: 'Слот олдсонгүй' };
+      }
+
       const currentBooking = await trx('slot_bookings')
         .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
         .where({ 'slot_bookings.user_id': userId, 'work_slots.date': slot.date, 'slot_bookings.status': 'confirmed' })
@@ -584,7 +592,7 @@ const bookHandler = async (req: any, res: any) => {
       }
 
       const [{ count }] = await trx('slot_bookings').where({ slot_id, status: 'confirmed' }).count('id as count');
-      if (Number(count) >= Number(slot.capacity) && (!currentBooking || currentBooking.slot_id !== slot_id)) {
+      if (Number(count) >= Number(lockedSlot.capacity) && (!currentBooking || currentBooking.slot_id !== slot_id)) {
         return { status: 400, error: 'Орон тоо дүүрсэн байна' };
       }
 
