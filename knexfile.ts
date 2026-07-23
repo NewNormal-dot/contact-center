@@ -52,7 +52,15 @@ const config: { [key: string]: Knex.Config } = {
       directory: seedDir,
     },
     pool: {
-      min: 0,
+      // min: 1 keeps at least one connection to Azure SQL alive at all
+      // times, established when the server starts (not on the first
+      // incoming request). Previously min: 0 meant the very first request
+      // after a deploy/restart had to pay the full cost of a fresh TCP+TLS
+      // handshake to Azure SQL, which could be slow enough to fail/timeout
+      // while later requests (reusing the now-open connection) succeeded
+      // instantly - matching the "fails once, then works after refresh"
+      // symptom.
+      min: 1,
       max: 10,
     },
   },

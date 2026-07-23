@@ -14,6 +14,7 @@ import auditRoutes from "./src/api/audit";
 import tradeRoutes from "./src/api/trades";
 import forecastRoutes from "./src/api/forecast";
 import ruleRoutes from "./src/api/rules";
+import adminRoutes from "./src/api/admin";
 import db from "./src/database/db";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,6 +69,30 @@ async function runProductionMigrationsSafely() {
   }
 }
 
+async function warmUpDatabaseConnection() {
+  // Actively establish and verify a DB connection BEFORE we start accepting
+  // traffic, instead of letting the first real user request pay for it.
+  // This directly targets the "first login after deploy fails, then a
+  // refresh works fine" symptom: without this, the pool's first connection
+  // to Azure SQL (TCP + TLS handshake + auth) happens lazily on the first
+  // incoming query, which can be slow enough to time out under load.
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await db.raw('SELECT 1');
+      console.log('Database connection warmed up successfully.');
+      return;
+    } catch (err: any) {
+      console.error(`DB warm-up attempt ${attempt}/${maxAttempts} failed:`, err?.message || err);
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      } else {
+        console.error('DB warm-up did not succeed after all attempts; continuing startup anyway. The first real request may be slow.');
+      }
+    }
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 8080;
@@ -90,6 +115,7 @@ async function startServer() {
   app.use("/api/trades", tradeRoutes);
   app.use("/api/forecast", forecastRoutes);
   app.use("/api/rules", ruleRoutes);
+  app.use("/api/admin", adminRoutes);
 
   // API Health Check
   app.get("/api/health", (req, res) => {
@@ -142,6 +168,8 @@ async function startServer() {
       console.error('Production startup warning: DB migrations failed, but server is continuing to start. Some features may be unavailable.');
     }
   }
+
+  await warmUpDatabaseConnection();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
