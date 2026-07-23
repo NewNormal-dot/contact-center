@@ -15,6 +15,7 @@ import tradeRoutes from "./src/api/trades";
 import forecastRoutes from "./src/api/forecast";
 import ruleRoutes from "./src/api/rules";
 import adminRoutes from "./src/api/admin";
+import settingsRoutes from "./src/api/settings";
 import db from "./src/database/db";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -116,6 +117,7 @@ async function startServer() {
   app.use("/api/forecast", forecastRoutes);
   app.use("/api/rules", ruleRoutes);
   app.use("/api/admin", adminRoutes);
+  app.use("/api/settings", settingsRoutes);
 
   // API Health Check
   app.get("/api/health", (req, res) => {

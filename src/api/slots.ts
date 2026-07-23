@@ -88,9 +88,6 @@ function boolValue(value: unknown) {
 function resolveBookingWindow(day: any, shift: any) {
   const waves = Array.isArray(shift?.bookingWaves) ? shift.bookingWaves : [];
   const openWaves = waves.filter((wave: any) => boolValue(wave.bookingOpen));
-  const bookingOpen = day?.bookingOpen === undefined
-    ? openWaves.length > 0
-    : boolValue(day.bookingOpen) || openWaves.length > 0;
   const openAt = openWaves.find((wave: any) => wave.bookingOpenAt)?.bookingOpenAt
     || shift.bookingOpenAt
     || day?.bookingOpenAt
@@ -101,6 +98,19 @@ function resolveBookingWindow(day: any, shift: any) {
     || day?.bookingDeadline
     || shift.bookingDeadline
     || null;
+
+  // A booking window counts as "configured" (and gets persisted with
+  // booking_is_open = 1) whenever the admin explicitly opened it immediately
+  // OR scheduled a future open time. Previously, setting only a future
+  // bookingOpenAt (without also flipping the immediate "open" toggle) caused
+  // the scheduled time to be silently discarded (stored as null) - so slots
+  // scheduled to open later never actually opened for CSRs, since
+  // booking_is_open stayed false forever. The real-time gate (has the
+  // scheduled time actually arrived yet?) is handled live, per booking
+  // request, by comparing booking_open_at against now() in the booking
+  // handler - this flag only needs to say "a window was configured at all".
+  const explicitlyOpen = day?.bookingOpen === undefined ? false : boolValue(day.bookingOpen);
+  const bookingOpen = explicitlyOpen || openWaves.length > 0 || Boolean(openAt);
 
   return {
     bookingOpen,
@@ -379,7 +389,13 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
   const sqlEndTime = rest ? '00:00:00' : normalizeTime(end_time || endTime);
   const sqlDeadline = toSqlDateTime(booking_deadline || bookingDeadline, new Date(Date.now() + 24 * 60 * 60 * 1000));
   const sqlOpenAt = toSqlDateTime(booking_open_at || bookingOpenAt);
-  const finalBookingOpen = boolValue(booking_open ?? bookingOpen);
+  // Same fix as resolveBookingWindow: a scheduled future open time (sqlOpenAt)
+  // itself means booking should be considered "configured/open" so it gets
+  // persisted correctly - otherwise booking_is_open would stay false and
+  // the slot would never actually open for CSRs once the scheduled time
+  // arrives. The live per-request check in the booking handler (comparing
+  // booking_open_at to now()) is what actually gates early access.
+  const finalBookingOpen = boolValue(booking_open ?? bookingOpen) || Boolean(sqlOpenAt);
   // Segments are fully separate business units (Prepaid, Postpaid, VIP,
   // etc.) - there is no "applies to everyone" wildcard. A shift must always
   // specify exactly which segment it belongs to; we no longer silently

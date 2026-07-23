@@ -699,26 +699,66 @@ export default function AdminDashboard() {
   const fetchCsrUsers = async () => {
     try {
       const response = await apiClient.get("/users/csr");
-      const localUsers = getLocalData("users", []) as CSR[];
-      const users = (response.data || []).map((raw: any) => {
-        const mapped = mapCsrForUi(raw);
-        const localMatch = localUsers.find(
-          (user) =>
-            user.id === mapped.id ||
-            (user.email && user.email === mapped.email),
-        );
-        return {
-          ...mapped,
-          location: mapped.location || localMatch?.location || "",
-          supervisorName: mapped.supervisorName || localMatch?.supervisorName || "",
-        };
-      });
+      // The database is now the single source of truth for employee data
+      // (location, supervisorName, etc) - no more merging in a possibly
+      // stale localStorage copy, which previously caused these fields to
+      // flash correctly on load and then revert to blank.
+      const users = (response.data || []).map((raw: any) => mapCsrForUi(raw));
       setCsrs(users);
-      setLocalData("users", users);
       return users;
     } catch (error) {
       console.error("Error fetching CSR users:", error);
-      return getLocalData("users", []);
+      return [];
+    }
+  };
+
+  const fetchHolidaysFromDb = async () => {
+    try {
+      const response = await apiClient.get("/settings/holidays");
+      const list = Array.isArray(response.data) ? response.data : [];
+      setHolidays(list);
+      return list;
+    } catch (error) {
+      console.error("Error fetching holidays:", error);
+      return [];
+    }
+  };
+
+  const saveHolidaysToDb = async (updated: any[]) => {
+    try {
+      const response = await apiClient.put("/settings/holidays", { holidays: updated });
+      const list = Array.isArray(response.data) ? response.data : updated;
+      setHolidays(list);
+      return list;
+    } catch (error) {
+      console.error("Error saving holidays:", error);
+      alert("Амралтын өдрийг хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
+      return holidays;
+    }
+  };
+
+  const fetchSegmentsFromDb = async () => {
+    try {
+      const response = await apiClient.get("/settings/segments");
+      const list = Array.isArray(response.data) ? response.data : [];
+      setSegments(list);
+      return list;
+    } catch (error) {
+      console.error("Error fetching segments:", error);
+      return [];
+    }
+  };
+
+  const saveSegmentsToDb = async (updated: string[]) => {
+    try {
+      const response = await apiClient.put("/settings/segments", { segments: updated });
+      const list = Array.isArray(response.data) ? response.data : updated;
+      setSegments(list);
+      return list;
+    } catch (error) {
+      console.error("Error saving segments:", error);
+      alert("Segment жагсаалтыг хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
+      return segments;
     }
   };
 
@@ -947,22 +987,17 @@ export default function AdminDashboard() {
   }, [segments]);
 
   useEffect(() => {
-    // Initial load
-    const loadedCsrs = getLocalData("users", []);
-    const loadedSegments = getLocalData("segments", []);
-
-    setCsrs(loadedCsrs);
-    setSegments(loadedSegments);
-    if (loadedSegments.length > 0 && !activeSegmentView) {
-      setActiveSegmentView(loadedSegments[0]);
-    }
-
+    // Initial load - users and segments now come from the database only.
     fetchCsrUsers().catch(() => undefined);
+    fetchSegmentsFromDb().then((list) => {
+      if (list.length > 0 && !activeSegmentView) {
+        setActiveSegmentView(list[0]);
+      }
+    }).catch(() => undefined);
 
     fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
     setTrainingMaterials(getLocalData("trainingMaterials", []));
     setVacationRequests(getLocalData("vacationRequests", []));
-    setSegments(getLocalData("segments", []));
     setMonthlyQuotas(
       getLocalData("monthlyQuotas", {
         0: 5,
@@ -988,12 +1023,7 @@ export default function AdminDashboard() {
     fetchVacationRequests().catch(() =>
       setVacationRequests(getLocalData("vacationRequests", [])),
     );
-    setHolidays(
-      getLocalData("holidays", []).map((h: any) => ({
-        ...h,
-        id: h.id || Math.random().toString(36).substr(2, 9),
-      })),
-    );
+    fetchHolidaysFromDb().catch(() => undefined);
     const defaultShiftTemplates = [
       { id: "1", time: "09-14", label: "09-14" },
       { id: "2", time: "09-15", label: "09-15" },
@@ -1045,11 +1075,17 @@ export default function AdminDashboard() {
 
     // Real-time polling
     const interval = setInterval(() => {
-      const u = getLocalData("users", []);
+      // NOTE: users/CSR list is intentionally NOT read from localStorage
+      // here anymore. The database (via fetchCsrUsers) is the single
+      // source of truth for employee data (location, supervisorName,
+      // etc). Previously this poll re-read a possibly-stale/incomplete
+      // localStorage snapshot every 2 seconds and overwrote the correct,
+      // freshly-fetched DB data with it - causing fields like location
+      // and supervisor name to flash correctly on load and then revert
+      // to blank shortly after.
       const n = getLocalData("notifications", []);
       const tm = getLocalData("trainingMaterials", []);
       const vr = getLocalData("vacationRequests", []);
-      const segs = getLocalData("segments", []);
       const mq = getLocalData("monthlyQuotas", {
         0: 5,
         1: 5,
@@ -1066,7 +1102,11 @@ export default function AdminDashboard() {
       });
       const sd = getLocalData("schedules", {});
 
-      // Sanitize schedules data to ensure consistency
+      // Sanitize schedules data to ensure consistency. NOTE: no more "All"
+      // wildcard fallback for a missing segment - segments are fully
+      // separate business units, so a shift with no segment recorded is
+      // left as-is (empty) rather than silently defaulting to a fake
+      // catch-all segment that doesn't correspond to anything real.
       const sanitizedSd: Record<string, any> = {};
       Object.entries(sd).forEach(([dateKey, data]: [string, any]) => {
         if (data && data.shifts) {
@@ -1074,7 +1114,7 @@ export default function AdminDashboard() {
             ...data,
             shifts: data.shifts.map((s: any) => ({
               ...s,
-              segment: s.segment || "All",
+              segment: s.segment || "",
               employmentType: s.employmentType || "Full Time",
             })),
           };
@@ -1084,33 +1124,23 @@ export default function AdminDashboard() {
       });
 
       const hl = getLocalData("hourlyLeaveRequests", []);
-      const hls = getLocalData("holidays", []).map((h: any) => ({
-        ...h,
-        id: h.id || Math.random().toString(36).substr(2, 9),
-      }));
 
       const currentHash = JSON.stringify({
-        u,
         n,
         tm,
         vr,
-        segs,
         mq,
         sd: sanitizedSd,
         hl,
-        hls,
       });
       if (currentHash !== lastDataRef.current) {
         lastDataRef.current = currentHash;
-        setCsrs(u);
         fetchNotificationsFromDb().catch(() => setNotifications(n));
         setTrainingMaterials(tm);
         setVacationRequests(vr);
-        setSegments(segs);
         setMonthlyQuotas(mq);
         setSchedules(sanitizedSd);
         fetchLeaveRequests().catch(() => setHourlyLeaveRequests(hl));
-        setHolidays(hls);
       }
     }, 2000);
 
@@ -1764,7 +1794,6 @@ export default function AdminDashboard() {
     try {
       await apiClient.delete(`/users/${id}`);
       const updatedUsers = csrs.filter((u) => u.id !== id);
-      setLocalData("users", updatedUsers);
       setCsrs(updatedUsers);
       logAction("Employee Deleted", `Deleted employee: ${userToDelete.name}`);
     } catch (error: any) {
@@ -1848,7 +1877,7 @@ export default function AdminDashboard() {
       id: h.id || Math.random().toString(36).substr(2, 9),
     }));
 
-  const saveHolidayForDate = (
+  const saveHolidayForDate = async (
     date: string,
     name: string,
     existingId?: string,
@@ -1865,9 +1894,7 @@ export default function AdminDashboard() {
       return false;
     }
 
-    const normalizedHolidays = normalizeHolidayItems(
-      getLocalData("holidays", []),
-    );
+    const normalizedHolidays = normalizeHolidayItems(holidays);
     const currentHoliday = existingId
       ? normalizedHolidays.find((h: any) => h.id === existingId)
       : normalizedHolidays.find((h: any) => h.date === date);
@@ -1885,8 +1912,7 @@ export default function AdminDashboard() {
           },
         ];
 
-    setLocalData("holidays", updated);
-    setHolidays(updated);
+    await saveHolidaysToDb(updated);
     setSelectedHolidayName(trimmedName);
     setHolidayData({ id: "", date: "", name: "" });
     logAction(
@@ -1896,17 +1922,14 @@ export default function AdminDashboard() {
     return true;
   };
 
-  const removeHolidayForDate = (date: string) => {
+  const removeHolidayForDate = async (date: string) => {
     if (!date) return;
 
-    const normalizedHolidays = normalizeHolidayItems(
-      getLocalData("holidays", []),
-    );
+    const normalizedHolidays = normalizeHolidayItems(holidays);
     const holiday = normalizedHolidays.find((h: any) => h.date === date);
     const updated = normalizedHolidays.filter((h: any) => h.date !== date);
 
-    setLocalData("holidays", updated);
-    setHolidays(updated);
+    await saveHolidaysToDb(updated);
     setSelectedHolidayName("");
     if (holidayData.date === date) {
       setHolidayData({ id: "", date: "", name: "" });
@@ -1917,7 +1940,7 @@ export default function AdminDashboard() {
     );
   };
 
-  const handleAddHoliday = () => {
+  const handleAddHoliday = async () => {
     const targetDates = selectedBookingDates.length > 0
       ? [...selectedBookingDates].sort()
       : holidayData.date
@@ -1937,7 +1960,7 @@ export default function AdminDashboard() {
       return;
     }
 
-    const normalizedHolidays = normalizeHolidayItems(getLocalData("holidays", []));
+    const normalizedHolidays = normalizeHolidayItems(holidays);
     const updatedByDate = new Map(normalizedHolidays.map((h: any) => [h.date, h]));
 
     targetDates.forEach((date) => {
@@ -1949,8 +1972,7 @@ export default function AdminDashboard() {
     });
 
     const updated = Array.from(updatedByDate.values()).sort((a: any, b: any) => String(a.date).localeCompare(String(b.date)));
-    setLocalData("holidays", updated);
-    setHolidays(updated);
+    await saveHolidaysToDb(updated);
     setSelectedHolidayName(targetDates.length === 1 ? trimmedName : "");
     setHolidayData({ id: "", date: "", name: "" });
     setIsAddingHoliday(false);
@@ -2026,7 +2048,6 @@ export default function AdminDashboard() {
         photoUrl: newUser.photoUrl,
       });
       const updatedUsers = [...csrs, userToAdd];
-      setLocalData("users", updatedUsers);
       setCsrs(updatedUsers);
       setIsAddingUser(false);
       setNewUser({
@@ -2078,7 +2099,6 @@ export default function AdminDashboard() {
         const updatedUsers = csrs.map((u: CSR) =>
           u.id === editingUser.id ? { ...editingUser, location: normalizedLocation, supervisorName: String(editingUser.supervisorName || "").trim() } : u,
         );
-        setLocalData("users", updatedUsers);
         setCsrs(updatedUsers);
         setIsEditingUser(false);
         setEditingUser(null);
@@ -2144,8 +2164,7 @@ export default function AdminDashboard() {
   };
 
   const persistSegments = (updatedSegments: string[]) => {
-    setLocalData("segments", updatedSegments);
-    setSegments(updatedSegments);
+    saveSegmentsToDb(updatedSegments);
 
     if (activeSegmentView && !updatedSegments.includes(activeSegmentView)) {
       setActiveSegmentView(updatedSegments[0] || "");
@@ -2339,7 +2358,6 @@ export default function AdminDashboard() {
       }
 
       const updatedUsers = [...csrs, ...usersToAdd];
-      setLocalData("users", updatedUsers);
       setCsrs(updatedUsers);
       closeBulkUploadModal();
       logAction(
@@ -2455,7 +2473,6 @@ export default function AdminDashboard() {
       );
 
       persistSegments(updatedSegments);
-      setLocalData("users", updatedUsers);
       setCsrs(updatedUsers);
       await persistSchedules(updatedSchedules, Object.keys(updatedSchedules));
       if (activeSegmentView === oldName) setActiveSegmentView(nextName);
@@ -6053,8 +6070,7 @@ export default function AdminDashboard() {
                                       const updated = holidays.filter(
                                         (item) => item.id !== h.id,
                                       );
-                                      setLocalData("holidays", updated);
-                                      setHolidays(updated);
+                                      saveHolidaysToDb(updated);
                                       if (holidayData.id === h.id) {
                                         setHolidayData({
                                           id: "",
