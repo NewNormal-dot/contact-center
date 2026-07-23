@@ -2254,7 +2254,7 @@ export default function CsrDashboard() {
   );
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row bg-[#0a0a0a] text-white overflow-x-hidden font-sans">
+    <div className="flex min-h-screen flex-col lg:h-screen lg:flex-row lg:overflow-hidden bg-[#0a0a0a] text-white overflow-x-hidden font-sans">
       <Sidebar 
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 

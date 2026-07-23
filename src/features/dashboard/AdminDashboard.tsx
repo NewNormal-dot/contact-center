@@ -1967,6 +1967,15 @@ export default function AdminDashboard() {
   const [isAddingSegment, setIsAddingSegment] = useState(false);
   const [newSegment, setNewSegment] = useState("");
   const [editingSegment, setEditingSegment] = useState<string | null>(null);
+  const [collapsedSegments, setCollapsedSegments] = useState<Set<string>>(new Set());
+  const toggleSegmentCollapsed = (segment: string) => {
+    setCollapsedSegments((prev) => {
+      const next = new Set(prev);
+      if (next.has(segment)) next.delete(segment);
+      else next.add(segment);
+      return next;
+    });
+  };
   const [segmentDraftName, setSegmentDraftName] = useState("");
   const [newUser, setNewUser] = useState<Partial<CSR>>({
     role: "csr",
@@ -2629,6 +2638,16 @@ export default function AdminDashboard() {
                   <span className="text-xs font-outfit font-black text-gray-500 uppercase tracking-widest">
                     {members.length} ажилтан
                   </span>
+                  <button
+                    onClick={() => toggleSegmentCollapsed(segment)}
+                    className="p-1.5 text-gray-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all"
+                    title={collapsedSegments.has(segment) ? "Дэлгэх" : "Хураах"}
+                  >
+                    <ChevronDown
+                      size={16}
+                      className={`transition-transform duration-200 ${collapsedSegments.has(segment) ? "-rotate-90" : ""}`}
+                    />
+                  </button>
                   {segments.includes(segment) && (
                     <div className="flex items-center gap-1">
                       {(() => {
@@ -2678,6 +2697,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {!collapsedSegments.has(segment) && (
               <div className="bg-gray-900/40 border border-gray-800 rounded-3xl overflow-x-auto backdrop-blur-md shadow-2xl">
                 {members.length > 0 ? (
                   <table className="w-full min-w-[1320px] table-fixed text-left">
@@ -2797,6 +2817,7 @@ export default function AdminDashboard() {
                   </div>
                 )}
               </div>
+              )}
             </div>
           ),
         )}
@@ -5311,7 +5332,7 @@ export default function AdminDashboard() {
   );
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row bg-[#0a0a0a] text-gray-100 font-sans overflow-x-hidden">
+    <div className="flex min-h-screen flex-col lg:h-screen lg:flex-row lg:overflow-hidden bg-[#0a0a0a] text-gray-100 font-sans overflow-x-hidden">
       {/* Sidebar */}
       <aside
         className={`bg-gray-900/40 backdrop-blur-xl border-b lg:border-b-0 lg:border-r border-gray-800 transition-all duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} w-full max-h-[46vh] lg:max-h-none lg:h-screen relative z-50 shrink-0`}

@@ -1559,7 +1559,7 @@ export default function SuperAdminDashboard() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row bg-[#0a0a0a] text-white overflow-x-hidden font-sans">
+    <div className="flex min-h-screen flex-col lg:h-screen lg:flex-row lg:overflow-hidden bg-[#0a0a0a] text-white overflow-x-hidden font-sans">
       {/* Sidebar */}
       <div className={`${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-72'} w-full max-h-[42vh] lg:max-h-none lg:h-screen bg-gray-900/50 border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col transition-all duration-300 relative z-50 shrink-0`}>
         <button 
