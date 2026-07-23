@@ -511,9 +511,13 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
     res.json({ synced, deleted });
   } catch (err: any) {
     console.error('Sync schedules FATAL error:', err);
-    res.status(500).json({ 
+    // This route already requires authenticate + authorize(['admin','superadmin']),
+    // so it's safe to always surface the real error message here (not just in
+    // non-production) - it helps admins self-diagnose DB issues without
+    // needing Azure Portal / Log Stream access.
+    res.status(500).json({
       error: 'Хуваарь DB-д хадгалахад алдаа гарлаа.',
-      details: process.env.NODE_ENV === 'production' ? undefined : err?.message 
+      details: err?.message || String(err),
     });
   }
 });
