@@ -9,6 +9,26 @@ import { logAction } from './audit';
 import { columnExists } from '../database/schemaUtils';
 
 const router = express.Router();
+
+// Root/super-owner emails are configured via the ROOT_ADMIN_EMAILS environment
+// variable (comma-separated), NOT hardcoded in source. This keeps privileged
+// accounts out of version control and lets you change them per-environment
+// without touching code. Example .env entry:
+//   ROOT_ADMIN_EMAILS=owner1@company.com,owner2@company.com
+function getRootAdminEmails(): Set<string> {
+  return new Set(
+    String(process.env.ROOT_ADMIN_EMAILS || '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function isRootAdmin(email: string | undefined | null): boolean {
+  if (!email) return false;
+  return getRootAdminEmails().has(email.toLowerCase());
+}
+
 const VALID_ROLES = new Set(['superadmin', 'admin', 'csr']);
 const VALID_STATUSES = new Set(['active', 'inactive']);
 const VALID_EMPLOYMENT_TYPES = new Set(['Full Time', 'Part Time']);
@@ -363,7 +383,7 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
     const userToUpdate = await db('users').where({ id }).first();
     if (!userToUpdate) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
 
-    const isRoot = actingUser.email === 'enkhtur.a@mobicom.mn' || actingUser.email === 'Enkhtur040607@gmail.com';
+    const isRoot = isRootAdmin(actingUser.email);
 
     if (actingUser.role === 'admin' && userToUpdate.role !== 'csr') {
       return res.status(403).json({ error: 'Админ зөвхөн CSR хэрэглэгчийн нууц үгийг сэргээх эрхтэй' });

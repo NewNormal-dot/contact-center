@@ -297,21 +297,35 @@ router.get('/my-bookings', authenticate, async (req: any, res) => {
 router.get('/', authenticate, async (_req, res) => {
   try {
     const slots = await db('work_slots').orderBy('date', 'asc').orderBy('start_time', 'asc');
-    const enrichedSlots = await Promise.all(slots.map(async (slot: any) => {
-      const bookings = await db('slot_bookings')
-        .join('users', 'slot_bookings.user_id', '=', 'users.id')
-        .where({ 'slot_bookings.slot_id': slot.id, 'slot_bookings.status': 'confirmed' })
-        .select(
-          'slot_bookings.id',
-          'slot_bookings.user_id',
-          'slot_bookings.booked_at',
-          'users.name as user_name',
-          'users.email as user_email',
-          'users.code as user_code',
-          'users.segment as user_segment',
-          'users.employment_type as user_employment_type',
-        );
-      return mapSlot(slot, bookings.length, bookings.map((b: any) => ({
+
+    // Fetch all confirmed bookings for all slots in ONE query instead of one
+    // query per slot (previously N+1: 1 query for the slot list + 1 query
+    // per individual slot). For a month view with hundreds of slots this
+    // turns hundreds of DB round-trips into just 2.
+    const slotIds = slots.map((s: any) => s.id);
+    const allBookings = slotIds.length
+      ? await db('slot_bookings')
+          .join('users', 'slot_bookings.user_id', '=', 'users.id')
+          .whereIn('slot_bookings.slot_id', slotIds)
+          .where('slot_bookings.status', 'confirmed')
+          .select(
+            'slot_bookings.id',
+            'slot_bookings.slot_id',
+            'slot_bookings.user_id',
+            'slot_bookings.booked_at',
+            'users.name as user_name',
+            'users.email as user_email',
+            'users.code as user_code',
+            'users.segment as user_segment',
+            'users.employment_type as user_employment_type',
+          )
+      : [];
+
+    const bookingsBySlotId = new Map<string, any[]>();
+    for (const b of allBookings as any[]) {
+      const key = String(b.slot_id);
+      if (!bookingsBySlotId.has(key)) bookingsBySlotId.set(key, []);
+      bookingsBySlotId.get(key)!.push({
         id: b.id,
         userId: b.user_id,
         userName: b.user_name,
@@ -320,8 +334,14 @@ router.get('/', authenticate, async (_req, res) => {
         bookedAt: b.booked_at,
         segment: b.user_segment,
         employmentType: b.user_employment_type,
-      })));
-    }));
+      });
+    }
+
+    const enrichedSlots = slots.map((slot: any) => {
+      const bookings = bookingsBySlotId.get(String(slot.id)) || [];
+      return mapSlot(slot, bookings.length, bookings);
+    });
+
     res.json(enrichedSlots);
   } catch (err) {
     console.error('Get slots error:', err);
@@ -573,13 +593,20 @@ const bookHandler = async (req: any, res: any) => {
     if (ruleError) return res.status(400).json({ error: ruleError });
 
     const bookingResult = await db.transaction(async trx => {
-      // Lock the target slot row for the duration of this transaction so that
-      // concurrent booking attempts on the SAME slot are serialized instead of
-      // racing each other on the capacity check below (prevents overbooking).
-      const lockedSlot = await trx('work_slots').where({ id: slot_id }).forUpdate().first();
-      if (!lockedSlot) {
-        return { status: 404, error: 'Слот олдсонгүй' };
-      }
+      // Row-level locking to close the booking race condition:
+      // - Locking the target work_slot row serializes concurrent booking
+      //   attempts BY DIFFERENT USERS for this same slot, so the capacity
+      //   check below can no longer be beaten by a simultaneous request
+      //   (previously two requests could both read count < capacity and
+      //   both insert, exceeding capacity).
+      // - Locking the acting user's row serializes concurrent booking
+      //   attempts BY THE SAME USER (e.g. a double-click or retry), so they
+      //   can't create two conflicting same-day bookings.
+      // Lock order is always work_slots -> users, consistently, to avoid deadlocks.
+      // On sqlite (local dev) forUpdate() is a safe no-op; on Azure SQL (mssql)
+      // it compiles to "WITH (UPDLOCK)".
+      await trx('work_slots').where({ id: slot_id }).forUpdate().first();
+      await trx('users').where({ id: userId }).forUpdate().first();
 
       const currentBooking = await trx('slot_bookings')
         .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
@@ -592,7 +619,7 @@ const bookHandler = async (req: any, res: any) => {
       }
 
       const [{ count }] = await trx('slot_bookings').where({ slot_id, status: 'confirmed' }).count('id as count');
-      if (Number(count) >= Number(lockedSlot.capacity) && (!currentBooking || currentBooking.slot_id !== slot_id)) {
+      if (Number(count) >= Number(slot.capacity) && (!currentBooking || currentBooking.slot_id !== slot_id)) {
         return { status: 400, error: 'Орон тоо дүүрсэн байна' };
       }
 

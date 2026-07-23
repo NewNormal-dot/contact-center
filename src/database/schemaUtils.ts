@@ -1,5 +1,15 @@
 import type { Knex } from "knex";
 
+// Table/column existence never changes while the server process is running
+// (it only changes when a migration runs, which happens at deploy/startup,
+// before requests are served). Previously tableExists()/columnExists() ran a
+// real DB round-trip on every single call - and columnExists() in particular
+// was being called on nearly every auth-related request (login, register,
+// change-password, reset-password, etc). Caching the result in memory for
+// the lifetime of the process removes that DB hit after the first check,
+// with no behavioral change.
+const existsCache = new Map<string, boolean>();
+
 function getClientName(knex: Knex) {
   return String((knex as any).client?.config?.client || "").toLowerCase();
 }
@@ -29,15 +39,23 @@ export async function tableExists(
   tableName: string,
   schemaName = "dbo"
 ): Promise<boolean> {
+  const cacheKey = `table:${getClientName(knex)}:${schemaName}.${tableName}`;
+  const cached = existsCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let result: boolean;
   if (getClientName(knex) === "mssql") {
     const fullName = escapeSqlString(objectName(schemaName, tableName));
-    const result = await knex.raw(
+    const raw = await knex.raw(
       `SELECT 1 AS [exists] WHERE OBJECT_ID(N'${fullName}', N'U') IS NOT NULL`
     );
-    return getRows(result).length > 0;
+    result = getRows(raw).length > 0;
+  } else {
+    result = await knex.schema.hasTable(tableName);
   }
 
-  return knex.schema.hasTable(tableName);
+  existsCache.set(cacheKey, result);
+  return result;
 }
 
 export async function columnExists(
@@ -46,14 +64,31 @@ export async function columnExists(
   columnName: string,
   schemaName = "dbo"
 ): Promise<boolean> {
+  const cacheKey = `column:${getClientName(knex)}:${schemaName}.${tableName}.${columnName}`;
+  const cached = existsCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let result: boolean;
   if (getClientName(knex) === "mssql") {
     const fullName = escapeSqlString(objectName(schemaName, tableName));
     const column = escapeSqlString(columnName);
-    const result = await knex.raw(
+    const raw = await knex.raw(
       `SELECT 1 AS [exists] WHERE COL_LENGTH(N'${fullName}', N'${column}') IS NOT NULL`
     );
-    return getRows(result).length > 0;
+    result = getRows(raw).length > 0;
+  } else {
+    result = await knex.schema.hasColumn(tableName, columnName);
   }
 
-  return knex.schema.hasColumn(tableName, columnName);
+  existsCache.set(cacheKey, result);
+  return result;
+}
+
+/**
+ * Clears the cache used by tableExists()/columnExists(). Only needed if you
+ * run migrations against a live process without restarting it (not the
+ * normal deploy flow here, but exposed for tests/tools that might need it).
+ */
+export function clearSchemaExistsCache() {
+  existsCache.clear();
 }

@@ -9,6 +9,7 @@ import { getJwtSecret } from '../utils/jwtSecret';
 import { buildPasswordSetupUrl, sendPasswordSetupEmail } from '../utils/email';
 import { createPasswordSetupToken, hashPasswordSetupToken, validateNewPassword } from '../utils/password';
 import { columnExists } from '../database/schemaUtils';
+import { loginRateLimiter, forgotPasswordRateLimiter } from '../middleware/rateLimiter';
 
 const router = express.Router();
 
@@ -121,7 +122,7 @@ router.post('/setup-password', async (req, res) => {
   }
 });
 
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', forgotPasswordRateLimiter, async (req, res) => {
   const { email } = req.body;
 
   if (!email) {
@@ -162,7 +163,7 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -207,28 +208,48 @@ router.post('/register-initial', async (req, res) => {
       });
     }
 
-    const count = await db('users').count('id as count').first();
-    if (count && Number(count.count) > 0) {
-       return res.status(403).json({ error: 'Уучлаарай, систем аль хэдийн бүртгэлтэй байна' });
-    }
+    // Fix for check-then-insert race: two near-simultaneous requests could
+    // previously both see "0 users" and both create a superadmin. Wrapping
+    // in a transaction makes the check + insert atomic together. On Azure
+    // SQL (mssql) we additionally take a transaction-scoped table lock so a
+    // second concurrent request has to wait for the first to fully commit
+    // before it can even read the count. On local sqlite dev this extra
+    // hint is unnecessary (better-sqlite3 is a single synchronous
+    // connection, so transactions are already effectively serialized).
+    const result = await db.transaction(async (trx) => {
+      const clientName = String((trx.client as any)?.config?.client || '').toLowerCase();
+      if (clientName === 'mssql') {
+        await trx.raw('SELECT TOP 1 1 AS x FROM users WITH (TABLOCKX, HOLDLOCK)');
+      }
 
-    const id = uuidv4();
-    const hashedPassword = await bcrypt.hash(initialPassword, 10);
-    const insertData: any = {
-      id,
-      email: initialEmail,
-      password_hash: hashedPassword,
-      name: 'Super Admin',
-      role: 'superadmin',
-      status: 'active',
-      employment_type: 'Full Time'
-    };
+      const count = await trx('users').count('id as count').first();
+      if (count && Number(count.count) > 0) {
+        return { alreadyExists: true as const };
+      }
 
-    if (await hasPasswordSetupColumns()) {
-      insertData.password_changed_at = db.fn.now();
+      const id = uuidv4();
+      const hashedPassword = await bcrypt.hash(initialPassword, 10);
+      const insertData: any = {
+        id,
+        email: initialEmail,
+        password_hash: hashedPassword,
+        name: 'Super Admin',
+        role: 'superadmin',
+        status: 'active',
+        employment_type: 'Full Time'
+      };
+
+      if (await hasPasswordSetupColumns()) {
+        insertData.password_changed_at = trx.fn.now();
+      }
+
+      await trx('users').insert(insertData);
+      return { alreadyExists: false as const };
+    });
+
+    if (result.alreadyExists) {
+      return res.status(403).json({ error: 'Уучлаарай, систем аль хэдийн бүртгэлтэй байна' });
     }
-    
-    await db('users').insert(insertData);
 
     res.json({ message: 'Superadmin created successfully.' });
   } catch (err) {
