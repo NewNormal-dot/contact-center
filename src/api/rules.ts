@@ -36,7 +36,10 @@ function makeRuleId(ruleType: string, monthKey: string | null, segment: string, 
 }
 
 function normalizeSegment(value: unknown) {
-  return String(value || 'All').trim() || 'All';
+  // No "All" wildcard - segments are fully separate business units. Empty
+  // input is left empty here (validated/rejected by the caller) rather than
+  // silently defaulting to a fake catch-all segment.
+  return String(value || '').trim();
 }
 
 function normalizeEmploymentType(value: unknown) {
@@ -145,6 +148,7 @@ router.put('/monthly-font-hours', authenticate, authorize(['admin', 'superadmin'
     if (!monthKey) return res.status(400).json({ error: 'Сар YYYY-MM форматтай байх ёстой' });
 
     const segment = normalizeSegment(req.body.segment);
+    if (!segment) return res.status(400).json({ error: 'Segment заавал сонгосон байх ёстой' });
     const employmentType = normalizeEmploymentType(req.body.employmentType ?? req.body.employment_type);
     const hours = normalizeMonthlyFontHours(req.body.hours);
 
@@ -159,6 +163,7 @@ router.put('/monthly-font-hours', authenticate, authorize(['admin', 'superadmin'
 router.put('/weekly-shift-rules', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
   try {
     const segment = normalizeSegment(req.body.segment);
+    if (!segment) return res.status(400).json({ error: 'Segment заавал сонгосон байх ёстой' });
     const employmentType = normalizeEmploymentType(req.body.employmentType ?? req.body.employment_type);
     const rule = normalizeWeeklyShiftRule(req.body.rule || req.body);
 

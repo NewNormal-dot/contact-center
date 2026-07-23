@@ -1984,6 +1984,9 @@ export default function AdminDashboard() {
   };
 
   const [isAddingUser, setIsAddingUser] = useState(false);
+  const [isManagingFontHours, setIsManagingFontHours] = useState(false);
+  const [fontHoursDraft, setFontHoursDraft] = useState<Record<string, number>>({});
+  const [isSavingFontHours, setIsSavingFontHours] = useState(false);
   const [setupLinkToShare, setSetupLinkToShare] = useState<{ name: string; email: string; url: string } | null>(null);
   const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [isEditingUser, setIsEditingUser] = useState(false);
@@ -3706,6 +3709,60 @@ export default function AdminDashboard() {
       });
     };
 
+    const openFontHoursManager = () => {
+      const draft: Record<string, number> = {};
+      segments.forEach((segment) => {
+        (["Full Time", "Part Time"] as const).forEach((employmentType) => {
+          const key = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType);
+          draft[key] = Math.max(0, Number(monthlyFontHourRules[key]) || 0);
+        });
+      });
+      setFontHoursDraft(draft);
+      setIsManagingFontHours(true);
+    };
+
+    const copyFontHoursFromPreviousMonth = () => {
+      const prevMonthDate = new Date(selectedYearCalendar, selectedMonthCalendar - 1, 1);
+      const prevMonthKey = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+      const next = { ...fontHoursDraft };
+      segments.forEach((segment) => {
+        (["Full Time", "Part Time"] as const).forEach((employmentType) => {
+          const prevKey = makeMonthlyFontHourKey(prevMonthKey, segment, employmentType);
+          const currentKey = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType);
+          const prevValue = Number(monthlyFontHourRules[prevKey]) || 0;
+          if (prevValue > 0) next[currentKey] = prevValue;
+        });
+      });
+      setFontHoursDraft(next);
+    };
+
+    const saveFontHoursGrid = async () => {
+      setIsSavingFontHours(true);
+      try {
+        const entries = Object.entries(fontHoursDraft).filter(
+          ([key]) => key.startsWith(`${selectedMonthKey}|`),
+        );
+        await Promise.all(
+          entries.map(([key, hours]) => {
+            const [, segment, employmentType] = key.split("|");
+            return saveMonthlyFontHoursRule(
+              selectedMonthKey,
+              segment,
+              employmentType as "Full Time" | "Part Time",
+              hours,
+            );
+          }),
+        );
+        setMonthlyFontHourRules((prev) => ({ ...prev, ...fontHoursDraft }));
+        setIsManagingFontHours(false);
+      } catch (error) {
+        console.error("Save font hours grid error:", error);
+        alert("Сарын фонт цаг хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
+      } finally {
+        setIsSavingFontHours(false);
+      }
+    };
+
     const updateActiveWeeklyRule = (patch: Partial<WeeklyShiftRule>) => {
       const nextRule = normalizeWeeklyShiftRule({ ...activeWeeklyRule, ...patch });
       const next = { ...weeklyShiftRules, [activeRuleKey]: nextRule };
@@ -4165,16 +4222,13 @@ export default function AdminDashboard() {
             </div>
 
             <div className="flex min-w-0 flex-1 items-center gap-3">
-              <label className="relative h-9 w-[190px] shrink-0 rounded-xl border border-white/10 bg-black/50 transition-all focus-within:border-blue-500/60">
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black uppercase tracking-widest text-gray-500">Сарын фонт цаг</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={activeMonthlyFontHours}
-                  onChange={(e) => updateActiveMonthlyFontHours(Number(e.target.value))}
-                  className="h-full w-full rounded-xl bg-transparent pl-[118px] pr-3 text-right text-[11px] font-black text-white outline-none"
-                />
-              </label>
+              <button
+                onClick={openFontHoursManager}
+                className="h-9 px-4 rounded-xl border border-white/10 bg-black/50 hover:border-blue-500/60 hover:bg-blue-500/10 transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:text-blue-300"
+              >
+                <Clock size={13} />
+                Сарын фонт цаг: {activeMonthlyFontHours || 0}ц
+              </button>
               <button
                 onClick={handleExportScheduleReport}
                 className="ml-auto h-9 px-4 bg-green-600/10 hover:bg-green-600 text-green-500 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-green-500/20 flex items-center justify-center gap-1.5"
@@ -5253,6 +5307,86 @@ export default function AdminDashboard() {
 
             })()}
           </motion.div>
+
+          {isManagingFontHours && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+              <div
+                onClick={() => !isSavingFontHours && setIsManagingFontHours(false)}
+                className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+              />
+              <div className="relative w-full max-w-2xl max-h-[85vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+                <h2 className="text-xl font-black text-white mb-1">
+                  Сарын фонт цаг — {monthNames[selectedMonthCalendar]} {selectedYearCalendar}
+                </h2>
+                <p className="text-sm text-gray-400 mb-6">
+                  Segment бүрийн Full Time болон Part Time ажилтны сард ажиллах ёстой нийт цагийг тохируулна. Ажилтан энэ цагийн дагуу л slot захиалах эрхтэй болно (илүү ч биш, дутуу ч биш).
+                </p>
+
+                <button
+                  onClick={copyFontHoursFromPreviousMonth}
+                  className="mb-4 px-4 py-2 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-blue-500/20"
+                >
+                  Өмнөх сараас хуулах
+                </button>
+
+                <div className="space-y-3">
+                  <div className="grid grid-cols-[1fr_100px_100px] gap-3 px-3 text-[9px] font-black uppercase tracking-widest text-gray-500">
+                    <span>Segment</span>
+                    <span className="text-center">Full Time</span>
+                    <span className="text-center">Part Time</span>
+                  </div>
+                  {segments.length === 0 && (
+                    <p className="text-sm text-gray-500 text-center py-6">
+                      Эхлээд "Ажилтны удирдлага" хэсэгт segment нэмнэ үү.
+                    </p>
+                  )}
+                  {segments.map((segment) => (
+                    <div
+                      key={segment}
+                      className="grid grid-cols-[1fr_100px_100px] gap-3 items-center bg-black/30 rounded-2xl px-3 py-2"
+                    >
+                      <span className="text-sm font-bold text-white truncate">{segment}</span>
+                      {(["Full Time", "Part Time"] as const).map((employmentType) => {
+                        const key = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType);
+                        return (
+                          <input
+                            key={employmentType}
+                            type="number"
+                            min={0}
+                            value={fontHoursDraft[key] ?? 0}
+                            onChange={(e) =>
+                              setFontHoursDraft((prev) => ({
+                                ...prev,
+                                [key]: Math.max(0, Number(e.target.value) || 0),
+                              }))
+                            }
+                            className="h-9 w-full rounded-xl bg-gray-800 border border-gray-700 text-center text-sm font-black text-white outline-none focus:border-blue-500"
+                          />
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-3 mt-6">
+                  <button
+                    disabled={isSavingFontHours}
+                    onClick={saveFontHoursGrid}
+                    className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-500 transition-all disabled:opacity-50"
+                  >
+                    {isSavingFontHours ? "Хадгалж байна..." : "Хадгалах"}
+                  </button>
+                  <button
+                    disabled={isSavingFontHours}
+                    onClick={() => setIsManagingFontHours(false)}
+                    className="flex-1 py-4 bg-gray-800 text-gray-300 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-700 transition-all disabled:opacity-50"
+                  >
+                    Цуцлах
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
