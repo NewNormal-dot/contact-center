@@ -32,7 +32,13 @@ function normalizeEmploymentType(value: unknown) {
   return String(value || 'Full Time').trim() === 'Part Time' ? 'Part Time' : 'Full Time';
 }
 
-function normalizeSegment(value: unknown) {
+// IMPORTANT: this is a DISPLAY-ONLY fallback for reading/showing existing
+// records that might have missing segment data (e.g. legacy rows). It must
+// NEVER be used when validating or writing new shifts - segments are fully
+// separate business units (Prepaid, Postpaid, VIP, etc.) each with their
+// own Full Time / Part Time CSRs, and a shift belongs to exactly one of
+// them. There is intentionally no "applies to everyone" wildcard segment.
+function normalizeSegmentForDisplay(value: unknown) {
   return String(value || 'All').trim() || 'All';
 }
 
@@ -110,7 +116,7 @@ function slotIdentity(slot: any) {
     displayDate(slot.date),
     displayTime(slot.start_time),
     displayTime(slot.end_time),
-    normalizeSegment(slot.segment),
+    normalizeSegmentForDisplay(slot.segment),
     normalizeEmploymentType(slot.employment_type),
     boolValue(slot.is_rest) ? '1' : '0',
   ].join('|');
@@ -129,7 +135,7 @@ function mapSlot(slot: any, currentBookings = 0, bookings: any[] = []) {
     bookingOpen: boolValue(slot.booking_is_open),
     bookingOpenAt: displayDateTime(slot.booking_open_at),
     bookingDeadline: displayDateTime(slot.booking_deadline),
-    segment: normalizeSegment(slot.segment),
+    segment: normalizeSegmentForDisplay(slot.segment),
     employmentType: normalizeEmploymentType(slot.employment_type),
     isRest,
     createdAt: slot.created_at,
@@ -155,7 +161,7 @@ function mapBooking(row: any) {
     bookingOpen: boolValue(row.booking_is_open),
     bookingOpenAt: displayDateTime(row.booking_open_at),
     bookingDeadline: displayDateTime(row.booking_deadline),
-    segment: normalizeSegment(row.segment),
+    segment: normalizeSegmentForDisplay(row.segment),
     employmentType: normalizeEmploymentType(row.employment_type),
     isRest: Boolean(row.is_rest),
     userName: row.user_name,
@@ -169,7 +175,7 @@ async function getUser(userId: string) {
 }
 
 async function getRuleForUser(user: any) {
-  const segment = normalizeSegment(user.segment || user.lineType);
+  const segment = normalizeSegmentForDisplay(user.segment || user.lineType);
   const employmentType = normalizeEmploymentType(user.employment_type || user.employmentType);
   const row = await db('shift_rule_settings')
     .where({ rule_type: 'weekly_shift_rules', segment, employment_type: employmentType })
@@ -374,11 +380,21 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
   const sqlDeadline = toSqlDateTime(booking_deadline || bookingDeadline, new Date(Date.now() + 24 * 60 * 60 * 1000));
   const sqlOpenAt = toSqlDateTime(booking_open_at || bookingOpenAt);
   const finalBookingOpen = boolValue(booking_open ?? bookingOpen);
-  const finalSegment = normalizeSegment(segment);
+  // Segments are fully separate business units (Prepaid, Postpaid, VIP,
+  // etc.) - there is no "applies to everyone" wildcard. A shift must always
+  // specify exactly which segment it belongs to; we no longer silently
+  // default a missing segment to "All", since that made the slot bookable
+  // by CSRs from every segment and also made it disappear from the
+  // segment-filtered schedule UI (no dropdown option ever shows "All").
+  const finalSegment = String(segment || '').trim();
   const finalEmploymentType = normalizeEmploymentType(employment_type || employmentType);
 
   if (!sqlSlotDate || !sqlDeadline || (!rest && (!sqlStartTime || !sqlEndTime))) {
     return res.status(400).json({ error: 'Огноо болон цагийн формат буруу байна' });
+  }
+
+  if (!finalSegment) {
+    return res.status(400).json({ error: 'Segment заавал сонгосон байх ёстой' });
   }
 
   try {
@@ -448,7 +464,15 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
             }
           }
 
-          const segment = normalizeSegment(shift.segment);
+          // No "All" wildcard fallback here either - a shift missing its
+          // segment is invalid data and gets skipped (like an invalid time
+          // range below), rather than silently becoming visible to every
+          // segment's CSRs and invisible in the segment-filtered UI.
+          const segment = String(shift.segment || '').trim();
+          if (!segment) {
+            console.warn('Skipping work slot with missing segment during sync:', { dateKey, shift });
+            continue;
+          }
           const employmentType = normalizeEmploymentType(shift.employmentType || shift.employment_type);
           const sqlStart = rest ? '00:00:00' : normalizeTime(startTime);
           const sqlEnd = rest ? '00:00:00' : normalizeTime(endTime);
@@ -591,7 +615,11 @@ const bookHandler = async (req: any, res: any) => {
 
     const user = await getUser(userId);
     if (!user) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
-    if (normalizeSegment(slot.segment) !== 'All' && normalizeSegment(slot.segment) !== normalizeSegment(user.segment)) {
+    // No "All" wildcard bypass - segments are fully separate business
+    // units, so a CSR may only book a slot whose segment exactly matches
+    // their own segment. (Previously slot.segment === 'All' let ANY CSR
+    // from ANY segment book it, which is not the intended business rule.)
+    if (String(slot.segment || '').trim() !== String(user.segment || '').trim()) {
       return res.status(403).json({ error: 'Өөр segment-ийн хуваарь сонгох боломжгүй' });
     }
     if (normalizeEmploymentType(slot.employment_type) !== normalizeEmploymentType(user.employment_type)) {

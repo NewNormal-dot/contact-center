@@ -4102,8 +4102,20 @@ export default function AdminDashboard() {
                 const daySchedule = schedules[dateKey];
                 const holiday = holidays.find((h) => h.date === dateKey);
                 const isWeekend = idx % 7 >= 5;
-                const hasAnyShifts = !!daySchedule?.shifts?.length;
-                const daySlotTotal = (daySchedule?.shifts || []).reduce(
+                // Filter to only the shifts matching the currently selected
+                // segment + employment type filter (activeSegmentView /
+                // activeEmploymentView) - previously this used ALL shifts
+                // for the day regardless of segment, so a day could show
+                // "Хаалттай" (closed) or slot totals based on a completely
+                // different segment's data than the one currently being
+                // viewed/filtered.
+                const dayShiftsForActiveFilter = (daySchedule?.shifts || []).filter(
+                  (s: any) =>
+                    s.employmentType === activeEmploymentView &&
+                    s.segment === activeSegmentView,
+                );
+                const hasAnyShifts = dayShiftsForActiveFilter.length > 0;
+                const daySlotTotal = dayShiftsForActiveFilter.reduce(
                   (sum: number, shift: any) => sum + (Number(shift.totalSlots) || 0),
                   0,
                 );
@@ -5302,7 +5314,7 @@ export default function AdminDashboard() {
     <div className="flex min-h-screen flex-col lg:flex-row bg-[#0a0a0a] text-gray-100 font-sans overflow-x-hidden">
       {/* Sidebar */}
       <aside
-        className={`bg-gray-900/40 backdrop-blur-xl border-b lg:border-b-0 lg:border-r border-gray-800 transition-all duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} w-full max-h-[46vh] lg:max-h-none relative z-50 shrink-0`}
+        className={`bg-gray-900/40 backdrop-blur-xl border-b lg:border-b-0 lg:border-r border-gray-800 transition-all duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} w-full max-h-[46vh] lg:max-h-none lg:h-screen relative z-50 shrink-0`}
       >
         <button
           onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
