@@ -48,7 +48,7 @@ import {
   ArrowUp,
   ArrowDown,
 } from "lucide-react";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   CSR,
@@ -1816,7 +1816,11 @@ export default function AdminDashboard() {
         "Password Reset Link",
         `Sent password setup link to CSR ${user.name} (${user.email})`,
       );
-      alert(response.data?.message || `${user.email || user.name} хэрэглэгчийн и-мэйл рүү нууц үг тохируулах холбоос илгээгдлээ.`);
+      if (response.data?.setupUrl) {
+        setSetupLinkToShare({ name: user.name, email: user.email || "", url: response.data.setupUrl });
+      } else {
+        alert(response.data?.message || `${user.email || user.name} хэрэглэгчийн и-мэйл рүү нууц үг тохируулах холбоос илгээгдлээ.`);
+      }
       await fetchCsrUsers();
     } catch (error: any) {
       console.error("Error resetting CSR password:", error);
@@ -1980,6 +1984,7 @@ export default function AdminDashboard() {
   };
 
   const [isAddingUser, setIsAddingUser] = useState(false);
+  const [setupLinkToShare, setSetupLinkToShare] = useState<{ name: string; email: string; url: string } | null>(null);
   const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
@@ -2062,7 +2067,11 @@ export default function AdminDashboard() {
           "https://api.dicebear.com/7.x/avataaars/svg?seed=" + Math.random(),
       });
       logAction("Employee Added", `Added employee: ${newUser.name}`);
-      alert(response.data?.message || `CSR амжилттай нэмэгдэж, ${newUser.email} хаяг руу нууц үг тохируулах холбоос илгээгдлээ.`);
+      if (response.data?.setupUrl) {
+        setSetupLinkToShare({ name: newUser.name, email: newUser.email, url: response.data.setupUrl });
+      } else {
+        alert(response.data?.message || `CSR амжилттай нэмэгдэж, ${newUser.email} хаяг руу нууц үг тохируулах холбоос илгээгдлээ.`);
+      }
       await fetchCsrUsers();
     } catch (error: any) {
       console.error("Error adding CSR user:", error);
@@ -3925,61 +3934,138 @@ export default function AdminDashboard() {
     };
 
     const handleExportScheduleReport = () => {
-      const scheduleRows: any[] = [];
-      const bookedUserIds = new Set<string>();
+      const validDates = monthDates.filter((d): d is Date => Boolean(d));
+      const csrById = new Map(csrs.map((c) => [c.id, c]));
+      const holidayDateSet = new Set(holidays.map((h: any) => h.date));
 
-      monthDates.forEach((date) => {
-        if (!date) return;
+      // bookingsByUser: userId -> dateKey -> { time, isRest }
+      const bookingsByUser = new Map<string, Map<string, { time: string; isRest: boolean }>>();
+
+      validDates.forEach((date) => {
         const dateKey = formatDateKey(date);
         const daySchedule = schedules[dateKey];
-        if (daySchedule && daySchedule.shifts.length > 0) {
-          daySchedule.shifts.forEach((shift: any) => {
-            if (shift.bookedBy && shift.bookedBy.length > 0) {
-              shift.bookedBy.forEach((booking: any) => {
-                bookedUserIds.add(booking.userId);
-                scheduleRows.push({
-                  Огноо: dateKey,
-                  Гараг: date.toLocaleDateString("mn-MN", { weekday: "long" }),
-                  "Ээлжийн цаг": normalizeShiftTime(shift.time),
-                  Сегмент: shift.segment,
-                  Төрөл: shift.employmentType || "Full Time",
-                  "Ажилтан код": booking.userCode || "---",
-                  "Ажилтан нэр": booking.userName,
-                  "Захиалсан огноо": new Date(
-                    booking.bookedAt,
-                  ).toLocaleString(),
-                });
-              });
+        if (!daySchedule?.shifts?.length) return;
+        daySchedule.shifts.forEach((shift: any) => {
+          if (!shift.bookedBy?.length) return;
+          shift.bookedBy.forEach((booking: any) => {
+            if (!bookingsByUser.has(booking.userId)) {
+              bookingsByUser.set(booking.userId, new Map());
             }
+            bookingsByUser.get(booking.userId)!.set(dateKey, {
+              time: shift.time,
+              isRest: Boolean(shift.isRest),
+            });
+          });
+        });
+      });
+
+      // Only employees who have at least one booking this month, grouped by
+      // supervisor then sorted by name within each group (matches the
+      // reference report layout).
+      const reportRows = Array.from(bookingsByUser.keys())
+        .map((userId) => csrById.get(userId))
+        .filter((csr): csr is CSR => Boolean(csr))
+        .sort((a, b) => {
+          const bySupervisor = String(a.supervisorName || "").localeCompare(String(b.supervisorName || ""));
+          if (bySupervisor !== 0) return bySupervisor;
+          return String(a.name || "").localeCompare(String(b.name || ""));
+        });
+
+      if (reportRows.length === 0) {
+        alert("Энэ сард захиалсан ажилтан алга байна.");
+        return;
+      }
+
+      // Header row: №, SV, Nice user, then one date label per pair of columns
+      // (shift time + hours worked), matching the reference report exactly.
+      const headerRow: any[] = ["№", "SV", "Nice user"];
+      validDates.forEach((date) => {
+        headerRow.push(`${date.getDate()}-${ENG_MONTHS[date.getMonth()].charAt(0)}${ENG_MONTHS[date.getMonth()].slice(1).toLowerCase()}`, "");
+      });
+
+      const aoa: any[][] = [headerRow];
+
+      reportRows.forEach((csr, index) => {
+        const row: any[] = [
+          index + 1,
+          csr.supervisorName || "",
+          (csr.email || "").split("@")[0] || csr.name,
+        ];
+        validDates.forEach((date) => {
+          const dateKey = formatDateKey(date);
+          const info = bookingsByUser.get(csr.id)?.get(dateKey);
+          if (!info) {
+            row.push("", "");
+            return;
+          }
+          if (info.isRest) {
+            row.push("a", 0);
+            return;
+          }
+          const normalized = normalizeShiftTime(String(info.time || ""));
+          const [startHourStr, endHourStr] = normalized.split("-");
+          const startHour = Number(startHourStr);
+          const endHour = Number(endHourStr);
+          let hours = endHour - startHour;
+          if (Number.isFinite(hours) && hours < 0) hours += 24;
+          row.push(`${startHourStr}--${endHourStr}`, Number.isFinite(hours) ? hours : "");
+        });
+        aoa.push(row);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+      // Merge each date's header cell across its 2 sub-columns (shift + hours).
+      const merges: any[] = [];
+      validDates.forEach((_date, i) => {
+        const col = 3 + i * 2;
+        merges.push({ s: { r: 0, c: col }, e: { r: 0, c: col + 1 } });
+      });
+      ws["!merges"] = merges;
+
+      // Highlight weekend days AND registered holidays in yellow, across the
+      // header and every data row, for that date's 2 sub-columns.
+      const headerStyle = { font: { bold: true }, alignment: { horizontal: "center" } };
+      for (let c = 0; c < headerRow.length; c++) {
+        const ref = XLSX.utils.encode_cell({ r: 0, c });
+        if (ws[ref]) ws[ref].s = { ...(ws[ref].s || {}), ...headerStyle };
+      }
+
+      validDates.forEach((date, i) => {
+        const dateKey = formatDateKey(date);
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+        const isHoliday = holidayDateSet.has(dateKey);
+        if (!isWeekend && !isHoliday) return;
+
+        const col = 3 + i * 2;
+        for (let r = 0; r <= reportRows.length; r++) {
+          [col, col + 1].forEach((c) => {
+            const ref = XLSX.utils.encode_cell({ r, c });
+            if (!ws[ref]) ws[ref] = { t: "s", v: "" };
+            ws[ref].s = {
+              ...(ws[ref].s || {}),
+              fill: { fgColor: { rgb: "FFFF00" } },
+            };
           });
         }
       });
 
-      const unbookedCSRs = csrs
-        .filter((csr) => csr.role === "csr" && !bookedUserIds.has(csr.id))
-        .map((csr) => ({
-          Код: csr.code,
-          Нэр: csr.name,
-          Имэйл: csr.email,
-          Сегмент: csr.lineType,
-          Төлөв: "Захиалаагүй",
-        }));
+      ws["!cols"] = [
+        { wch: 4 },
+        { wch: 16 },
+        { wch: 20 },
+        ...validDates.flatMap(() => [{ wch: 9 }, { wch: 5 }]),
+      ];
 
       const wb = XLSX.utils.book_new();
-
-      const wsSchedule = XLSX.utils.json_to_sheet(scheduleRows);
-      XLSX.utils.book_append_sheet(wb, wsSchedule, "Хуваарь");
-
-      const wsUnbooked = XLSX.utils.json_to_sheet(unbookedCSRs);
-      XLSX.utils.book_append_sheet(wb, wsUnbooked, "Захиалаагүй ажилтнууд");
-
+      XLSX.utils.book_append_sheet(wb, ws, "Хуваарь");
       XLSX.writeFile(
         wb,
         `Schedule_Report_${monthNames[selectedMonthCalendar]}_${selectedYearCalendar}.xlsx`,
       );
       logAction(
         "Export Schedule Report",
-        `Exported full report for ${monthNames[selectedMonthCalendar]}`,
+        `Exported booked schedule report for ${monthNames[selectedMonthCalendar]}`,
       );
     };
 
@@ -7858,6 +7944,50 @@ export default function AdminDashboard() {
             </div>
           )}
         </AnimatePresence>
+
+        {setupLinkToShare && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div
+              onClick={() => setSetupLinkToShare(null)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <div className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <h2 className="text-xl font-black text-white mb-2">
+                Нууц үг тохируулах холбоос
+              </h2>
+              <p className="text-sm text-gray-400 mb-4">
+                И-мэйл автоматаар илгээгдэхгүй тохиргоотой байна. Доорх холбоосыг хуулж, <strong className="text-white">{setupLinkToShare.name}</strong>
+                {setupLinkToShare.email ? ` (${setupLinkToShare.email})` : ""} хэрэглэгчид Viber/чат зэргээр гараар илгээнэ үү.
+              </p>
+              <div className="bg-black/40 border border-gray-800 rounded-2xl p-4 mb-4">
+                <p className="text-xs text-blue-300 break-all font-mono select-all">
+                  {setupLinkToShare.url}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(setupLinkToShare.url);
+                      alert("Холбоос clipboard-т хуулагдлаа.");
+                    } catch {
+                      alert("Автоматаар хуулж чадсангүй. Дээрх текстийг гараар сонгож хуулна уу.");
+                    }
+                  }}
+                  className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-500 transition-all"
+                >
+                  Холбоос хуулах
+                </button>
+                <button
+                  onClick={() => setSetupLinkToShare(null)}
+                  className="flex-1 py-4 bg-gray-800 text-gray-300 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-700 transition-all"
+                >
+                  Хаах
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
