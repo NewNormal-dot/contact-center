@@ -315,6 +315,7 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
       canBook: true,
       label: closeCountdown ? `Хаагдахад ${closeCountdown}` : 'Нээлттэй',
       countdown: closeCountdown,
+      closeTarget,
     };
   }
 
@@ -324,6 +325,7 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
       canBook: false,
       label: closeCountdown ? `Хаагдахад ${closeCountdown}` : 'Нээлттэй',
       countdown: closeCountdown,
+      closeTarget,
     };
   }
 
@@ -333,14 +335,15 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
       canBook: false,
       label: `Нээгдэхэд ${scheduledCountdown}`,
       countdown: scheduledCountdown,
+      closeTarget: Number.POSITIVE_INFINITY,
     };
   }
 
   if (hasExpiredWave) {
-    return { state: 'expired' as const, canBook: false, label: 'Хаагдсан', countdown: '' };
+    return { state: 'expired' as const, canBook: false, label: 'Хаагдсан', countdown: '', closeTarget: Number.POSITIVE_INFINITY };
   }
 
-  return { state: 'closed' as const, canBook: false, label: 'Хаалттай', countdown: '' };
+  return { state: 'closed' as const, canBook: false, label: 'Хаалттай', countdown: '', closeTarget: Number.POSITIVE_INFINITY };
 };
 
 const formatShiftTimeForDisplay = (timeStr?: string) => {
@@ -473,6 +476,12 @@ const DayRow = React.memo(({
   const hasData = dayData.shifts.length > 0;
   const bookingAccess = getDayBookingAccess(dayData, nowTick);
   const isBookingOpen = bookingAccess.canBook;
+  // Editing an existing booking has a stricter cutoff than making a brand
+  // new one: only allowed while there's still at least 30 minutes left
+  // before booking closes (matches the server-side rule). If there are no
+  // other open/bookable slots at all, isBookingOpen is already false, which
+  // also correctly hides the Edit option in that case.
+  const canEditBooking = isBookingOpen && (bookingAccess.closeTarget - nowTick > 30 * 60 * 1000);
   const bookingStatusText = bookingAccess.state === 'scheduled'
     ? `Захиалга ${bookingAccess.label.toLowerCase()}`
     : bookingAccess.state === 'open' || bookingAccess.state === 'full'
@@ -628,7 +637,7 @@ const DayRow = React.memo(({
                           <p className="text-xs font-bold text-white">{formatShiftTimeForDisplay(myBookedShift.time)}</p>
                         </div>
                       </div>
-                      {!isSubmitted && isBookingOpen && (
+                      {!isSubmitted && canEditBooking && (
                         <button 
                           onClick={() => onBookShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
@@ -1391,15 +1400,47 @@ export default function CsrDashboard() {
       return;
     }
 
+    // Find my existing confirmed booking on this date, if any - needed to
+    // distinguish "editing my current booking" from "trying to book a
+    // second shift the same day" (the latter stays blocked).
+    let myExistingBookingId: string | undefined;
+    let myExistingShiftId: string | undefined;
+    dayData.shifts.forEach((s) => {
+      const mine = s.bookedBy?.find((b: any) => b.userId === csrProfile.id);
+      if (mine) {
+        myExistingBookingId = mine.id;
+        myExistingShiftId = s.id;
+      }
+    });
+
     const dayAccess = getDayBookingAccess(dayData, nowTick);
-    if (!dayAccess.canBook) {
-      return;
+
+    if (myExistingBookingId && !shiftId) {
+      // "Edit" entry point: open the picker instead of blocking. Editing
+      // has its own (stricter) cutoff enforced server-side, but we also
+      // gate it here so the modal doesn't even open once booking is fully
+      // closed for new picks.
+      if (!dayAccess.canBook) {
+        alert('Энэ өдрийн захиалгыг засах боломжгүй болсон байна.');
+        return;
+      }
+      setBookingModal({ isOpen: true, dateKey });
       return;
     }
 
-    if (dayData.shifts.some(s => s.bookedBy?.some(b => b.userId === csrProfile.id))) {
-      alert('Та энэ өдөр аль хэдийн ээлж захиалсан байна.');
+    if (myExistingBookingId && shiftId === myExistingShiftId) {
+      alert('Та аль хэдийн энэ ээлжийг сонгосон байна.');
       return;
+    }
+
+    if (!myExistingBookingId) {
+      if (!dayAccess.canBook) {
+        return;
+      }
+      if (dayData.shifts.some(s => s.bookedBy?.some(b => b.userId === csrProfile.id))) {
+        alert('Та энэ өдөр аль хэдийн ээлж захиалсан байна.');
+        return;
+      }
     }
 
     if (!shiftId) {
@@ -1426,7 +1467,6 @@ export default function CsrDashboard() {
       : availableWaves[0];
 
     if (!targetWave || !isWaveCurrentlyOpen(targetWave, nowTick)) {
-      return;
       return;
     }
 
@@ -1465,9 +1505,13 @@ export default function CsrDashboard() {
       await apiClient.post('/slots/book', {
         slotId: targetShift.id,
         bookingWaveId: targetWave.id,
+        editBookingId: myExistingBookingId,
       });
       await fetchDbSchedule();
-      logAction('Shift Booked', `Booked shift on ${dateKey} / ${targetWave.name}`);
+      logAction(
+        myExistingBookingId ? 'Shift Booking Edited' : 'Shift Booked',
+        `${myExistingBookingId ? 'Edited' : 'Booked'} shift on ${dateKey} / ${targetWave.name}`,
+      );
       triggerSuccess();
     } catch (error: any) {
       console.error('Error booking shift:', error);

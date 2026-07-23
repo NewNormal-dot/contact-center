@@ -628,6 +628,16 @@ const bookHandler = async (req: any, res: any) => {
     if (slot.booking_deadline && new Date().getTime() > new Date(slot.booking_deadline).getTime()) {
       return res.status(400).json({ error: 'Захиалга хийх хугацаа дууссан байна' });
     }
+    // Editing an EXISTING confirmed booking has a stricter cutoff than making
+    // a brand new booking: edits must happen at least 30 minutes before the
+    // booking deadline, not right up to it. This gives admins a small buffer
+    // after the deadline closes before the schedule is treated as final.
+    if (editBookingId && slot.booking_deadline) {
+      const editCutoff = new Date(slot.booking_deadline).getTime() - 30 * 60 * 1000;
+      if (Date.now() > editCutoff) {
+        return res.status(400).json({ error: 'Захиалга хаагдахаас 30 минутын өмнө хүртэл л засах боломжтой' });
+      }
+    }
 
     const user = await getUser(userId);
     if (!user) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });

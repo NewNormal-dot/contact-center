@@ -12,7 +12,8 @@ function normalizeEmploymentType(value: unknown) {
 }
 
 function normalizeSegment(value: unknown) {
-  return String(value || 'All').trim() || 'All';
+  // No "All" wildcard - segments are fully separate business units.
+  return String(value || '').trim();
 }
 
 function timeToMinutes(value: string) {
@@ -143,7 +144,12 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     const sender = await db('users').where({ id: senderId }).first();
     const receiver = await db('users').where({ id: receiverIdFinal }).first();
     if (!sender || !receiver) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
-    if (normalizeSegment(sender.segment) !== normalizeSegment(receiver.segment)) {
+    const senderSegment = normalizeSegment(sender.segment);
+    const receiverSegment = normalizeSegment(receiver.segment);
+    if (!senderSegment || !receiverSegment) {
+      return res.status(400).json({ error: 'Хэрэглэгчийн segment тодорхойгүй байна' });
+    }
+    if (senderSegment !== receiverSegment) {
       return res.status(400).json({ error: 'Зөвхөн ижил segment-ийн CSR хооронд trade хийх боломжтой' });
     }
     if (normalizeEmploymentType(sender.employment_type) !== normalizeEmploymentType(receiver.employment_type)) {
