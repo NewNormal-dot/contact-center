@@ -6,6 +6,21 @@ import { toSqlDate, toSqlDateTime, toSqlTime, displayDate, displayTime } from '.
 
 const router = express.Router();
 
+// work_slots.id is a real DB `uuid` column (uniqueidentifier on Azure SQL).
+// The frontend generates a temporary client-side id (e.g. "ez737ec2z", via
+// Math.random().toString(36)) for shifts that only exist in the UI and
+// haven't been saved yet. If that temporary id is sent through unchanged, a
+// non-UUID string gets inserted into a uuid column - Azure SQL rejects this
+// with a type-conversion error, causing the whole sync-schedules request to
+// fail (sqlite doesn't enforce the column type, so this never showed up in
+// local/dev testing). This regex lets us trust a client-supplied id only
+// when it's actually a valid UUID; otherwise we mint a fresh one.
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function toValidUuidOrNew(candidate: unknown): string {
+  const value = String(candidate || '').trim();
+  return UUID_REGEX.test(value) ? value : uuidv4();
+}
+
 function displayDateTime(value: unknown) {
   if (!value) return '';
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
@@ -443,7 +458,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           }
           const bookingWindow = resolveBookingWindow(day, shift);
           incomingSlots.push({
-            id: shift.id || uuidv4(),
+            id: toValidUuidOrNew(shift.id),
             date: dateKey,
             start_time: sqlStart,
             end_time: sqlEnd,
