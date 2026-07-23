@@ -102,7 +102,7 @@ export interface HourlyLeaveRequest {
   id: string;
   csrId: string;
   csrName: string;
-  type: 'hourly' | 'daily';
+  type: 'hourly' | 'daily' | 'shift_leave';
   date: string;
   endDate?: string;
   startTime?: string;
@@ -111,6 +111,7 @@ export interface HourlyLeaveRequest {
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
   comment?: string;
+  approvedByName?: string;
 }
 
 export interface TradeRequest {

@@ -766,7 +766,7 @@ export default function AdminDashboard() {
     id: String(raw.id),
     csrId: raw.userId || raw.user_id,
     csrName: raw.userName || raw.user_name || "CSR",
-    type: raw.type === "daily" ? "daily" : "hourly",
+    type: raw.type === "daily" ? "daily" : raw.type === "shift_leave" ? "shift_leave" : "hourly",
     date: raw.date,
     endDate: raw.endDate || raw.end_date || raw.date,
     startTime: raw.startTime || raw.start_time || "",
@@ -775,6 +775,7 @@ export default function AdminDashboard() {
     status: raw.status || "pending",
     createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
     comment: raw.comment || "",
+    approvedByName: raw.approvedByName || undefined,
   });
 
   const fetchLeaveRequests = async () => {
@@ -4016,6 +4017,21 @@ export default function AdminDashboard() {
         });
       });
 
+      // Approved urgent shift-leave requests: even though the underlying
+      // booking stays 'confirmed' in the DB (the seat isn't reopened), the
+      // export should reflect that this person is actually on approved
+      // leave for that shift, with a cell comment noting when/by whom it
+      // was approved - so anyone reading the report later understands why
+      // the numbers changed from what was originally scheduled.
+      const approvedShiftLeaveByUserDate = new Map<string, { updatedAt: string; approvedByName?: string }>();
+      hourlyLeaveRequests.forEach((req) => {
+        if (req.type !== "shift_leave" || req.status !== "approved") return;
+        approvedShiftLeaveByUserDate.set(`${req.csrId}_${req.date}`, {
+          updatedAt: (req as any).updatedAt || req.createdAt,
+          approvedByName: req.approvedByName,
+        });
+      });
+
       // Only employees who have at least one booking this month, grouped by
       // supervisor then sorted by name within each group (matches the
       // reference report layout).
@@ -4041,6 +4057,8 @@ export default function AdminDashboard() {
       });
 
       const aoa: any[][] = [headerRow];
+      // cellComments: "R,C" -> comment text, applied after the sheet is built.
+      const cellComments = new Map<string, string>();
 
       reportRows.forEach((csr, index) => {
         const row: any[] = [
@@ -4051,10 +4069,33 @@ export default function AdminDashboard() {
         validDates.forEach((date) => {
           const dateKey = formatDateKey(date);
           const info = bookingsByUser.get(csr.id)?.get(dateKey);
+          const approvedLeave = approvedShiftLeaveByUserDate.get(`${csr.id}_${dateKey}`);
+
           if (!info) {
             row.push("", "");
             return;
           }
+
+          // Row/col of the first sub-column for this date, used to attach
+          // the comment once we know the sheet's row index (aoa.length,
+          // since this row hasn't been pushed yet - it will land at index
+          // aoa.length, i.e. the current length of aoa before pushing).
+          const rowIndex = aoa.length;
+          const colIndex = 3 + validDates.indexOf(date) * 2;
+
+          if (approvedLeave) {
+            const when = new Date(approvedLeave.updatedAt);
+            const whenText = Number.isNaN(when.getTime())
+              ? approvedLeave.updatedAt
+              : when.toLocaleString("mn-MN");
+            cellComments.set(
+              `${rowIndex},${colIndex}`,
+              `Яаралтай чөлөө зөвшөөрөгдсөн: ${whenText}${approvedLeave.approvedByName ? ` (${approvedLeave.approvedByName})` : ""}`,
+            );
+            row.push("чөлөө", 0);
+            return;
+          }
+
           if (info.isRest) {
             row.push("a", 0);
             return;
@@ -4071,6 +4112,13 @@ export default function AdminDashboard() {
       });
 
       const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+      cellComments.forEach((commentText, key) => {
+        const [r, c] = key.split(",").map(Number);
+        const ref = XLSX.utils.encode_cell({ r, c });
+        if (!ws[ref]) ws[ref] = { t: "s", v: "" };
+        ws[ref].c = [{ a: "Систем", t: commentText }];
+      });
 
       // Merge each date's header cell across its 2 sub-columns (shift + hours).
       const merges: any[] = [];
@@ -5462,6 +5510,10 @@ export default function AdminDashboard() {
                             <>
                               <Calendar size={12} /> Өдрийн чөлөө
                             </>
+                          ) : req.type === "shift_leave" ? (
+                            <>
+                              <span className="text-orange-400">🚨 Яаралтай чөлөө</span> · {req.startTime} - {req.endTime}
+                            </>
                           ) : (
                             <>
                               <Clock size={12} /> {req.startTime} -{" "}
@@ -5503,13 +5555,20 @@ export default function AdminDashboard() {
                             </button>
                           </div>
                         ) : (
-                          <span
-                            className={`text-[10px] font-black uppercase tracking-widest ${req.status === "approved" ? "text-green-500" : "text-red-500"}`}
-                          >
-                            {req.status === "approved"
-                              ? "Зөвшөөрсөн"
-                              : "Татгалзсан"}
-                          </span>
+                          <div className="text-right">
+                            <span
+                              className={`text-[10px] font-black uppercase tracking-widest ${req.status === "approved" ? "text-green-500" : "text-red-500"}`}
+                            >
+                              {req.status === "approved"
+                                ? "Зөвшөөрсөн"
+                                : "Татгалзсан"}
+                            </span>
+                            {req.approvedByName && (
+                              <div className="text-[9px] text-gray-500 font-bold mt-0.5">
+                                {req.approvedByName}
+                              </div>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>

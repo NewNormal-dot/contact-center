@@ -147,7 +147,8 @@ interface Shift {
   totalSlots: number;
   bookedSlots: number;
   isBookedByMe: boolean;
-  bookedBy?: { userId: string, userName: string, userCode?: string, bookedAt?: string, bookedByAdmin?: string, bookingWaveId?: string, bookingWaveName?: string }[];
+  isRest?: boolean;
+  bookedBy?: { id?: string, userId: string, userName: string, userCode?: string, bookedAt?: string, bookedByAdmin?: string, bookingWaveId?: string, bookingWaveName?: string }[];
   segment: string;
   employmentType?: string;
   bookingWaves?: BookingWave[];
@@ -1809,6 +1810,9 @@ export default function CsrDashboard() {
 
   const [isRequestingVacation, setIsRequestingVacation] = useState(false);
   const [isRequestingHourlyLeave, setIsRequestingHourlyLeave] = useState(false);
+  const [isRequestingShiftLeave, setIsRequestingShiftLeave] = useState(false);
+  const [shiftLeaveForm, setShiftLeaveForm] = useState({ slotBookingId: '', reason: '' });
+  const [isSubmittingShiftLeave, setIsSubmittingShiftLeave] = useState(false);
 
   useEffect(() => {
     if (!SHOW_VACATION_FEATURE && activeTab === 'vacation') {
@@ -1886,6 +1890,55 @@ export default function CsrDashboard() {
     endTime: '',
     reason: ''
   });
+
+  const upcomingConfirmedBookings = React.useMemo(() => {
+    if (!csrProfile) return [];
+    const results: { bookingId: string; dateKey: string; time: string; hoursAway: number }[] = [];
+    const now = Date.now();
+    Object.entries(schedule).forEach(([dateKey, dayData]: [string, DayData]) => {
+      dayData.shifts.forEach((shift) => {
+        const myBooking = shift.bookedBy?.find((b) => b.userId === csrProfile.id);
+        if (!myBooking || shift.isRest) return;
+        const [startHour] = String(shift.time || '').split('-');
+        const shiftStart = new Date(`${dateKey}T${String(startHour || '00').padStart(2, '0')}:00:00`);
+        const hoursAway = (shiftStart.getTime() - now) / (1000 * 60 * 60);
+        if (hoursAway <= 0) return;
+        results.push({ bookingId: myBooking.id, dateKey, time: shift.time, hoursAway });
+      });
+    });
+    return results.sort((a, b) => a.hoursAway - b.hoursAway);
+  }, [schedule, csrProfile]);
+
+  const handleRequestShiftLeave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shiftLeaveForm.slotBookingId) {
+      alert('Ээлжээ сонгоно уу.');
+      return;
+    }
+    if (!shiftLeaveForm.reason.trim()) {
+      alert('Шалтгаанаа оруулна уу.');
+      return;
+    }
+    setIsSubmittingShiftLeave(true);
+    try {
+      await apiClient.post('/requests/leave', {
+        slotBookingId: shiftLeaveForm.slotBookingId,
+        reason: shiftLeaveForm.reason,
+      });
+      const refreshed = await apiClient.get('/requests/leave');
+      setHourlyLeaveRequests(refreshed.data || []);
+      logAction('Shift Leave Requested', `Requested urgent leave for booking ${shiftLeaveForm.slotBookingId}`);
+      setIsRequestingShiftLeave(false);
+      setShiftLeaveForm({ slotBookingId: '', reason: '' });
+      triggerSuccess();
+    } catch (error: any) {
+      console.error('Error requesting shift leave:', error);
+      alert(error.response?.data?.error || 'Чөлөөний хүсэлт илгээхэд алдаа гарлаа.');
+    } finally {
+      setIsSubmittingShiftLeave(false);
+    }
+  };
+
 
   const handleRequestHourlyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2215,6 +2268,10 @@ export default function CsrDashboard() {
                         <>
                           <Calendar size={12} /> {req.date} {req.endDate && req.endDate !== req.date ? `- ${req.endDate}` : ''}
                         </>
+                      ) : req.type === 'shift_leave' ? (
+                        <>
+                          <span className="text-orange-400">🚨 Яаралтай чөлөө</span> · {req.startTime} - {req.endTime}
+                        </>
                       ) : (
                         <>
                           <Clock size={12} /> {req.startTime} - {req.endTime}
@@ -2222,6 +2279,11 @@ export default function CsrDashboard() {
                       )}
                     </p>
                     <p className="text-[10px] text-gray-600 italic">"{req.reason}"</p>
+                    {(req as any).approvedByName && (
+                      <p className="text-[10px] text-gray-500 font-bold">
+                        {req.status === 'approved' ? 'Зөвшөөрсөн' : 'Шийдвэрлэсэн'}: {(req as any).approvedByName}
+                      </p>
+                    )}
                   </div>
                 </div>
               ))
