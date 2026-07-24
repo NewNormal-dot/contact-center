@@ -4576,12 +4576,22 @@ export default function AdminDashboard() {
 
               const updateSelectedDayLimit = (count: number) => {
                 const nextSelectedDays = Math.max(0, Math.min(selectedKeys.length, Number(count) || 0));
-                const nextHourCounts = clampRuleHourCounts(activeWeeklyRule.hourCounts || {}, nextSelectedDays);
+                // SIMPLIFIED MODE (per admin request): only cap the TOTAL
+                // number of selectable days per week. hourCounts is
+                // intentionally kept EMPTY here - the backend's
+                // validateUserWeeklyLimit only enforces the per-shift-duration
+                // breakdown when hourCounts has entries, so leaving it empty
+                // means a CSR can pick ANY N days out of the week (whichever
+                // ones they don't pick effectively become their days off),
+                // without restricting which specific shift-durations those
+                // days must be. The old per-duration UI/logic below is kept
+                // in place (not deleted) in case this granularity is needed
+                // again later - just not rendered for now.
                 updateActiveWeeklyRule({
                   selectedDays: nextSelectedDays,
-                  hourCounts: nextHourCounts,
-                  restDays: Number(nextHourCounts.rest) || 0,
-                  totalHours: calculateRuleHourTotal(nextHourCounts),
+                  hourCounts: {},
+                  restDays: 0,
+                  totalHours: 0,
                 });
               };
 
@@ -4860,12 +4870,14 @@ export default function AdminDashboard() {
                           
                         </div>
                         <div className="text-right text-[10px] font-black uppercase tracking-widest text-gray-500">
-                          Нийт: <span className="text-white">{activeRuleTotalSelected}</span> өдөр · <span className="text-blue-300">{activeRuleHourTotal}</span> цаг
+                          Нийт сонгох боломжтой: <span className="text-white">{activeRuleTotalSelected}</span> өдөр / {selectedKeys.length} өдөр
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      <div className="grid grid-cols-1 gap-3">
                         <label className="flex min-w-0 flex-col gap-1">
-                          <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">Нийт сонгох боломжтой</span>
+                          <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">
+                            Нийт сонгох боломжтой (7 хоногоос хамгийн ихдээ)
+                          </span>
                           <input
                             type="number"
                             min={0}
@@ -4874,8 +4886,23 @@ export default function AdminDashboard() {
                             onChange={(e) => updateSelectedDayLimit(Number(e.target.value))}
                             className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
                           />
+                          <span className="text-[9px] text-gray-500">
+                            Жишээ нь: 7 хоногийн хуваарьт 4 гэж тохируулбал, CSR энэ 7 өдрөөс хамгийн ихдээ 4 өдөр сонгож захиалах эрхтэй болно (үлдсэн өдрүүд амралт болно).
+                          </span>
                         </label>
-                        {selectedRuleShiftHours.map((hourKey) => (
+                        {/*
+                          SKIPPED FOR NOW (per admin request, 2026-07): the
+                          per-shift-duration breakdown inputs (e.g. "8 цагтай
+                          /1", "5 цагтай /1") were confusing/felt broken in
+                          practice. Simplified to just ONE limit: total days
+                          selectable per week (see updateSelectedDayLimit,
+                          which now always saves hourCounts as {} so the
+                          backend's per-duration check never triggers).
+                          To bring this granular per-duration limit feature
+                          back later, remove this comment block and the
+                          `false &&` guard below.
+                        */}
+                        {false && selectedRuleShiftHours.map((hourKey) => (
                           <label key={hourKey} className="flex min-w-0 flex-col gap-1">
                             <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">
                               {hourKey === "rest" ? "Амралт" : `${hourKey} цагтай`}
@@ -5357,16 +5384,16 @@ export default function AdminDashboard() {
           </motion.div>
 
           {isManagingFontHours && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-2 sm:p-4">
               <div
                 onClick={() => !isSavingFontHours && setIsManagingFontHours(false)}
                 className="absolute inset-0 bg-black/80 backdrop-blur-sm"
               />
-              <div className="relative w-full max-w-2xl max-h-[85vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
-                <h2 className="text-xl font-black text-white mb-1">
+              <div className="relative w-full max-w-2xl max-h-[90vh] sm:max-h-[85vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
+                <h2 className="text-lg sm:text-xl font-black text-white mb-1">
                   Сарын фонт цаг — {monthNames[selectedMonthCalendar]} {selectedYearCalendar}
                 </h2>
-                <p className="text-sm text-gray-400 mb-6">
+                <p className="text-xs sm:text-sm text-gray-400 mb-4 sm:mb-6">
                   Segment бүрийн Full Time болон Part Time ажилтны сард ажиллах ёстой нийт цагийг тохируулна. Ажилтан энэ цагийн дагуу л slot захиалах эрхтэй болно (илүү ч биш, дутуу ч биш).
                 </p>
 
@@ -5378,7 +5405,7 @@ export default function AdminDashboard() {
                 </button>
 
                 <div className="space-y-3">
-                  <div className="grid grid-cols-[1fr_100px_100px] gap-3 px-3 text-[9px] font-black uppercase tracking-widest text-gray-500">
+                  <div className="hidden sm:grid grid-cols-[1fr_100px_100px] gap-3 px-3 text-[9px] font-black uppercase tracking-widest text-gray-500">
                     <span>Segment</span>
                     <span className="text-center">Full Time</span>
                     <span className="text-center">Part Time</span>
@@ -5391,13 +5418,17 @@ export default function AdminDashboard() {
                   {segments.map((segment) => (
                     <div
                       key={segment}
-                      className="grid grid-cols-[1fr_100px_100px] gap-3 items-center bg-black/30 rounded-2xl px-3 py-2"
+                      className="grid grid-cols-2 sm:grid-cols-[1fr_100px_100px] gap-2 sm:gap-3 items-center bg-black/30 rounded-2xl px-3 py-2"
                     >
-                      <span className="text-sm font-bold text-white truncate">{segment}</span>
+                      <span className="col-span-2 sm:col-span-1 text-sm font-bold text-white truncate">{segment}</span>
                       {(["Full Time", "Part Time"] as const).map((employmentType) => {
                         const key = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType);
                         return (
-                          <input
+                          <div key={employmentType} className="sm:contents">
+                            <span className="sm:hidden text-[9px] font-black uppercase tracking-widest text-gray-500 block mb-1">
+                              {employmentType}
+                            </span>
+                            <input
                             key={employmentType}
                             type="number"
                             min={0}
@@ -5410,6 +5441,7 @@ export default function AdminDashboard() {
                             }
                             className="h-9 w-full rounded-xl bg-gray-800 border border-gray-700 text-center text-sm font-black text-white outline-none focus:border-blue-500"
                           />
+                          </div>
                         );
                       })}
                     </div>
@@ -5956,7 +5988,7 @@ export default function AdminDashboard() {
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl"
+                className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl"
               >
                 <button
                   onClick={() => setIsChangingPassword(false)}
@@ -6218,7 +6250,7 @@ export default function AdminDashboard() {
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="relative w-full max-w-3xl bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                className="relative w-full max-w-3xl bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
               >
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-3xl font-black text-white">
@@ -6528,7 +6560,7 @@ export default function AdminDashboard() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="relative w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl flex flex-col max-h-[80vh]"
+                className="relative w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl flex flex-col max-h-[80vh]"
               >
                 <div className="flex items-center justify-between mb-3">
                   <div>
@@ -6723,7 +6755,7 @@ export default function AdminDashboard() {
                   if (e.key === "ArrowUp" || e.key === "ArrowDown")
                     e.preventDefault();
                 }}
-                className="relative w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto overscroll-contain custom-scrollbar bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl"
+                className="relative w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto overscroll-contain custom-scrollbar bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl"
               >
                 <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
                   <BookOpen size={120} className="text-blue-500" />
@@ -6876,7 +6908,7 @@ export default function AdminDashboard() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="relative max-h-[88vh] w-full max-w-lg overflow-y-auto bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl"
+                className="relative max-h-[88vh] w-full max-w-lg overflow-y-auto bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl"
               >
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-2xl font-black text-white">
@@ -7296,7 +7328,7 @@ export default function AdminDashboard() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="relative max-h-[88vh] w-full max-w-lg overflow-y-auto bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl"
+                className="relative max-h-[88vh] w-full max-w-lg overflow-y-auto bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl"
               >
                 <h2 className="text-2xl font-black text-white mb-6">
                   Ажилтан засах
@@ -7462,7 +7494,7 @@ export default function AdminDashboard() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl"
+                className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl"
               >
                 <h2 className="text-2xl font-black text-white mb-6">
                   Сегмент нэмэх
@@ -8144,7 +8176,7 @@ export default function AdminDashboard() {
               onClick={() => setSetupLinkToShare(null)}
               className="absolute inset-0 bg-black/80 backdrop-blur-sm"
             />
-            <div className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+            <div className="relative w-full max-w-lg bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
               <h2 className="text-xl font-black text-white mb-2">
                 Нууц үг тохируулах холбоос
               </h2>
