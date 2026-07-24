@@ -3132,6 +3132,7 @@ export default function AdminDashboard() {
                       <input
                         type="number"
                         value={quota}
+                        onFocus={(e) => e.target.select()}
                         onChange={(e) =>
                           handleUpdateQuota(
                             index,
@@ -4612,6 +4613,12 @@ export default function AdminDashboard() {
               };
 
               const handleBulkShiftCreate = () => {
+                if (activeMonthlyFontHours <= 0) {
+                  alert(
+                    `Эхлээд "Сарын фонт цаг" тохируулна уу (${activeSegmentView} / ${activeEmploymentView} / ${monthNames[selectedMonthCalendar]}). Фонт цаг тохируулаагүй үед shift slot оруулах боломжгүй.`,
+                  );
+                  return;
+                }
                 const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
                 if (targetDateKeys.length === 0) {
                   alert("Shift оруулах ирээдүй эсвэл өнөөдрийн өдөр сонгоно уу.");
@@ -4640,6 +4647,12 @@ export default function AdminDashboard() {
               };
 
               const addShiftFromTemplateToSelection = (templateTime: string) => {
+                if (activeMonthlyFontHours <= 0) {
+                  alert(
+                    `Эхлээд "Сарын фонт цаг" тохируулна уу (${activeSegmentView} / ${activeEmploymentView} / ${monthNames[selectedMonthCalendar]}). Фонт цаг тохируулаагүй үед shift slot оруулах боломжгүй.`,
+                  );
+                  return;
+                }
                 const normalizedTime = normalizeShiftTime(templateTime);
                 const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
 
@@ -4854,13 +4867,20 @@ export default function AdminDashboard() {
                       <button
                         type="button"
                         onClick={() => setIsShiftTemplatePickerOpen(true)}
-                        disabled={!canEditSelection}
+                        disabled={!canEditSelection || activeMonthlyFontHours <= 0}
+                        title={activeMonthlyFontHours <= 0 ? 'Эхлээд "Сарын фонт цаг" тохируулна уу' : undefined}
                         className="shrink-0 rounded-2xl bg-blue-600 px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white shadow-lg shadow-blue-500/20 transition-all hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-gray-800 disabled:text-gray-600 disabled:shadow-none"
                       >
                         Shift оруулах
                       </button>
                     </div>
                   </div>
+
+                  {activeMonthlyFontHours <= 0 && (
+                    <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-yellow-300">
+                      Эхлээд "Сарын фонт цаг" тохируулна уу ({activeSegmentView} / {activeEmploymentView} / {monthNames[selectedMonthCalendar]}) — фонт цаг тохируулаагүй үед shift slot оруулах боломжгүй.
+                    </div>
+                  )}
 
                   {selectedKeys.length > 0 && selectedDaysHaveShifts && (
                     <div className="rounded-[1.45rem] border border-blue-500/15 bg-blue-500/5 p-4">
@@ -4883,6 +4903,7 @@ export default function AdminDashboard() {
                             min={0}
                             max={selectedKeys.length}
                             value={activeRuleTotalSelected}
+                            onFocus={(e) => e.target.select()}
                             onChange={(e) => updateSelectedDayLimit(Number(e.target.value))}
                             className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
                           />
@@ -4913,6 +4934,7 @@ export default function AdminDashboard() {
                               min={0}
                               max={Number(selectedRuleShiftAvailability[hourKey]) || 0}
                               value={Number(visibleRuleHourCounts[hourKey] || 0)}
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) => updateDynamicWeeklyRule(hourKey, Number(e.target.value))}
                               className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
                             />
@@ -5316,6 +5338,7 @@ export default function AdminDashboard() {
                                         min={0}
                                         value={Number(wave.slotLimit) || 0}
                                         onClick={(event) => event.stopPropagation()}
+                                        onFocus={(e) => e.target.select()}
                                         onChange={(event) =>
                                           updateShiftWaveSlotsForSelection(
                                             shift,
@@ -5433,6 +5456,7 @@ export default function AdminDashboard() {
                             type="number"
                             min={0}
                             value={fontHoursDraft[key] ?? 0}
+                            onFocus={(e) => e.target.select()}
                             onChange={(e) =>
                               setFontHoursDraft((prev) => ({
                                 ...prev,
@@ -7811,6 +7835,7 @@ export default function AdminDashboard() {
                         type="number"
                         min={1}
                         value={editingShiftData.totalSlots}
+                        onFocus={(e) => e.target.select()}
                         onChange={(e) => {
                           const nextTotal = Math.max(
                             1,
@@ -7912,6 +7937,7 @@ export default function AdminDashboard() {
                           type="number"
                           min={0}
                           value={wave.slotLimit}
+                          onFocus={(e) => e.target.select()}
                           onChange={(event) => {
                             const waves = [
                               ...(editingShiftData.bookingWaves?.length
