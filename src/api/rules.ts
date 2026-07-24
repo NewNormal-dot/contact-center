@@ -21,7 +21,13 @@ const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
 };
 
 function makeSegmentTypeKey(segment: string, employmentType: string) {
-  return `${segment || 'All'}|${employmentType || 'Full Time'}`;
+  // No internal "All" fallback - a missing segment here means the caller
+  // failed to validate/filter it out upstream. Previously this silently
+  // defaulted to "All", which could make a rule invisible in the
+  // segment-filtered admin UI (same class of bug fixed elsewhere for
+  // slots/schedules). Callers are responsible for skipping/rejecting
+  // empty segments before reaching this function.
+  return `${segment}|${employmentType || 'Full Time'}`;
 }
 
 function makeMonthlyFontHourKey(monthKey: string, segment: string, employmentType: string) {
@@ -29,7 +35,7 @@ function makeMonthlyFontHourKey(monthKey: string, segment: string, employmentTyp
 }
 
 function makeRuleId(ruleType: string, monthKey: string | null, segment: string, employmentType: string) {
-  return [ruleType, monthKey || 'ALL_MONTHS', segment || 'All', employmentType || 'Full Time']
+  return [ruleType, monthKey || 'ALL_MONTHS', segment, employmentType || 'Full Time']
     .map((part) => String(part).trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]/g, '_'))
     .join('__')
     .slice(0, 191);
@@ -124,6 +130,17 @@ router.get('/', authenticate, async (_req, res) => {
     rows.forEach((row: any) => {
       const segment = normalizeSegment(row.segment);
       const employmentType = normalizeEmploymentType(row.employment_type);
+
+      // Legacy/malformed rows with no real segment recorded are skipped
+      // rather than folded into a fake "All" bucket - that would make them
+      // invisible in the segment-filtered admin UI while still technically
+      // existing, which is confusing and was the exact bug this whole
+      // "no All wildcard" fix was meant to close.
+      if (!segment) {
+        console.warn('Skipping shift_rule_settings row with missing segment:', { id: row.id, rule_type: row.rule_type });
+        return;
+      }
+
       const value = parseRuleValue(row);
 
       if (row.rule_type === 'monthly_font_hours' && row.month_key) {

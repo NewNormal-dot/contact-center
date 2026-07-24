@@ -91,9 +91,29 @@ router.get('/leave', authenticate, async (req: any, res) => {
   const { role, id } = req.user;
   try {
     let query = db('leave_requests')
-      .join('users', 'leave_requests.user_id', '=', 'users.id')
+      .leftJoin('users', 'leave_requests.user_id', '=', 'users.id')
       .leftJoin('users as approvers', 'leave_requests.approved_by', '=', 'approvers.id')
-      .select('leave_requests.*', 'users.name as user_name', 'approvers.name as approver_name');
+      .select(
+        'leave_requests.id',
+        'leave_requests.user_id',
+        'leave_requests.date',
+        'leave_requests.end_date',
+        'leave_requests.start_time',
+        'leave_requests.end_time',
+        'leave_requests.reason',
+        'leave_requests.status',
+        'leave_requests.approved_by',
+        'leave_requests.created_at',
+        'leave_requests.updated_at',
+        'leave_requests.type',
+        'leave_requests.comment',
+        'leave_requests.slot_booking_id',
+        // Prefer the live users table, falling back to the snapshot stored
+        // on the request itself if the user account was deleted - keeps
+        // historical leave records meaningful after account removal.
+        db.raw('COALESCE(users.name, leave_requests.user_name) as user_name'),
+        'approvers.name as approver_name',
+      );
 
     if (role === 'csr') query = query.where({ 'leave_requests.user_id': id });
 
@@ -155,6 +175,7 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
       }
 
       const id = uuidv4();
+      const requestingUser = await db('users').where({ id: userId }).first();
       await db('leave_requests').insert({
         id,
         user_id: userId,
@@ -166,9 +187,13 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
         type: 'shift_leave',
         reason,
         status: 'pending',
+        // Snapshot so this record stays meaningful even if the account is
+        // later deleted (user_id becomes NULL via SET NULL FK).
+        user_name: requestingUser?.name,
+        user_code: requestingUser?.code,
       });
 
-      const user = await db('users').where({ id: userId }).first();
+      const user = requestingUser;
       await createNotificationForAdmins({
         title: 'Яаралтай чөлөөний хүсэлт',
         content: `${user?.name || 'CSR'} нь ${displayDate(booking.slot_date)} өдрийн ${displayTime(booking.slot_start_time)}-${displayTime(booking.slot_end_time)} ээлжинд яаралтай чөлөө хүссэн байна. Шалтгаан: ${reason}`,
@@ -197,6 +222,7 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
 
   try {
     const id = uuidv4();
+    const requestingUser = await db('users').where({ id: userId }).first();
 
     await db('leave_requests').insert({
       id,
@@ -208,9 +234,11 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
       type: leaveType,
       reason,
       status: 'pending',
+      user_name: requestingUser?.name,
+      user_code: requestingUser?.code,
     });
 
-    const user = await db('users').where({ id: userId }).first();
+    const user = requestingUser;
 
     await createNotificationForAdmins({
       title: 'Шинэ чөлөөний хүсэлт',

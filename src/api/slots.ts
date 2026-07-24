@@ -280,10 +280,14 @@ router.get('/bookings', authenticate, async (req: any, res) => {
   try {
     let query = db('slot_bookings')
       .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
-      .join('users', 'slot_bookings.user_id', '=', 'users.id')
+      .leftJoin('users', 'slot_bookings.user_id', '=', 'users.id')
       .where('slot_bookings.status', 'confirmed')
       .select(
-        'slot_bookings.*',
+        'slot_bookings.id',
+        'slot_bookings.slot_id',
+        'slot_bookings.user_id',
+        'slot_bookings.booked_at',
+        'slot_bookings.status',
         'work_slots.date',
         'work_slots.start_time',
         'work_slots.end_time',
@@ -295,9 +299,12 @@ router.get('/bookings', authenticate, async (req: any, res) => {
         'work_slots.segment',
         'work_slots.employment_type',
         'work_slots.is_rest',
-        'users.name as user_name',
+        // Prefer the live users table, falling back to the snapshot stored
+        // on the booking itself if the user account was deleted - keeps
+        // historical schedule records meaningful after account removal.
+        db.raw('COALESCE(users.name, slot_bookings.user_name) as user_name'),
         'users.email as user_email',
-        'users.code as user_code',
+        db.raw('COALESCE(users.code, slot_bookings.user_code) as user_code'),
       );
 
     if (req.user.role === 'csr') query = query.where('slot_bookings.user_id', req.user.id);
@@ -336,7 +343,7 @@ router.get('/', authenticate, async (_req, res) => {
     const slotIds = slots.map((s: any) => s.id);
     const allBookings = slotIds.length
       ? await db('slot_bookings')
-          .join('users', 'slot_bookings.user_id', '=', 'users.id')
+          .leftJoin('users', 'slot_bookings.user_id', '=', 'users.id')
           .whereIn('slot_bookings.slot_id', slotIds)
           .where('slot_bookings.status', 'confirmed')
           .select(
@@ -344,9 +351,12 @@ router.get('/', authenticate, async (_req, res) => {
             'slot_bookings.slot_id',
             'slot_bookings.user_id',
             'slot_bookings.booked_at',
-            'users.name as user_name',
+            // Prefer the live users table (covers name changes etc for
+            // still-active accounts), falling back to the snapshot stored
+            // on the booking itself if the user account was deleted.
+            db.raw('COALESCE(users.name, slot_bookings.user_name) as user_name'),
             'users.email as user_email',
-            'users.code as user_code',
+            db.raw('COALESCE(users.code, slot_bookings.user_code) as user_code'),
             'users.segment as user_segment',
             'users.employment_type as user_employment_type',
           )
@@ -702,7 +712,18 @@ const bookHandler = async (req: any, res: any) => {
       }
 
       const id = uuidv4();
-      await trx('slot_bookings').insert({ id, slot_id, user_id: userId, status: 'confirmed' });
+      await trx('slot_bookings').insert({
+        id,
+        slot_id,
+        user_id: userId,
+        status: 'confirmed',
+        // Snapshot the user's name/code at booking time. If the user
+        // account is later deleted, user_id becomes NULL (SET NULL FK) but
+        // this row - and these identifying fields - remain, so historical
+        // schedule reports stay meaningful.
+        user_name: user.name,
+        user_code: user.code,
+      });
       return { id, created: true };
     });
 
