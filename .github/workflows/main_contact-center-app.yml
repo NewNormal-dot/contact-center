@@ -78,6 +78,21 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E818FF295088428588714610EB52173C }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_3CAB9C9898834E3E8B16390FFB73AC89 }}
 
+      - name: Check and enable Always On (prevents cold-start login errors)
+        continue-on-error: true
+        run: |
+          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
+          echo "Resource group: $RG"
+          echo "--- Always On BEFORE ---"
+          az webapp config show --name contact-center-app --resource-group "$RG" --query "alwaysOn" -o tsv
+          echo "--- App Service Plan tier ---"
+          PLAN_ID=$(az webapp show --name contact-center-app --resource-group "$RG" --query "appServicePlanId" -o tsv)
+          az appservice plan show --ids "$PLAN_ID" --query "{tier:sku.tier, name:sku.name}" -o table
+          echo "--- Attempting to enable Always On ---"
+          az webapp config set --name contact-center-app --resource-group "$RG" --always-on true || echo "FAILED - likely unsupported on this tier (e.g. Free F1). See tier above."
+          echo "--- Always On AFTER ---"
+          az webapp config show --name contact-center-app --resource-group "$RG" --query "alwaysOn" -o tsv
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
