@@ -277,8 +277,26 @@ const normalizeShiftTime = (value: string) => {
   if (isRestShiftText(trimmed) || trimmed === REST_SHIFT_LABEL) return REST_SHIFT_LABEL;
   return compactShiftTimeInput(trimmed);
 };
+// Matches whole-hour shorthand like "09-18" (used by the quick shift-time
+// text input / templates) AND full HH:MM-HH:MM shifts like "10:00-16:00"
+// (used by the shift time-range picker). Previously this only matched the
+// whole-hour shorthand, so any shift with minutes was treated as entirely
+// invalid downstream - getHoursForShift() silently returned 0 hours,
+// getStartTimeValue() sorted it as if it started at 9999 (last), and
+// getShiftRuleHourKey() couldn't bucket it into the weekly shift-rule hour
+// counts at all, even though the shift itself was saved and booked/shown to
+// CSRs correctly (the backend's own time parser has always supported
+// minutes - see parseShiftTimeRange in src/api/slots.ts).
 const isValidShiftTime = (value: string) =>
-  /^(?:[01]\d|2[0-3])-(?:[01]\d|2[0-3])$/.test(value);
+  /^(?:[01]\d|2[0-3])(?::[0-5]\d)?-(?:[01]\d|2[0-3])(?::[0-5]\d)?$/.test(value);
+
+// Parses a single "HH" or "HH:MM" side of a shift-time string into minutes
+// since midnight. Returns null if the format isn't recognized.
+const parseShiftClockToMinutes = (value: string): number | null => {
+  const match = value.match(/^([01]\d|2[0-3])(?::([0-5]\d))?$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2] || "0");
+};
 const isValidShiftTemplateValue = (value: string) => {
   const normalized = normalizeShiftTime(value);
   return normalized === REST_SHIFT_LABEL || isValidShiftTime(normalized);
@@ -3593,17 +3611,23 @@ export default function AdminDashboard() {
     const normalizedTime = normalizeShiftTime(time);
     if (!isValidShiftTime(normalizedTime)) return 0;
 
-    const [start, end] = normalizedTime.split("-").map(Number);
-    let diff = end - start;
-    if (diff < 0) diff += 24;
-    return Math.round(diff * 10) / 10;
+    const [startStr, endStr] = normalizedTime.split("-");
+    const start = parseShiftClockToMinutes(startStr);
+    const end = parseShiftClockToMinutes(endStr);
+    if (start === null || end === null) return 0;
+
+    let diffMinutes = end - start;
+    if (diffMinutes <= 0) diffMinutes += 24 * 60;
+    return Math.round((diffMinutes / 60) * 10) / 10;
   };
 
   const getStartTimeValue = (time: string) => {
     if (!time || time === REST_SHIFT_LABEL) return 9999;
     const normalizedTime = normalizeShiftTime(time);
     if (isValidShiftTime(normalizedTime)) {
-      return Number(normalizedTime.slice(0, 2)) * 60;
+      const [startStr] = normalizedTime.split("-");
+      const minutes = parseShiftClockToMinutes(startStr);
+      return minutes === null ? 9999 : minutes;
     }
     return 9999;
   };

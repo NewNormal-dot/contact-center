@@ -946,7 +946,15 @@ export default function CsrDashboard() {
     (slots || []).forEach((slot: any) => {
       const dateKey = String(slot.date || '').slice(0, 10);
       if (!dateKey) return;
-      const matchesSegment = (slot.segment === 'All') || (slot.segment === csrProfile.lineType) || (csrProfile.lineType === 'VIP' && slot.segment === 'Premium');
+      // No "All" wildcard match here - segments are fully separate business
+      // units (see src/api/slots.ts, which stopped creating/accepting "All"
+      // as a segment for the same reason). A leftover/orphan slot with
+      // segment "All" from before that rule existed would otherwise be
+      // invisible in the admin's segment-filtered schedule view (since "All"
+      // never matches a specific segment there) while still being bookable
+      // by every CSR of every segment here - exactly the kind of mismatch
+      // that must not happen.
+      const matchesSegment = (slot.segment === csrProfile.lineType) || (csrProfile.lineType === 'VIP' && slot.segment === 'Premium');
       const matchesEmployment = (slot.employmentType || slot.employment_type || 'Full Time') === csrProfile.employmentType;
       if (!matchesSegment || !matchesEmployment) return;
       const time = slot.isRest || slot.is_rest ? 'Амралт' : `${String(slot.startTime || '').slice(0,5)}-${String(slot.endTime || '').slice(0,5)}`;
