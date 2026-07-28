@@ -1,6 +1,7 @@
 import express from 'express';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -155,6 +156,7 @@ router.get('/', authenticate, async (_req, res) => {
     res.json({ monthlyFontHourRules, weeklyShiftRules });
   } catch (err) {
     console.error('Get shift rules error:', err);
+    captureError('rules: Get shift rules error:', err);
     res.status(500).json({ error: 'Дүрмийн тохиргоо татахад алдаа гарлаа' });
   }
 });
@@ -173,6 +175,7 @@ router.put('/monthly-font-hours', authenticate, authorize(['admin', 'superadmin'
     res.json({ key: makeMonthlyFontHourKey(monthKey, segment, employmentType), hours });
   } catch (err) {
     console.error('Save monthly font hours error:', err);
+    captureError('rules: Save monthly font hours error:', err);
     res.status(500).json({ error: 'Сарын фонт цаг хадгалахад алдаа гарлаа' });
   }
 });
@@ -188,6 +191,7 @@ router.put('/weekly-shift-rules', authenticate, authorize(['admin', 'superadmin'
     res.json({ key: makeSegmentTypeKey(segment, employmentType), rule });
   } catch (err) {
     console.error('Save weekly shift rule error:', err);
+    captureError('rules: Save weekly shift rule error:', err);
     res.status(500).json({ error: '7 хоногийн дүрэм хадгалахад алдаа гарлаа' });
   }
 });

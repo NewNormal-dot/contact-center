@@ -4,6 +4,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDateTime } from '../utils/sqlDate';
 import { logAction } from './audit';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -89,6 +90,7 @@ router.get('/notifications', authenticate, async (req: any, res) => {
     }
   } catch (err) {
     console.error('Get notifications error:', err);
+    captureError('broadcasts: Get notifications error:', err);
     res.status(500).json({ error: 'Мэдэгдэл татахад алдаа гарлаа' });
   }
 });
@@ -131,6 +133,7 @@ router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), 
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create notification error:', err);
+    captureError('broadcasts: Create notification error:', err);
     res.status(500).json({ error: 'Мэдэгдэл үүсгэхэд алдаа гарлаа' });
   }
 });
@@ -144,6 +147,7 @@ router.delete('/notifications/:id', authenticate, authorize(['admin', 'superadmi
     res.json({ message: 'Мэдэгдэл устгагдлаа' });
   } catch (err) {
     console.error('Delete notification error:', err);
+    captureError('broadcasts: Delete notification error:', err);
     res.status(500).json({ error: 'Мэдэгдэл устгахад алдаа гарлаа' });
   }
 });
@@ -171,6 +175,7 @@ router.post('/notifications/read', authenticate, async (req: any, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Mark notification read error:', err);
+    captureError('broadcasts: Mark notification read error:', err);
     res.status(500).json({ error: 'Мэдэгдэл уншсан болгоход алдаа гарлаа' });
   }
 });
@@ -189,6 +194,7 @@ router.get('/trainings', authenticate, async (req: any, res) => {
     res.json(trainings.map(mapTraining));
   } catch (err) {
     console.error('Get trainings error:', err);
+    captureError('broadcasts: Get trainings error:', err);
     res.status(500).json({ error: 'Сургалт татахад алдаа гарлаа' });
   }
 });
@@ -215,6 +221,7 @@ router.post('/trainings', authenticate, authorize(['admin', 'superadmin']), asyn
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create training error:', err);
+    captureError('broadcasts: Create training error:', err);
     res.status(500).json({ error: 'Сургалт үүсгэхэд алдаа гарлаа' });
   }
 });
@@ -228,6 +235,7 @@ router.delete('/trainings/:id', authenticate, authorize(['admin', 'superadmin'])
     res.json({ message: 'Сургалт устгагдлаа' });
   } catch (err) {
     console.error('Delete training error:', err);
+    captureError('broadcasts: Delete training error:', err);
     res.status(500).json({ error: 'Сургалт устгахад алдаа гарлаа' });
   }
 });
@@ -255,6 +263,7 @@ router.post('/trainings/complete', authenticate, async (req: any, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Complete training error:', err);
+    captureError('broadcasts: Complete training error:', err);
     res.status(500).json({ error: 'Сургалт дуусгахад алдаа гарлаа' });
   }
 });

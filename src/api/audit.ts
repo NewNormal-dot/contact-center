@@ -1,6 +1,7 @@
 import express from 'express';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -41,11 +42,19 @@ export async function logAction(userId: string, action: string, entityType: stri
       created_at: new Date().toISOString()
     });
 
-    const cutoff = new Date();
-    cutoff.setMonth(cutoff.getMonth() - 3);
-    await db('audit_logs').where('created_at', '<', cutoff.toISOString()).del();
+    // Previously this cleanup DELETE ran on every single logAction call
+    // (i.e. on every login, booking, edit, etc across the whole app) - an
+    // extra full-table scan/delete on the hot path of common actions like
+    // login. It only needs to run occasionally to keep the table from
+    // growing unbounded, so it's now gated to roughly 1 in 50 calls.
+    if (Math.random() < 0.02) {
+      const cutoff = new Date();
+      cutoff.setMonth(cutoff.getMonth() - 3);
+      await db('audit_logs').where('created_at', '<', cutoff.toISOString()).del();
+    }
   } catch (err) {
     console.error('Audit log error:', err);
+    captureError('audit: Audit log error:', err);
   }
 }
 

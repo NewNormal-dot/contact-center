@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '../database/db';
 import { tableExists } from '../database/schemaUtils';
 import { authenticate, authorize } from '../middleware/auth';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -89,6 +90,7 @@ router.get('/', authenticate, async (_req, res) => {
     res.json(rows.map(mapForecastRow));
   } catch (err) {
     console.error('Get forecast error:', err);
+    captureError('forecast: Get forecast error:', err);
     res.status(500).json({ error: 'Forecast дата татахад алдаа гарлаа' });
   }
 });
@@ -149,6 +151,7 @@ router.post('/upload', authenticate, authorize(['superadmin', 'admin']), async (
     });
   } catch (err) {
     console.error('Upload forecast error:', err);
+    captureError('forecast: Upload forecast error:', err);
     res.status(500).json({ error: 'Forecast дата хадгалахад алдаа гарлаа' });
   }
 });

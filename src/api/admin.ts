@@ -2,6 +2,7 @@ import express from 'express';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { getRecentErrors } from '../utils/errorLog';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -23,6 +24,7 @@ router.get('/migration-status', authenticate, authorize(['superadmin']), async (
     });
   } catch (err: any) {
     console.error('Migration status check failed:', err);
+    captureError('admin: Migration status check failed:', err);
     res.status(500).json({ error: err?.message || String(err) });
   }
 });
@@ -45,6 +47,7 @@ router.post('/run-migrations', authenticate, authorize(['superadmin']), async (r
     });
   } catch (err: any) {
     console.error('Manual migration trigger failed:', err);
+    captureError('admin: Manual migration trigger failed:', err);
     res.status(500).json({ error: err?.message || String(err) });
   }
 });

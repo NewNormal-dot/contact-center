@@ -4,6 +4,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { logAction } from './audit';
 import { displayDate, displayTime } from '../utils/sqlDate';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -124,6 +125,7 @@ router.get('/', authenticate, async (req: any, res) => {
     res.json(rows.map(mapTrade));
   } catch (err) {
     console.error('Get trades error:', err);
+    captureError('trades: Get trades error:', err);
     res.status(500).json({ error: 'Арилжааны хүсэлт татахад алдаа гарлаа' });
   }
 });
@@ -187,6 +189,7 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create trade error:', err);
+    captureError('trades: Create trade error:', err);
     res.status(500).json({ error: 'Арилжааны хүсэлт үүсгэхэд алдаа гарлаа' });
   }
 });
@@ -229,6 +232,7 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     res.json({ message: 'Амжилттай хариу илгээлээ' });
   } catch (err) {
     console.error('Respond trade error:', err);
+    captureError('trades: Respond trade error:', err);
     res.status(500).json({ error: 'Trade хүсэлтэд хариу өгөхөд алдаа гарлаа' });
   }
 });
@@ -251,6 +255,7 @@ router.patch('/:id/reject', authenticate, authorize(['admin', 'superadmin']), as
     res.json({ message: 'Арилжааны хүсэлт татгалзагдлаа' });
   } catch (err) {
     console.error('Reject trade error:', err);
+    captureError('trades: Reject trade error:', err);
     res.status(500).json({ error: 'Арилжаа татгалзахад алдаа гарлаа' });
   }
 });
@@ -325,6 +330,7 @@ router.patch('/:id/approve', authenticate, authorize(['admin', 'superadmin']), a
   } catch (err) {
     await trx.rollback();
     console.error('Approve trade error:', err);
+    captureError('trades: Approve trade error:', err);
     res.status(500).json({ error: 'Trade approve хийхэд алдаа гарлаа' });
   }
 });

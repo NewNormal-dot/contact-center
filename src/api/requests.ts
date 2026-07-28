@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlTime, toSqlDateTime, displayDate, displayTime } from '../utils/sqlDate';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -121,6 +122,7 @@ router.get('/leave', authenticate, async (req: any, res) => {
     res.json(requests.map(mapLeave));
   } catch (err) {
     console.error('Get leave requests error:', err);
+    captureError('requests: Get leave requests error:', err);
     res.status(500).json({ error: 'Чөлөөний хүсэлт татахад алдаа гарлаа' });
   }
 });
@@ -206,6 +208,7 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
       return res.status(201).json({ id });
     } catch (err) {
       console.error('Create shift leave request error:', err);
+    captureError('requests: Create shift leave request error:', err);
       return res.status(500).json({ error: 'Чөлөөний хүсэлт үүсгэхэд алдаа гарлаа' });
     }
   }
@@ -252,6 +255,7 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create leave request error:', err);
+    captureError('requests: Create leave request error:', err);
     res.status(500).json({ error: 'Чөлөөний хүсэлт үүсгэхэд алдаа гарлаа' });
   }
 });
@@ -321,6 +325,7 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
     console.error('Update leave request error:', err);
+    captureError('requests: Update leave request error:', err);
     res.status(500).json({ error: 'Хүсэлт шинэчлэхэд алдаа гарлаа' });
   }
 });
@@ -338,6 +343,7 @@ router.get('/vacation', authenticate, async (req: any, res) => {
     res.json(requests.map(mapVacation));
   } catch (err) {
     console.error('Get vacation requests error:', err);
+    captureError('requests: Get vacation requests error:', err);
     res.status(500).json({ error: 'Амралтын хүсэлт татахад алдаа гарлаа' });
   }
 });
@@ -365,6 +371,7 @@ router.post('/vacation', authenticate, authorize(['csr']), async (req: any, res)
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create vacation request error:', err);
+    captureError('requests: Create vacation request error:', err);
     res.status(500).json({ error: 'Амралтын хүсэлт үүсгэхэд алдаа гарлаа' });
   }
 });
@@ -411,6 +418,7 @@ router.patch('/vacation/:id', authenticate, authorize(['admin', 'superadmin']), 
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
     console.error('Update vacation request error:', err);
+    captureError('requests: Update vacation request error:', err);
     res.status(500).json({ error: 'Хүсэлт шинэчлэхэд алдаа гарлаа' });
   }
 });

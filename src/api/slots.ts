@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlDateTime, toSqlTime, displayDate, displayTime } from '../utils/sqlDate';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -313,6 +314,7 @@ router.get('/bookings', authenticate, async (req: any, res) => {
     res.json(bookings.map(mapBooking));
   } catch (err) {
     console.error('Get bookings error:', err);
+    captureError('slots: Get bookings error:', err);
     res.status(500).json({ error: 'Захиалгууд татахад алдаа гарлаа' });
   }
 });
@@ -328,6 +330,7 @@ router.get('/my-bookings', authenticate, async (req: any, res) => {
     res.json(bookings.map(mapBooking));
   } catch (err) {
     console.error('Get my bookings error:', err);
+    captureError('slots: Get my bookings error:', err);
     res.status(500).json({ error: 'Миний захиалга татахад алдаа гарлаа' });
   }
 });
@@ -386,6 +389,8 @@ router.get('/', authenticate, async (_req, res) => {
     res.json(enrichedSlots);
   } catch (err) {
     console.error('Get slots error:', err);
+    captureError('slots: Get slots error:', err);
+    captureError('GET /api/slots', err);
     res.status(500).json({ error: 'Слотууд татахад алдаа гарлаа' });
   }
 });
@@ -452,6 +457,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create slot error:', err);
+    captureError('slots: Create slot error:', err);
     res.status(500).json({ error: 'Слот үүсгэхэд алдаа гарлаа' });
   }
 });
@@ -576,6 +582,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
     res.json({ synced, deleted });
   } catch (err: any) {
     console.error('Sync schedules FATAL error:', err);
+    captureError('slots: Sync schedules FATAL error:', err);
     // This route already requires authenticate + authorize(['admin','superadmin']),
     // so it's safe to always surface the real error message here (not just in
     // non-production) - it helps admins self-diagnose DB issues without
@@ -598,6 +605,7 @@ router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (r
     res.json({ message: 'Слот устгагдлаа' });
   } catch (err) {
     console.error('Delete slot error:', err);
+    captureError('slots: Delete slot error:', err);
     res.status(500).json({ error: 'Слот устгахад алдаа гарлаа' });
   }
 });
@@ -616,6 +624,7 @@ router.delete('/:slotId/bookings/:userId', authenticate, authorize(['admin', 'su
     res.json({ message: 'Захиалга хасагдлаа' });
   } catch (err) {
     console.error('Remove booking error:', err);
+    captureError('slots: Remove booking error:', err);
     res.status(500).json({ error: 'Захиалга хасахад алдаа гарлаа' });
   }
 });
@@ -738,6 +747,7 @@ const bookHandler = async (req: any, res: any) => {
     res.status(201).json({ id: bookingResult.id });
   } catch (err) {
     console.error('Book slot error:', err);
+    captureError('slots: Book slot error:', err);
     res.status(500).json({ error: 'Захиалга хийхэд алдаа гарлаа' });
   }
 };
@@ -775,6 +785,7 @@ const cancelHandler = async (req: any, res: any) => {
     res.json({ message: 'Захиалга цуцлагдлаа' });
   } catch (err) {
     console.error('Cancel booking error:', err);
+    captureError('slots: Cancel booking error:', err);
     res.status(500).json({ error: 'Цуцлахад алдаа гарлаа' });
   }
 };

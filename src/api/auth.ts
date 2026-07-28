@@ -70,6 +70,7 @@ router.post('/change-password', authenticate, async (req: any, res) => {
     res.json({ message: 'Нууц үг амжилттай солигдлоо' });
   } catch (err) {
     console.error(err);
+    captureError('auth: change-password', err);
     res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
   }
 });
@@ -119,6 +120,7 @@ router.post('/setup-password', async (req, res) => {
     res.json({ message: 'Нууц үг амжилттай тохирлоо. Одоо шинэ нууц үгээрээ нэвтэрнэ үү.' });
   } catch (err) {
     console.error('Setup Password Error:', err);
+    captureError('auth: Setup Password Error:', err);
     res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
   }
 });
@@ -160,6 +162,7 @@ router.post('/forgot-password', forgotPasswordRateLimiter, async (req, res) => {
     res.json({ message: 'Хэрэв энэ и-мэйл бүртгэлтэй бол нууц үг тохируулах холбоос илгээгдэнэ.' });
   } catch (err) {
     console.error('Forgot Password Error:', err);
+    captureError('auth: Forgot Password Error:', err);
     res.status(500).json({ error: 'Нууц үг сэргээх холбоос илгээхэд алдаа гарлаа' });
   }
 });
@@ -197,6 +200,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     res.json({ token, user: formatUserForClient(user) });
   } catch (err) {
     console.error('Login Error:', err);
+    captureError('auth: Login Error:', err);
     captureError('POST /api/auth/login', err);
     res.status(500).json({ error: 'Дотоод алдаа гарлаа', details: process.env.NODE_ENV === 'production' ? undefined : (err as any)?.message });
   }
@@ -260,6 +264,7 @@ router.post('/register-initial', async (req, res) => {
     res.json({ message: 'Superadmin created successfully.' });
   } catch (err) {
     console.error(err);
+    captureError('auth: register-initial', err);
     res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
   }
 });
@@ -279,6 +284,7 @@ router.post('/confirm-password', authenticate, async (req: any, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Confirm password error:', err);
+    captureError('auth: Confirm password error:', err);
     res.status(500).json({ error: 'Internal error' });
   }
 });

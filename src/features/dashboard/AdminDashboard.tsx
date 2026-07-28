@@ -1101,28 +1101,15 @@ export default function AdminDashboard() {
         10: 5,
         11: 5,
       });
-      const sd = getLocalData("schedules", {});
-
-      // Sanitize schedules data to ensure consistency. NOTE: no more "All"
-      // wildcard fallback for a missing segment - segments are fully
-      // separate business units, so a shift with no segment recorded is
-      // left as-is (empty) rather than silently defaulting to a fake
-      // catch-all segment that doesn't correspond to anything real.
-      const sanitizedSd: Record<string, any> = {};
-      Object.entries(sd).forEach(([dateKey, data]: [string, any]) => {
-        if (data && data.shifts) {
-          sanitizedSd[dateKey] = {
-            ...data,
-            shifts: data.shifts.map((s: any) => ({
-              ...s,
-              segment: s.segment || "",
-              employmentType: s.employmentType || "Full Time",
-            })),
-          };
-        } else {
-          sanitizedSd[dateKey] = data;
-        }
-      });
+      // NOTE: schedules is intentionally NOT read from localStorage here
+      // anymore. Previously this polling loop re-applied THIS BROWSER's own
+      // local snapshot every 2 seconds, which silently overwrote whatever
+      // fresh data fetchDbSchedule() had loaded - and since localStorage is
+      // per-browser/per-device, a DIFFERENT admin's newly-created shifts
+      // never appeared here at all (this browser's local cache simply
+      // didn't know about them). The database is now re-checked directly,
+      // every tick, so all admins converge on the same real data.
+      fetchDbSchedule().catch(() => undefined);
 
       const hl = getLocalData("hourlyLeaveRequests", []);
 
@@ -1131,7 +1118,6 @@ export default function AdminDashboard() {
         tm,
         vr,
         mq,
-        sd: sanitizedSd,
         hl,
       });
       if (currentHash !== lastDataRef.current) {
@@ -1140,7 +1126,6 @@ export default function AdminDashboard() {
         setTrainingMaterials(tm);
         setVacationRequests(vr);
         setMonthlyQuotas(mq);
-        setSchedules(sanitizedSd);
         fetchLeaveRequests().catch(() => setHourlyLeaveRequests(hl));
       }
     }, 2000);

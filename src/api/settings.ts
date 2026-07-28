@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate } from '../utils/sqlDate';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -16,6 +17,7 @@ router.get('/holidays', authenticate, async (_req, res) => {
     res.json(rows.map((r: any) => ({ id: r.id, date: r.date, name: r.name })));
   } catch (err: any) {
     console.error('Get holidays error:', err);
+    captureError('settings: Get holidays error:', err);
     res.status(500).json({ error: 'Амралтын өдрүүдийг татахад алдаа гарлаа' });
   }
 });
@@ -61,6 +63,7 @@ router.put('/holidays', authenticate, authorize(['admin', 'superadmin']), async 
     res.json(rows.map((r: any) => ({ id: r.id, date: r.date, name: r.name })));
   } catch (err: any) {
     console.error('Save holidays error:', err);
+    captureError('settings: Save holidays error:', err);
     res.status(500).json({ error: 'Амралтын өдрүүдийг хадгалахад алдаа гарлаа' });
   }
 });
@@ -74,6 +77,7 @@ router.get('/segments', authenticate, async (_req, res) => {
     res.json(rows.map((r: any) => r.name));
   } catch (err: any) {
     console.error('Get segments error:', err);
+    captureError('settings: Get segments error:', err);
     res.status(500).json({ error: 'Segment жагсаалтыг татахад алдаа гарлаа' });
   }
 });
@@ -111,6 +115,7 @@ router.put('/segments', authenticate, authorize(['admin', 'superadmin']), async 
     res.json(rows.map((r: any) => r.name));
   } catch (err: any) {
     console.error('Save segments error:', err);
+    captureError('settings: Save segments error:', err);
     res.status(500).json({ error: 'Segment жагсаалтыг хадгалахад алдаа гарлаа' });
   }
 });

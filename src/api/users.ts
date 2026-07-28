@@ -7,6 +7,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { logAction } from './audit';
 import { columnExists } from '../database/schemaUtils';
+import { captureError } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -238,6 +239,7 @@ router.post('/', authenticate, async (req: any, res) => {
       invitationSent = true;
     } catch (emailErr) {
       console.error('Create user invite email failed:', emailErr);
+      captureError('users: Create user invite email failed', emailErr);
     }
 
     await logAction(
@@ -268,6 +270,7 @@ router.post('/', authenticate, async (req: any, res) => {
     });
   } catch (err) {
     console.error('Create User Invite Error:', err);
+    captureError('users: Create User Invite Error:', err);
     res.status(500).json({ error: 'Хэрэглэгч үүсгэх эсвэл invitation и-мэйл илгээхэд алдаа гарлаа' });
   }
 });
@@ -422,6 +425,7 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
       invitationSent = true;
     } catch (emailErr) {
       console.error('Reset password link email failed:', emailErr);
+      captureError('users: Reset password link email failed', emailErr);
     }
 
     await logAction(actingUser.id, 'SEND_PASSWORD_SETUP_LINK', 'users', id, `Sent password setup link to ${userToUpdate.email || userToUpdate.name}`);
@@ -434,6 +438,7 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
     });
   } catch (err) {
     console.error('Reset Password Link Error:', err);
+    captureError('users: Reset Password Link Error:', err);
     res.status(500).json({ error: 'Нууц үг тохируулах холбоос илгээхэд алдаа гарлаа' });
   }
 });
@@ -489,6 +494,7 @@ router.delete('/:id', authenticate, async (req: any, res) => {
     res.json({ message: 'Хэрэглэгч амжилттай устгагдлаа' });
   } catch (err) {
     console.error(err);
+    captureError('users: unhandled', err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
   }
 });
