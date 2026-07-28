@@ -36,6 +36,8 @@ export default function Sidebar({
     name: 'Уншиж байна...',
     email: '',
     lineType: '',
+    employmentType: '',
+    location: '',
     photoUrl: 'https://ui-avatars.com/api/?name=User&background=2563eb&color=fff&size=128'
   };
 
@@ -104,7 +106,23 @@ export default function Sidebar({
           <div className="flex-1 min-w-0">
             <h2 className="text-white font-bold text-lg tracking-wide truncate" title={profile.name}>{profile.name}</h2>
             <p className="text-gray-500 text-[10px] font-bold truncate">{profile.email || 'И-мэйл байхгүй'}</p>
-            <p className="text-blue-400 text-[10px] font-black uppercase tracking-wider mt-0.5">{profile.lineType}</p>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+              {profile.lineType && (
+                <p className="text-blue-400 text-[10px] font-black uppercase tracking-wider">{profile.lineType}</p>
+              )}
+              {profile.employmentType && (
+                <>
+                  <span className="text-gray-700 text-[10px]">·</span>
+                  <p className="text-purple-400 text-[10px] font-black uppercase tracking-wider">{profile.employmentType}</p>
+                </>
+              )}
+              {profile.location && (
+                <>
+                  <span className="text-gray-700 text-[10px]">·</span>
+                  <p className="text-green-400 text-[10px] font-black uppercase tracking-wider">{profile.location}</p>
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>

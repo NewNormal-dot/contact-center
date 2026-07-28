@@ -1296,31 +1296,39 @@ export default function CsrDashboard() {
     }
   };
 
-  const markAllAsRead = () => {
+  const markAllAsRead = async () => {
     if (!csrProfile) return;
     const unreadNotifs = notifications.filter(n => isUnread(n));
     if (unreadNotifs.length === 0) return;
 
     try {
+      // Previously this only updated local state/localStorage - the DB
+      // never learned these were read, so the next poll/refresh brought
+      // the "unread" badge right back (the persistent "+1" bug). Now each
+      // notification is actually marked read on the server too.
+      await Promise.all(
+        unreadNotifs.map((notif) =>
+          apiClient.post('/broadcasts/notifications/read', { notification_id: notif.id }).catch((err) => {
+            console.error('Error marking notification as read:', notif.id, err);
+          }),
+        ),
+      );
+
+      const seenEntry = {
+        userId: csrProfile.id,
+        userName: csrProfile.name,
+        seenAt: new Date().toISOString(),
+      };
       unreadNotifs.forEach(notif => {
-        const updatedSeenBy = [...(notif.seenBy || []), {
-          userId: csrProfile.id,
-          userName: csrProfile.name,
-          seenAt: new Date().toISOString()
-        }];
-        updateLocalItem('notifications', notif.id, { seenBy: updatedSeenBy });
+        updateLocalItem('notifications', notif.id, { seenBy: [...(notif.seenBy || []), seenEntry] });
       });
-      
+
       // Update local state
       setNotifications(prev => prev.map(n => {
         if (unreadNotifs.some(un => un.id === n.id)) {
           return {
             ...n,
-            seenBy: [...(n.seenBy || []), {
-              userId: csrProfile.id,
-              userName: csrProfile.name,
-              seenAt: new Date().toISOString()
-            }]
+            seenBy: [...(n.seenBy || []), seenEntry],
           };
         }
         return n;
@@ -2503,7 +2511,7 @@ export default function CsrDashboard() {
         {SHOW_VACATION_FEATURE && isRequestingVacation && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsRequestingVacation(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
               <h2 className="text-2xl font-black text-white mb-6">Ээлжийн амралт</h2>
               <form onSubmit={handleRequestVacation} className="space-y-4">
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 mb-4">
@@ -2560,7 +2568,7 @@ export default function CsrDashboard() {
         {isChangingPassword && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsChangingPassword(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
               <button onClick={() => setIsChangingPassword(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition-colors">
                 <X size={24} />
               </button>
@@ -2676,7 +2684,7 @@ export default function CsrDashboard() {
           {bookingModal?.isOpen && (
             <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setBookingModal(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h2 className="text-2xl font-black text-white">Ээлж захиалах</h2>
@@ -2800,7 +2808,7 @@ export default function CsrDashboard() {
           {tradingModal?.isOpen && (
             <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setTradingModal(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl">
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
                 <h2 className="text-2xl font-black text-white mb-2">Ээлж солих</h2>
                 
                 {tradingModal.step === 'times' ? (
@@ -2918,7 +2926,7 @@ export default function CsrDashboard() {
           {isRequestingHourlyLeave && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsRequestingHourlyLeave(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-8 shadow-2xl overflow-hidden">
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl overflow-hidden">
                 <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
                   <Clock size={120} className="text-blue-500" />
                 </div>

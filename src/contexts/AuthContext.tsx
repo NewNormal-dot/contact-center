@@ -25,6 +25,7 @@ function normalizeUser(raw: any): User {
   const defaultLineType = role === 'superadmin' ? 'System Control' : role === 'admin' ? 'Supervisor' : '';
   const employmentType = raw?.employmentType || raw?.employment_type || 'Full Time';
   const lineType = raw?.lineType || raw?.segment || defaultLineType;
+  const location = raw?.location || '';
 
   return {
     id: String(raw?.id || raw?.uid || role),
@@ -39,6 +40,7 @@ function normalizeUser(raw: any): User {
     code: raw?.code,
     employmentType,
     lineType,
+    location,
     createdAt: raw?.createdAt || new Date().toISOString(),
     updatedAt: raw?.updatedAt || new Date().toISOString(),
   };
@@ -54,7 +56,7 @@ function mapUserForUi(raw: any): any {
   };
 }
 
-function mapNotificationForUi(row: any): any {
+function mapNotificationForUi(row: any, currentUserId?: string): any {
   return {
     id: row.id,
     title: row.title,
@@ -64,7 +66,15 @@ function mapNotificationForUi(row: any): any {
     authorId: row.authorId || row.author_id || 'system',
     authorName: row.authorName || row.author_name || 'Admin',
     type: row.type || 'general',
-    seenBy: row.readAt || row.read_at ? [{ userId: 'me', userName: 'Me', seenAt: row.readAt || row.read_at }] : (row.seenBy || []),
+    // Previously this used the literal string 'me' as userId here, which
+    // NEVER matched the real csrProfile.id in the isUnread() check
+    // elsewhere - so a notification could be correctly marked read on the
+    // server (read_at set) and still show as unread forever on screen,
+    // causing the persistent "+1" badge bug. Now it uses the actual
+    // logged-in user's id so the comparison works correctly.
+    seenBy: row.readAt || row.read_at
+      ? [{ userId: currentUserId || 'me', userName: 'Me', seenAt: row.readAt || row.read_at }]
+      : (row.seenBy || []),
   };
 }
 
