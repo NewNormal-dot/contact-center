@@ -3827,105 +3827,6 @@ export default function AdminDashboard() {
       );
     };
 
-    const setBookingAccessForDates = async (dateKeys: string[], isOpen: boolean) => {
-      const pastDates = dateKeys.filter((dateKey) =>
-        isPastScheduleDate(dateKey),
-      );
-      if (pastDates.length > 0) {
-        alert("Өнгөрсөн өдрийн захиалгын эрхийг өөрчлөх боломжгүй.");
-        return;
-      }
-
-      // Only the shift(s) matching the segment + employment type the admin
-      // is currently viewing (activeSegmentView / activeEmploymentView)
-      // should be affected. Previously this opened/closed EVERY shift on the
-      // selected date(s) regardless of segment or Full/Part Time, so opening
-      // booking for one segment silently opened it for every other segment
-      // and employment type on the same day too.
-      const matchesActiveView = (shift: any) =>
-        shift.segment === activeSegmentView &&
-        shift.employmentType === activeEmploymentView;
-
-      const datesWithSchedules = dateKeys.filter((dateKey) => {
-        const shifts = schedules[dateKey]?.shifts || [];
-        return shifts.some(
-          (shift: any) => matchesActiveView(shift) && Number(shift.totalSlots) > 0,
-        );
-      });
-      if (datesWithSchedules.length === 0) {
-        alert(
-          `Эрх нээх өдөр сонгоно уу. Сонгосон өдөр дээр ${activeSegmentView} / ${activeEmploymentView} segment-д shift болон slot орсон байх хэрэгтэй.`,
-        );
-        return;
-      }
-
-      const newSchedules = { ...schedules };
-      const nextBookingOpenAt = isOpen ? bookingOpenAtInput : "";
-      const nextBookingCloseAt = isOpen ? bookingCloseAtInput : "";
-      datesWithSchedules.forEach((dateKey) => {
-        const day = newSchedules[dateKey] || { shifts: [] };
-        const nextShifts = (day.shifts || []).map((shift: any) => {
-          // Shifts belonging to a different segment or employment type are
-          // left completely untouched - their own booking window keeps
-          // whatever state it already had.
-          if (!matchesActiveView(shift)) return shift;
-
-          return {
-            ...shift,
-            bookingOpen: isOpen,
-            bookingOpenAt: nextBookingOpenAt,
-            bookingCloseAt: nextBookingCloseAt,
-            bookingWaves: getBookingWavesForShift(
-              shift,
-              isOpen,
-              nextBookingOpenAt,
-              nextBookingCloseAt,
-            ).map((wave) => ({
-              ...wave,
-              bookingOpen: isOpen,
-              bookingOpenAt: nextBookingOpenAt,
-              bookingCloseAt: nextBookingCloseAt,
-            })),
-          };
-        });
-
-        // The day-level bookingOpen/At/CloseAt fields are used only for
-        // display badges elsewhere in the UI (e.g. "does this day have any
-        // open booking at all"), so they're recomputed here as an aggregate
-        // across ALL segments on the day, not just the one just toggled.
-        // Actual persistence/opening per segment+employment type is decided
-        // per-shift on the backend (src/api/slots.ts resolveBookingWindow),
-        // which only looks at each shift's own bookingWaves/bookingOpen -
-        // never at this day-level flag - so this can't leak the toggle to
-        // other segments anymore.
-        const anyOpen = nextShifts.some((shift: any) =>
-          getBookingWavesForShift(shift).some((wave) => wave.bookingOpen),
-        );
-
-        newSchedules[dateKey] = {
-          ...day,
-          shifts: nextShifts,
-          bookingOpen: anyOpen,
-          bookingOpenAt: anyOpen ? nextBookingOpenAt : day.bookingOpenAt || "",
-          bookingCloseAt: anyOpen ? nextBookingCloseAt : day.bookingCloseAt || "",
-        };
-      });
-
-      await persistSchedules(newSchedules, datesWithSchedules);
-      setSelectedBookingDates([]);
-      logAction(
-        isOpen ? "Schedule Booking Opened" : "Schedule Booking Closed",
-        `${datesWithSchedules.length} days (${activeSegmentView} / ${activeEmploymentView}) ${isOpen ? `opened from ${nextBookingOpenAt || "now"}` : "closed"} for CSR booking`,
-      );
-    };
-
-    const handleSetBookingAccessForSelected = (isOpen: boolean) => {
-      const targetDateKeys = selectedBookingDates.length > 0
-        ? selectedBookingDates
-        : [selectedDateSchedule].filter(Boolean);
-      void setBookingAccessForDates(targetDateKeys, isOpen);
-    };
-
     const copyPreviousDayIntoDate = (currentDateKey: string, scheduleDraft: any) => {
       if (!currentDateKey || isPastScheduleDate(currentDateKey)) {
         return { copied: 0, sourceKey: "" };
@@ -5431,6 +5332,42 @@ export default function AdminDashboard() {
                   </div>
 
                   <div className="rounded-[1.5rem] border border-white/5 bg-black/20 p-3 space-y-3">
+                    {(() => {
+                      const dayForWaves = schedules[selectedDateSchedule];
+                      const allSelectableWaveKeys = filteredShifts.flatMap((shift: any) => {
+                        const waves = getBookingWavesForShift(
+                          shift,
+                          !!dayForWaves?.bookingOpen,
+                          dayForWaves?.bookingOpenAt || "",
+                          dayForWaves?.bookingCloseAt || "",
+                        );
+                        const morningWave = waves.find((wave) => getWaveKind(wave) === "morning") || createBookingWave(MORNING_WAVE_NAME, 0);
+                        const eveningWave = waves.find((wave) => getWaveKind(wave) === "evening") || createBookingWave(EVENING_WAVE_NAME, 0);
+                        return [morningWave, eveningWave]
+                          .filter((wave) => Number(wave.slotLimit) > 0)
+                          .map((wave) => getShiftWaveSelectionKey(shift, wave));
+                      });
+                      const allWavesSelected =
+                        allSelectableWaveKeys.length > 0 &&
+                        allSelectableWaveKeys.every((key) => selectedWaveKeys.includes(key));
+
+                      // One click selects every open-able Өглөө/Орой slot for
+                      // the day instead of clicking each shift's wave pill
+                      // one by one - this matters most right after a
+                      // successful open/close action, since that clears the
+                      // selection (setSelectedWaveKeys([])) and the buttons
+                      // above go straight back to disabled otherwise.
+                      return allSelectableWaveKeys.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedWaveKeys(allWavesSelected ? [] : allSelectableWaveKeys)}
+                          disabled={!canEditSelection}
+                          className="w-full rounded-2xl border border-white/5 bg-gray-800/40 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-gray-300 transition-all hover:border-blue-500/40 hover:text-blue-300 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {allWavesSelected ? "Бүх slot-ын сонголтыг цуцлах" : `Энэ өдрийн бүх slot-г сонгох (${allSelectableWaveKeys.length})`}
+                        </button>
+                      ) : null;
+                    })()}
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => {
