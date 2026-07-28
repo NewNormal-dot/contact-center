@@ -3920,7 +3920,10 @@ export default function AdminDashboard() {
     };
 
     const handleSetBookingAccessForSelected = (isOpen: boolean) => {
-      void setBookingAccessForDates(selectedBookingDates, isOpen);
+      const targetDateKeys = selectedBookingDates.length > 0
+        ? selectedBookingDates
+        : [selectedDateSchedule].filter(Boolean);
+      void setBookingAccessForDates(targetDateKeys, isOpen);
     };
 
     const copyPreviousDayIntoDate = (currentDateKey: string, scheduleDraft: any) => {
@@ -5451,7 +5454,7 @@ export default function AdminDashboard() {
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => handleCopyPreviousDay(selectedKeys)}
+                        onClick={() => handleCopyPreviousDay(selectedDateKeys)}
                         disabled={!hasSelectedDays || !canEditSelection}
                         className="rounded-2xl border border-white/5 bg-gray-800/60 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-gray-300 transition-all hover:bg-blue-500/10 hover:text-blue-300 disabled:cursor-not-allowed disabled:opacity-40"
                       >
