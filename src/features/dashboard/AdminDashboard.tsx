@@ -3787,13 +3787,25 @@ export default function AdminDashboard() {
         return;
       }
 
+      // Only the shift(s) matching the segment + employment type the admin
+      // is currently viewing (activeSegmentView / activeEmploymentView)
+      // should be affected. Previously this opened/closed EVERY shift on the
+      // selected date(s) regardless of segment or Full/Part Time, so opening
+      // booking for one segment silently opened it for every other segment
+      // and employment type on the same day too.
+      const matchesActiveView = (shift: any) =>
+        shift.segment === activeSegmentView &&
+        shift.employmentType === activeEmploymentView;
+
       const datesWithSchedules = dateKeys.filter((dateKey) => {
         const shifts = schedules[dateKey]?.shifts || [];
-        return shifts.some((shift: any) => Number(shift.totalSlots) > 0);
+        return shifts.some(
+          (shift: any) => matchesActiveView(shift) && Number(shift.totalSlots) > 0,
+        );
       });
       if (datesWithSchedules.length === 0) {
         alert(
-          "Эрх нээх өдөр сонгоно уу. Сонгосон өдөр shift болон slot орсон байх хэрэгтэй.",
+          `Эрх нээх өдөр сонгоно уу. Сонгосон өдөр дээр ${activeSegmentView} / ${activeEmploymentView} segment-д shift болон slot орсон байх хэрэгтэй.`,
         );
         return;
       }
@@ -3803,27 +3815,50 @@ export default function AdminDashboard() {
       const nextBookingCloseAt = isOpen ? bookingCloseAtInput : "";
       datesWithSchedules.forEach((dateKey) => {
         const day = newSchedules[dateKey] || { shifts: [] };
-        const nextShifts = (day.shifts || []).map((shift: any) => ({
-          ...shift,
-          bookingWaves: getBookingWavesForShift(
-            shift,
-            isOpen,
-            nextBookingOpenAt,
-            nextBookingCloseAt,
-          ).map((wave) => ({
-            ...wave,
+        const nextShifts = (day.shifts || []).map((shift: any) => {
+          // Shifts belonging to a different segment or employment type are
+          // left completely untouched - their own booking window keeps
+          // whatever state it already had.
+          if (!matchesActiveView(shift)) return shift;
+
+          return {
+            ...shift,
             bookingOpen: isOpen,
             bookingOpenAt: nextBookingOpenAt,
             bookingCloseAt: nextBookingCloseAt,
-          })),
-        }));
+            bookingWaves: getBookingWavesForShift(
+              shift,
+              isOpen,
+              nextBookingOpenAt,
+              nextBookingCloseAt,
+            ).map((wave) => ({
+              ...wave,
+              bookingOpen: isOpen,
+              bookingOpenAt: nextBookingOpenAt,
+              bookingCloseAt: nextBookingCloseAt,
+            })),
+          };
+        });
+
+        // The day-level bookingOpen/At/CloseAt fields are used only for
+        // display badges elsewhere in the UI (e.g. "does this day have any
+        // open booking at all"), so they're recomputed here as an aggregate
+        // across ALL segments on the day, not just the one just toggled.
+        // Actual persistence/opening per segment+employment type is decided
+        // per-shift on the backend (src/api/slots.ts resolveBookingWindow),
+        // which only looks at each shift's own bookingWaves/bookingOpen -
+        // never at this day-level flag - so this can't leak the toggle to
+        // other segments anymore.
+        const anyOpen = nextShifts.some((shift: any) =>
+          getBookingWavesForShift(shift).some((wave) => wave.bookingOpen),
+        );
 
         newSchedules[dateKey] = {
           ...day,
           shifts: nextShifts,
-          bookingOpen: isOpen,
-          bookingOpenAt: nextBookingOpenAt,
-          bookingCloseAt: nextBookingCloseAt,
+          bookingOpen: anyOpen,
+          bookingOpenAt: anyOpen ? nextBookingOpenAt : day.bookingOpenAt || "",
+          bookingCloseAt: anyOpen ? nextBookingCloseAt : day.bookingCloseAt || "",
         };
       });
 
@@ -3831,7 +3866,7 @@ export default function AdminDashboard() {
       setSelectedBookingDates([]);
       logAction(
         isOpen ? "Schedule Booking Opened" : "Schedule Booking Closed",
-        `${datesWithSchedules.length} days ${isOpen ? `opened from ${nextBookingOpenAt || "now"}` : "closed"} for CSR booking`,
+        `${datesWithSchedules.length} days (${activeSegmentView} / ${activeEmploymentView}) ${isOpen ? `opened from ${nextBookingOpenAt || "now"}` : "closed"} for CSR booking`,
       );
     };
 

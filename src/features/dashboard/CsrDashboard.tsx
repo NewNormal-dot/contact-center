@@ -985,8 +985,24 @@ export default function CsrDashboard() {
         shifts: [...(next[dateKey]?.shifts || []), shift],
       };
     });
+
+    // Stamp holiday names onto the schedule too (including holiday-only
+    // dates that have no shifts at all), so the whole day view - shifts AND
+    // holidays - comes from the server (DB) and stays identical on every
+    // browser/computer. Holidays are fetched from the DB via fetchHolidays()
+    // into the `holidays` state; previously this came only from
+    // localStorage, which is per-browser and not shared.
+    (holidays || []).forEach((holiday: any) => {
+      const dateKey = holiday?.date;
+      if (!dateKey) return;
+      next[dateKey] = {
+        ...(next[dateKey] || { shifts: [] }),
+        holidayName: holiday.name,
+      };
+    });
+
     return next;
-  }, [csrProfile]);
+  }, [csrProfile, holidays]);
 
   const fetchDbSchedule = React.useCallback(async () => {
     try {
@@ -1037,78 +1053,88 @@ export default function CsrDashboard() {
     }
   };
 
+  const mapHolidayForUi = (raw: any) => ({ date: raw.date, name: raw.name });
+
+  const fetchHolidays = async () => {
+    try {
+      const response = await apiClient.get('/settings/holidays');
+      const data = (response.data || []).map(mapHolidayForUi);
+      setHolidays(data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching holidays:', error);
+      return [];
+    }
+  };
+
+  const mapHourlyLeaveForUi = (raw: any): HourlyLeaveRequest => ({
+    id: String(raw.id),
+    csrId: raw.userId || raw.user_id || csrProfile?.id || '',
+    csrName: raw.userName || raw.user_name || csrProfile?.name || 'CSR',
+    type: raw.type || 'hourly',
+    date: raw.date || '',
+    endDate: raw.endDate || raw.end_date || undefined,
+    startTime: raw.startTime || raw.start_time || undefined,
+    endTime: raw.endTime || raw.end_time || undefined,
+    reason: raw.reason || '',
+    status: raw.status || 'pending',
+    createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
+    comment: raw.comment || undefined,
+    approvedByName: raw.approvedByName || raw.approver_name || undefined,
+  });
+
+  const fetchHourlyLeaveRequests = async () => {
+    if (!csrProfile) return [];
+    try {
+      const response = await apiClient.get('/requests/leave');
+      const data = (response.data || []).map(mapHourlyLeaveForUi);
+      setHourlyLeaveRequests(data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching hourly leave requests:', error);
+      return [];
+    }
+  };
+
   // Real-time listeners (Mocked with Polling)
   useEffect(() => {
     if (!csrProfile) return;
 
+    // NOTE: schedule, tradeRequests, vacationRequests, hourlyLeaveRequests
+    // and holidays are now fetched EXCLUSIVELY from the shared Azure SQL DB
+    // (fetchDbSchedule / fetchTradeRequests / fetchVacationRequests /
+    // fetchHourlyLeaveRequests / fetchHolidays below). They used to also be
+    // re-read from localStorage here on every poll, which - since
+    // localStorage is per-browser, not shared - meant whatever happened to
+    // be cached locally on ONE computer/browser silently overwrote the
+    // correct DB data every few seconds, and any OTHER computer/browser
+    // (with empty/stale local cache) would show stale or empty data even
+    // though the database itself was correct and identical for everyone.
+    //
+    // vacationQuotas, csrRestDays and csrSubmittedMonths don't have a DB
+    // table/endpoint yet, so they remain local-only for now (a known
+    // limitation, not something this fix silently papers over).
     const loadData = () => {
-      const rawSchedule = getLocalData('schedules', {}) as Record<string, DayData>;
-      const allNotifs = getLocalData('notifications', []);
-      const allTradeRequests = getLocalData('tradeRequests', []);
-      const allVacationRequests = getLocalData('vacationRequests', []);
       const allQuotas = getLocalData('vacationQuotas', []);
       const allTraining = getLocalData('trainingMaterials', []);
-      const allHourlyLeave = getLocalData('hourlyLeaveRequests', []);
       const allRestDays = getLocalData('csrRestDays', {});
       const allSubmitted = getLocalData('csrSubmittedMonths', {});
-      const allHolidays = getLocalData('holidays', []);
 
       // Create a hash of the data to prevent unnecessary re-renders
       const dataHash = JSON.stringify({
-        rawSchedule,
-        allNotifs,
-        allTradeRequests,
-        allVacationRequests,
         allQuotas,
         allTraining,
         allRestDays,
         allSubmitted,
-        allHolidays,
         profileId: csrProfile.id
       });
 
       if (dataHash === lastDataRef.current) return;
       lastDataRef.current = dataHash;
 
-      const filteredSchedule: Record<string, DayData> = {};
-      
-      // Get all dates from rawSchedule and allHolidays
-      const allDates = Array.from(new Set([
-        ...Object.keys(rawSchedule),
-        ...allHolidays.map((h: any) => h.date)
-      ]));
-
-      allDates.forEach(dateKey => {
-        const holiday = allHolidays.find((h: any) => h.date === dateKey);
-        const dayData = rawSchedule[dateKey] || { shifts: [], holidayName: undefined };
-
-        filteredSchedule[dateKey] = {
-          ...dayData,
-          holidayName: holiday ? holiday.name : dayData.holidayName,
-          bookingOpen: !!dayData.bookingOpen,
-          bookingOpenAt: dayData.bookingOpenAt || '',
-          bookingCloseAt: dayData.bookingCloseAt || '',
-          shifts: (dayData.shifts || []).filter((s: any) => {
-            const matchesSegment = (s.segment === 'All') || 
-                                  (s.segment === csrProfile.lineType) || 
-                                  (csrProfile.lineType === 'VIP' && s.segment === 'Premium');
-            
-            const matchesEmployment = s.employmentType === csrProfile.employmentType;
-            
-            return matchesSegment && matchesEmployment;
-          })
-        };
-      });
-      
-      setSchedule(filteredSchedule);
-      // Notifications are loaded from DB by fetchNotifications().
-      setTradeRequests(allTradeRequests.filter((r: any) => r.senderId === csrProfile.id || r.receiverId === csrProfile.id));
-      setVacationRequests(allVacationRequests.filter((r: any) => r.csrId === csrProfile.id));
-      setHourlyLeaveRequests(allHourlyLeave.filter((r: any) => r.csrId === csrProfile.id));
       setVacationQuotas(allQuotas);
       setTrainingMaterials(allTraining);
       setSubmittedMonths(allSubmitted[csrProfile.id] || []);
-      setHolidays(allHolidays);
     };
 
     loadData();
@@ -1117,12 +1143,16 @@ export default function CsrDashboard() {
     fetchShiftRules();
     fetchDbSchedule();
     fetchTradeRequests();
+    fetchHolidays();
+    fetchHourlyLeaveRequests();
     const interval = setInterval(() => { loadData(); fetchDbSchedule(); }, 5000);
     const notificationInterval = setInterval(fetchNotifications, 10000);
     const vacationInterval = setInterval(fetchVacationRequests, 10000);
     const shiftRuleInterval = setInterval(fetchShiftRules, 5000);
     const tradeInterval = setInterval(fetchTradeRequests, 5000);
-    
+    const holidayInterval = setInterval(fetchHolidays, 30000);
+    const hourlyLeaveInterval = setInterval(fetchHourlyLeaveRequests, 10000);
+
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
         loadData();
@@ -1136,6 +1166,8 @@ export default function CsrDashboard() {
       clearInterval(vacationInterval);
       clearInterval(shiftRuleInterval);
       clearInterval(tradeInterval);
+      clearInterval(holidayInterval);
+      clearInterval(hourlyLeaveInterval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);
@@ -1978,7 +2010,7 @@ export default function CsrDashboard() {
         reason: shiftLeaveForm.reason,
       });
       const refreshed = await apiClient.get('/requests/leave');
-      setHourlyLeaveRequests(refreshed.data || []);
+      setHourlyLeaveRequests((refreshed.data || []).map(mapHourlyLeaveForUi));
       logAction('Shift Leave Requested', `Requested urgent leave for booking ${shiftLeaveForm.slotBookingId}`);
       setIsRequestingShiftLeave(false);
       setShiftLeaveForm({ slotBookingId: '', reason: '' });
@@ -1997,7 +2029,7 @@ export default function CsrDashboard() {
     if (!csrProfile) return;
 
     try {
-      const response = await apiClient.post('/requests/leave', {
+      await apiClient.post('/requests/leave', {
         type: hourlyLeaveForm.type,
         date: hourlyLeaveForm.date,
         endDate: hourlyLeaveForm.endDate || hourlyLeaveForm.date,
@@ -2006,22 +2038,7 @@ export default function CsrDashboard() {
         reason: hourlyLeaveForm.reason,
       });
 
-      const newRequest: HourlyLeaveRequest = {
-        id: response.data?.id || Math.random().toString(36).substr(2, 9),
-        csrId: csrProfile.id,
-        csrName: csrProfile.name,
-        type: hourlyLeaveForm.type as 'hourly' | 'daily',
-        date: hourlyLeaveForm.date,
-        endDate: hourlyLeaveForm.endDate,
-        startTime: hourlyLeaveForm.startTime,
-        endTime: hourlyLeaveForm.endTime,
-        reason: hourlyLeaveForm.reason,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      };
-
-      const updated = addLocalItem('hourlyLeaveRequests', newRequest);
-      setHourlyLeaveRequests(updated);
+      await fetchHourlyLeaveRequests();
       logAction('Leave Requested', `Requested ${hourlyLeaveForm.type} leave for ${hourlyLeaveForm.date}`);
       setIsRequestingHourlyLeave(false);
       setHourlyLeaveForm({

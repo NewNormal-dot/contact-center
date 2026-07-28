@@ -91,12 +91,9 @@ function resolveBookingWindow(day: any, shift: any) {
   const openWaves = waves.filter((wave: any) => boolValue(wave.bookingOpen));
   const openAt = openWaves.find((wave: any) => wave.bookingOpenAt)?.bookingOpenAt
     || shift.bookingOpenAt
-    || day?.bookingOpenAt
     || null;
   const closeAt = openWaves.find((wave: any) => wave.bookingCloseAt)?.bookingCloseAt
     || shift.bookingCloseAt
-    || day?.bookingCloseAt
-    || day?.bookingDeadline
     || shift.bookingDeadline
     || null;
 
@@ -110,7 +107,17 @@ function resolveBookingWindow(day: any, shift: any) {
   // scheduled time actually arrived yet?) is handled live, per booking
   // request, by comparing booking_open_at against now() in the booking
   // handler - this flag only needs to say "a window was configured at all".
-  const explicitlyOpen = day?.bookingOpen === undefined ? false : boolValue(day.bookingOpen);
+  //
+  // IMPORTANT: this must be resolved PER SHIFT (segment + employment type),
+  // never from the day-level `day.bookingOpen` flag. A single sync-schedules
+  // request carries every shift for a date across ALL segments and
+  // employment types together, so falling back to a day-wide flag here used
+  // to force-open (or force-close) every other segment/employment type's
+  // shift on that same date as a side effect of opening just one of them.
+  // Each shift's own `bookingOpen` field / `bookingWaves` is what the admin
+  // UI actually scopes to the segment + employment type being edited, so
+  // that - and only that - is what should decide this shift's window.
+  const explicitlyOpen = shift?.bookingOpen === undefined ? false : boolValue(shift.bookingOpen);
   const bookingOpen = explicitlyOpen || openWaves.length > 0 || Boolean(openAt);
 
   return {
