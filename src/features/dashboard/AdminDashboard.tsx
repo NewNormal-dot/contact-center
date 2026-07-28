@@ -514,6 +514,16 @@ const mapDbSlotsToSchedules = (slots: any[] = []) => {
             ? REST_SHIFT_LABEL
             : `${String(slot.startTime || slot.start_time || '').slice(0, 5)}-${String(slot.endTime || slot.end_time || '').slice(0, 5)}`,
           isRest,
+          // The backend already computes and stores the authoritative
+          // duration (src/api/slots.ts calculateDuration) when the shift was
+          // created/synced - carrying it through here means the UI can
+          // display THIS value directly instead of re-parsing the time-range
+          // string client-side, which is exactly what caused the "0 цаг" bug
+          // (the client-side parser didn't yet support minutes). Freshly
+          // drafted shifts that haven't been saved to the DB yet won't have
+          // this field, so display code falls back to computing it from the
+          // time string in that case only (see getShiftDisplayHours).
+          duration: Number(slot.duration) || 0,
           totalSlots: Number(slot.capacity || slot.totalSlots || 1),
           bookedSlots: Number(slot.currentBookings ?? slot.current_bookings ?? bookedBy.length),
           bookedBy,
@@ -3621,6 +3631,21 @@ export default function AdminDashboard() {
     return Math.round((diffMinutes / 60) * 10) / 10;
   };
 
+  // Prefer the backend-computed duration (stored on the shift once it's been
+  // saved to the DB - see mapDbSlotsToSchedules) over re-parsing the time
+  // string client-side. This is the single source of truth fix: previously
+  // every display site independently re-derived hours from "HH:MM-HH:MM"
+  // text, and any format-parsing gap (like the missing-minutes bug) silently
+  // produced "0 цаг" everywhere at once. A shift with no stored duration yet
+  // (a freshly drafted, not-yet-saved shift) falls back to computing it live
+  // from its time text, since that's the only value available at that point.
+  const getShiftDisplayHours = (shift: any) => {
+    if (shift?.isRest || shift?.time === REST_SHIFT_LABEL) return 0;
+    const storedDuration = Number(shift?.duration);
+    if (Number.isFinite(storedDuration) && storedDuration > 0) return storedDuration;
+    return getHoursForShift(shift?.time);
+  };
+
   const getStartTimeValue = (time: string) => {
     if (!time || time === REST_SHIFT_LABEL) return 9999;
     const normalizedTime = normalizeShiftTime(time);
@@ -4041,8 +4066,8 @@ export default function AdminDashboard() {
       const csrById = new Map(csrs.map((c) => [c.id, c]));
       const holidayDateSet = new Set(holidays.map((h: any) => h.date));
 
-      // bookingsByUser: userId -> dateKey -> { time, isRest }
-      const bookingsByUser = new Map<string, Map<string, { time: string; isRest: boolean }>>();
+      // bookingsByUser: userId -> dateKey -> { time, isRest, duration }
+      const bookingsByUser = new Map<string, Map<string, { time: string; isRest: boolean; duration: number }>>();
 
       validDates.forEach((date) => {
         const dateKey = formatDateKey(date);
@@ -4057,6 +4082,7 @@ export default function AdminDashboard() {
             bookingsByUser.get(booking.userId)!.set(dateKey, {
               time: shift.time,
               isRest: Boolean(shift.isRest),
+              duration: Number(shift.duration) || 0,
             });
           });
         });
@@ -4147,7 +4173,7 @@ export default function AdminDashboard() {
           }
           const normalized = normalizeShiftTime(String(info.time || ""));
           const [startTimeStr, endTimeStr] = normalized.split("-");
-          const hours = getHoursForShift(normalized);
+          const hours = Number(info.duration) > 0 ? Number(info.duration) : getHoursForShift(normalized);
           row.push(`${startTimeStr}--${endTimeStr}`, hours > 0 ? hours : "");
         });
         aoa.push(row);
@@ -4568,8 +4594,8 @@ export default function AdminDashboard() {
               }, {});
 
               const selectedDaysHaveShifts =
-                selectedKeys.length > 0 &&
-                selectedKeys.every((dateKey) => getMatchingShiftsForDate(dateKey).length > 0);
+                selectedDateKeys.length > 0 &&
+                selectedDateKeys.every((dateKey) => getMatchingShiftsForDate(dateKey).length > 0);
 
               const selectedRuleShiftHours = Object.keys(selectedRuleShiftAvailability).sort((a, b) => {
                 if (a === "rest") return 1;
@@ -5278,7 +5304,7 @@ export default function AdminDashboard() {
                                   <div className="flex items-center gap-2">
                                     <Clock size={14} className="text-blue-400" />
                                     <p className="text-sm font-black text-white">
-                                      {getShiftTimeKey(shift.time)} <span className="text-gray-500">:</span> <span className="text-blue-300">{shift.time === REST_SHIFT_LABEL ? "амралт" : `${getHoursForShift(shift.time)} цаг`}</span>
+                                      {getShiftTimeKey(shift.time)} <span className="text-gray-500">:</span> <span className="text-blue-300">{shift.time === REST_SHIFT_LABEL ? "амралт" : `${getShiftDisplayHours(shift)} цаг`}</span>
                                     </p>
                                     {isDuplicateShift && (
                                       <span className="rounded-full bg-red-500 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-white">
@@ -5433,7 +5459,7 @@ export default function AdminDashboard() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDeleteSelectedDayShifts(selectedKeys)}
+                        onClick={() => handleDeleteSelectedDayShifts(selectedDateKeys)}
                         disabled={!hasSelectedDays || !canEditSelection || !selectedDaysHaveShifts}
                         className="rounded-2xl border border-red-500/10 bg-red-500/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-red-300 transition-all hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                       >
