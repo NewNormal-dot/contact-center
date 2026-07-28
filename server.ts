@@ -17,6 +17,7 @@ import ruleRoutes from "./src/api/rules";
 import adminRoutes from "./src/api/admin";
 import settingsRoutes from "./src/api/settings";
 import db from "./src/database/db";
+import { captureError } from "./src/utils/errorLog";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -94,6 +95,20 @@ async function warmUpDatabaseConnection() {
   }
 }
 
+// Safety net: catch anything that slips outside Express's normal
+// request/response flow (e.g. a rejected promise in middleware that never
+// calls next(err)). Logged and recorded for self-diagnosis, but does NOT
+// crash the process - Node would otherwise terminate on an uncaught
+// exception, which is worse than just logging it.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+  captureError('unhandledRejection', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+  captureError('uncaughtException', err);
+});
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 8080;
@@ -158,6 +173,7 @@ async function startServer() {
     if (process.env.NODE_ENV !== 'production') {
       console.error(err.stack);
     }
+    captureError(`${req.method} ${req.path}`, err);
     res.status(500).json({ 
       error: "Дотоод алдаа гарлаа",
       message: process.env.NODE_ENV === 'production' ? undefined : err.message

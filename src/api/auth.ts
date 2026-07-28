@@ -8,6 +8,7 @@ import { logAction } from './audit';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { buildPasswordSetupUrl, sendPasswordSetupEmail } from '../utils/email';
 import { createPasswordSetupToken, hashPasswordSetupToken, validateNewPassword } from '../utils/password';
+import { captureError } from '../utils/errorLog';
 import { columnExists } from '../database/schemaUtils';
 import { loginRateLimiter, forgotPasswordRateLimiter } from '../middleware/rateLimiter';
 
@@ -187,12 +188,17 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    await logAction(user.id, 'LOGIN_SUCCESS', 'users', user.id, `User logged in: ${user.email}`);
+    // Fire-and-forget: audit logging must never delay or break the login
+    // response itself. logAction already catches its own errors internally,
+    // so not awaiting it here is safe (it can't produce an unhandled
+    // rejection or crash the process).
+    void logAction(user.id, 'LOGIN_SUCCESS', 'users', user.id, `User logged in: ${user.email}`);
 
     res.json({ token, user: formatUserForClient(user) });
   } catch (err) {
     console.error('Login Error:', err);
-    res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
+    captureError('POST /api/auth/login', err);
+    res.status(500).json({ error: 'Дотоод алдаа гарлаа', details: process.env.NODE_ENV === 'production' ? undefined : (err as any)?.message });
   }
 });
 

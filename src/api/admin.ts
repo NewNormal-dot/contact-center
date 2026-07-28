@@ -1,6 +1,7 @@
 import express from 'express';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
+import { getRecentErrors } from '../utils/errorLog';
 
 const router = express.Router();
 
@@ -46,6 +47,15 @@ router.post('/run-migrations', authenticate, authorize(['superadmin']), async (r
     console.error('Manual migration trigger failed:', err);
     res.status(500).json({ error: err?.message || String(err) });
   }
+});
+
+// GET /api/admin/recent-errors - shows the last ~30 server-side errors
+// (login failures, unhandled middleware errors, etc) with full messages
+// and stack traces, so a superadmin can self-diagnose production issues
+// (e.g. "Дотоод алдаа гарлаа" reports) without needing Azure Portal / Log
+// Stream access. Held in memory only - resets on every deploy/restart.
+router.get('/recent-errors', authenticate, authorize(['superadmin']), async (_req, res) => {
+  res.json(getRecentErrors());
 });
 
 export default router;
