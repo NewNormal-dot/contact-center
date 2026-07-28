@@ -248,30 +248,6 @@ const isRestShiftText = (value: string) =>
 const compactShiftTimeInput = (value: string) =>
   value.trim().replace(/\s+/g, "").replace(/-+/g, "-");
 
-const sanitizeShiftTimeInput = (value: string) => {
-  const trimmed = value.trim();
-  if (isRestShiftText(trimmed)) return REST_SHIFT_LABEL;
-
-  // Only normalize extra spaces or repeated hyphens. Do not silently convert
-  // invalid formats such as 0916 or 09:16 into a valid shift.
-  return compactShiftTimeInput(trimmed).slice(0, 5);
-};
-
-const sanitizeShiftTemplateInput = (value: string) => {
-  const trimmed = value.trimStart();
-  const lower = trimmed.toLowerCase();
-  const hasCyrillicLetters = /[а-яөү]/i.test(trimmed);
-
-  if (hasCyrillicLetters) {
-    if (REST_SHIFT_INPUT.startsWith(lower)) {
-      return lower === REST_SHIFT_INPUT ? REST_SHIFT_LABEL : trimmed.slice(0, REST_SHIFT_INPUT.length);
-    }
-    return trimmed.slice(0, 10);
-  }
-
-  return sanitizeShiftTimeInput(trimmed);
-};
-
 const normalizeShiftTime = (value: string) => {
   const trimmed = value.trim();
   if (isRestShiftText(trimmed) || trimmed === REST_SHIFT_LABEL) return REST_SHIFT_LABEL;
@@ -5388,6 +5364,11 @@ export default function AdminDashboard() {
                         <Lock size={15} className="inline mr-1" /> Хаах
                       </button>
                     </div>
+                    {canEditSelection && filteredShifts.length > 0 && selectedWaveKeys.length === 0 && (
+                      <p className="text-[10px] font-bold text-gray-500 text-center">
+                        Дээрх slot-уудаас сонгох, эсвэл "Бүх slot-г сонгох" дарснаар Нээх/Хаах товч идэвхжинэ.
+                      </p>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -7613,19 +7594,70 @@ export default function AdminDashboard() {
                       </button>
                     </div>
                     <div className="flex gap-3">
-                      <input
-                        type="text"
-                        value={newTemplateTime}
-                        onChange={(e) =>
-                          setNewTemplateTime(
-                            sanitizeShiftTemplateInput(e.target.value),
-                          )
-                        }
-                        placeholder="Жишээ: 08-17 эсвэл амралт"
-                        maxLength={10}
-                        className="flex-1 bg-black/40 border border-white/10 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
-                        autoFocus
-                      />
+                    {(() => {
+                      const isNewTemplateRest = newTemplateTime === REST_SHIFT_LABEL;
+                      const normalizedNewTemplate = isNewTemplateRest ? "" : normalizeShiftTime(newTemplateTime || "");
+                      const [rawTplStart, rawTplEnd] = normalizedNewTemplate.includes("-")
+                        ? normalizedNewTemplate.split("-")
+                        : ["", ""];
+                      const toTimeInputValue = (part: string) =>
+                        !part ? "" : part.includes(":") ? part : `${part.padStart(2, "0")}:00`;
+                      const tplStart = toTimeInputValue(rawTplStart);
+                      const tplEnd = toTimeInputValue(rawTplEnd);
+                      const updateTemplateRange = (nextStart: string, nextEnd: string) => {
+                        setNewTemplateTime(`${nextStart || "09:00"}-${nextEnd || nextStart || "18:00"}`);
+                      };
+
+                      return (
+                        <div className="flex-1 space-y-3">
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!isNewTemplateRest) return;
+                                setNewTemplateTime("09:00-18:00");
+                              }}
+                              className={`rounded-2xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                                !isNewTemplateRest
+                                  ? "border-blue-500/60 bg-blue-600/20 text-white"
+                                  : "border-white/10 bg-black/20 text-gray-500 hover:text-gray-300"
+                              }`}
+                            >
+                              Ажлын цаг
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNewTemplateTime(REST_SHIFT_LABEL)}
+                              className={`rounded-2xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                                isNewTemplateRest
+                                  ? "border-blue-500/60 bg-blue-600/20 text-white"
+                                  : "border-white/10 bg-black/20 text-gray-500 hover:text-gray-300"
+                              }`}
+                            >
+                              Амралт
+                            </button>
+                          </div>
+                          {!isNewTemplateRest && (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="time"
+                                value={tplStart}
+                                onChange={(e) => updateTemplateRange(e.target.value, tplEnd)}
+                                className="flex-1 bg-black/40 border border-white/10 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
+                                autoFocus
+                              />
+                              <span className="text-gray-500 font-black">—</span>
+                              <input
+                                type="time"
+                                value={tplEnd}
+                                onChange={(e) => updateTemplateRange(tplStart, e.target.value)}
+                                className="flex-1 bg-black/40 border border-white/10 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                       <button
                         onClick={() => {
                           const normalizedTime = normalizeShiftTime(newTemplateTime);
@@ -7747,23 +7779,82 @@ export default function AdminDashboard() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">
-                      Ээлжийн цаг (Manual or Select)
+                      Ээлжийн цаг
                     </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={editingShiftData.time}
-                        onChange={(e) =>
-                          setEditingShiftData({
-                            ...editingShiftData,
-                            time: sanitizeShiftTemplateInput(e.target.value),
-                          })
-                        }
-                        className="flex-1 bg-black/40 border border-white/5 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
-                        placeholder="Жишээ: 09-18 эсвэл амралт"
-                        maxLength={10}
-                      />
-                    </div>
+                    {(() => {
+                      const isEditingRest = editingShiftData.time === REST_SHIFT_LABEL;
+                      const normalizedCurrent = isEditingRest ? "" : normalizeShiftTime(editingShiftData.time || "");
+                      const [rawStart, rawEnd] = normalizedCurrent.includes("-")
+                        ? normalizedCurrent.split("-")
+                        : ["", ""];
+                      // <input type="time"> requires "HH:MM" - the legacy
+                      // whole-hour format ("09-18", no colon) needs ":00"
+                      // appended, otherwise the picker silently shows blank.
+                      const toTimeInputValue = (part: string) =>
+                        !part ? "" : part.includes(":") ? part : `${part.padStart(2, "0")}:00`;
+                      const currentStart = toTimeInputValue(rawStart);
+                      const currentEnd = toTimeInputValue(rawEnd);
+
+                      const updateTimeRange = (nextStart: string, nextEnd: string) => {
+                        setEditingShiftData({
+                          ...editingShiftData,
+                          time: `${nextStart || "09:00"}-${nextEnd || nextStart || "18:00"}`,
+                        });
+                      };
+
+                      return (
+                        <>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isEditingRest) return;
+                                setEditingShiftData({ ...editingShiftData, time: REST_SHIFT_LABEL });
+                              }}
+                              className={`rounded-2xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                                !isEditingRest
+                                  ? "border-blue-500/60 bg-blue-600/20 text-white"
+                                  : "border-white/5 bg-black/20 text-gray-500 hover:text-gray-300"
+                              }`}
+                            >
+                              Ажлын цаг
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isEditingRest) {
+                                  setEditingShiftData({ ...editingShiftData, time: "09:00-18:00" });
+                                }
+                              }}
+                              className={`rounded-2xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                                isEditingRest
+                                  ? "border-blue-500/60 bg-blue-600/20 text-white"
+                                  : "border-white/5 bg-black/20 text-gray-500 hover:text-gray-300"
+                              }`}
+                            >
+                              Амралт
+                            </button>
+                          </div>
+                          {!isEditingRest && (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="time"
+                                value={currentStart}
+                                onChange={(e) => updateTimeRange(e.target.value, currentEnd)}
+                                className="flex-1 bg-black/40 border border-white/5 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
+                              />
+                              <span className="text-gray-500 font-black">—</span>
+                              <input
+                                type="time"
+                                value={currentEnd}
+                                onChange={(e) => updateTimeRange(currentStart, e.target.value)}
+                                className="flex-1 bg-black/40 border border-white/5 rounded-2xl py-4 px-6 text-white focus:outline-none focus:border-blue-500 font-bold"
+                              />
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
 
                   <div className="space-y-2">
