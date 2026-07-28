@@ -164,7 +164,7 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
         return res.status(400).json({ error: 'Энэ ээлжид аль хэдийн чөлөөний хүсэлт илгээгдсэн байна' });
       }
 
-      const shiftStart = toSqlDateTime(`${booking.slot_date}T${booking.slot_start_time}`);
+      const shiftStart = toSqlDateTime(`${displayDate(booking.slot_date)}T${displayTime(booking.slot_start_time)}`);
       if (!shiftStart) return res.status(400).json({ error: 'Ээлжийн цагийг тодорхойлж чадсангүй' });
 
       const hoursUntilShift = (shiftStart.getTime() - Date.now()) / (1000 * 60 * 60);

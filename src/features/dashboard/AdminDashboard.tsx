@@ -4146,12 +4146,9 @@ export default function AdminDashboard() {
             return;
           }
           const normalized = normalizeShiftTime(String(info.time || ""));
-          const [startHourStr, endHourStr] = normalized.split("-");
-          const startHour = Number(startHourStr);
-          const endHour = Number(endHourStr);
-          let hours = endHour - startHour;
-          if (Number.isFinite(hours) && hours < 0) hours += 24;
-          row.push(`${startHourStr}--${endHourStr}`, Number.isFinite(hours) ? hours : "");
+          const [startTimeStr, endTimeStr] = normalized.split("-");
+          const hours = getHoursForShift(normalized);
+          row.push(`${startTimeStr}--${endTimeStr}`, hours > 0 ? hours : "");
         });
         aoa.push(row);
       });

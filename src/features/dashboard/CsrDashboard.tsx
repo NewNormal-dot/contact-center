@@ -1991,8 +1991,10 @@ export default function CsrDashboard() {
       dayData.shifts.forEach((shift) => {
         const myBooking = shift.bookedBy?.find((b) => b.userId === csrProfile.id);
         if (!myBooking || shift.isRest) return;
-        const [startHour] = String(shift.time || '').split('-');
-        const shiftStart = new Date(`${dateKey}T${String(startHour || '00').padStart(2, '0')}:00:00`);
+        const [startTimeStr] = String(shift.time || '').split('-');
+        const hasMinutes = /^\d{1,2}:\d{2}$/.test(startTimeStr);
+        const normalizedStartTime = hasMinutes ? startTimeStr : `${String(startTimeStr || '0').padStart(2, '0')}:00`;
+        const shiftStart = new Date(`${dateKey}T${normalizedStartTime}:00`);
         const hoursAway = (shiftStart.getTime() - now) / (1000 * 60 * 60);
         if (hoursAway <= 0) return;
         results.push({ bookingId: myBooking.id, dateKey, time: shift.time, hoursAway });
