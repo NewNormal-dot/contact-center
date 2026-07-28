@@ -28,6 +28,14 @@ export default function Login() {
     }
   }, [user, navigate]);
 
+  useEffect(() => {
+    const sessionExpiredMessage = sessionStorage.getItem('sessionExpiredMessage');
+    if (sessionExpiredMessage) {
+      setErrorMsg(sessionExpiredMessage);
+      sessionStorage.removeItem('sessionExpiredMessage');
+    }
+  }, []);
+
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
 
