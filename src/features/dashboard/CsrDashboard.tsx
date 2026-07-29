@@ -2,9 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LazyMedia } from '../../components/LazyMedia';
 import Sidebar from '../../components/Sidebar';
-import ChatWindow from '../chat/ChatWindow';
 import { DigitalClock } from '../../components/DigitalClock';
-import { MessageCircle, Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, Edit, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
+import { Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, Edit, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
 import { Notification as AppNotification, TrainingMaterial, VacationQuota, VacationRequest, TradeRequest, HourlyLeaveRequest } from '../../types';
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
@@ -705,7 +704,6 @@ export default function CsrDashboard() {
   const { profile: csrProfile } = useAuth();
   const [activeTab, setActiveTab] = useState('schedule');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
   const [schedule, setSchedule] = useState<Record<string, DayData>>({});
   const [selectedMonth, setSelectedMonth] = useState(formatMonthKey(new Date()));
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -839,7 +837,6 @@ export default function CsrDashboard() {
   const executionPointerPercent = Math.min((totalExecutionHours / progressBaseHours) * 100, 100);
   const getProgressWidth = (hours: number) => `${Math.max(0, Math.min((hours / progressBaseHours) * 100, 100))}%`;
   const overtimeHours = Math.max(0, totalExecutionHours - effectiveMonthlyFontTime);
-  const executionPercentage = Math.min(Math.round((totalExecutionHours / progressBaseHours) * 100), 100);
 
   const hasMonthData = React.useMemo(() => {
     return Object.keys(schedule).some(key => key.startsWith(currentMonthKey) && schedule[key].shifts.length > 0);
@@ -1675,7 +1672,7 @@ export default function CsrDashboard() {
               </div>
             </div>
             
-            <div className="relative pt-7 pb-1">
+            <div className="relative pt-3 pb-1">
               <div 
                 className="absolute top-0 transition-all duration-1000 flex flex-col items-center"
                 style={{ 
@@ -1683,9 +1680,6 @@ export default function CsrDashboard() {
                   transform: 'translateX(-50%)'
                 }}
               >
-                <div className="bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 rounded-md backdrop-blur-sm mb-1">
-                  <span className="text-xs font-black text-white">{executionPercentage}%</span>
-                </div>
                 <div className="w-px h-3 bg-gradient-to-b from-blue-500 to-transparent"></div>
               </div>
 
@@ -1715,25 +1709,25 @@ export default function CsrDashboard() {
                   className="overflow-hidden"
                 >
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                    <div className="bg-gray-800/20 p-3 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
-                      <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest">АЖИЛЛАСАН</p>
-                      <p className="text-lg font-black text-white">{regularWorkedHours}ц</p>
+                    <div className="bg-gray-800/20 p-2.5 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
+                      <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest">АЖИЛЛАСАН</p>
+                      <p className="text-sm font-black text-white">{regularWorkedHours}ц</p>
                     </div>
-                    <div className="bg-gray-800/20 p-3 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
-                      <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest">өвчтэй</p>
-                      <p className="text-lg font-black text-red-500">{sickHours}ц</p>
+                    <div className="bg-gray-800/20 p-2.5 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
+                      <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest">өвчтэй</p>
+                      <p className="text-sm font-black text-red-500">{sickHours}ц</p>
                     </div>
-                    <div className="bg-gray-800/20 p-3 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
-                      <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest">чөлөө</p>
-                      <p className="text-lg font-black text-orange-500">{leaveHours}ц</p>
+                    <div className="bg-gray-800/20 p-2.5 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
+                      <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest">чөлөө</p>
+                      <p className="text-sm font-black text-orange-500">{leaveHours}ц</p>
                     </div>
-                    <div className="bg-gray-800/20 p-3 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
-                      <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest">БАЯРЫН ӨДӨР</p>
-                      <p className="text-lg font-black text-blue-500">{holidayWorkedHours}ц</p>
+                    <div className="bg-gray-800/20 p-2.5 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
+                      <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest">БАЯРЫН ӨДӨР</p>
+                      <p className="text-sm font-black text-blue-500">{holidayWorkedHours}ц</p>
                     </div>
-                    <div className="bg-gray-800/20 p-3 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
-                      <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest">ИЛҮҮ ЦАГ</p>
-                      <p className="text-lg font-black text-green-500">{overtimeHours}ц</p>
+                    <div className="bg-gray-800/20 p-2.5 rounded-xl border border-gray-800/50 flex flex-col items-center justify-center gap-0.5">
+                      <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest">ИЛҮҮ ЦАГ</p>
+                      <p className="text-sm font-black text-green-500">{overtimeHours}ц</p>
                     </div>
                   </div>
                 </motion.div>
@@ -2534,15 +2528,6 @@ export default function CsrDashboard() {
           {activeTab === 'hourlyLeave' && renderHourlyLeaveView()}
           {activeTab === 'training' && renderTrainingView()}
         </div>
-
-        <ChatWindow isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
-        <button 
-          onClick={() => setIsChatOpen(!isChatOpen)}
-          className="absolute bottom-6 right-6 sm:bottom-8 sm:right-8 p-3.5 sm:p-4 rounded-full bg-pink-500 text-white shadow-2xl hover:shadow-pink-500/40 transform hover:-translate-y-1 hover:scale-105 transition-all duration-300 z-50"
-          aria-label="Open Chat"
-        >
-          <MessageCircle size={24} />
-        </button>
       </main>
 
       {/* Vacation Request Modal */}
@@ -2787,7 +2772,9 @@ export default function CsrDashboard() {
                             return (
                               <div key={wave.id} className={`flex items-center justify-between gap-2 rounded-xl border px-2.5 py-2 ${canBook ? 'border-blue-500/30 bg-blue-500/5' : 'border-white/5 bg-black/20 opacity-70'}`}>
                                 <div className="min-w-0">
-                                  <p className="text-[11px] font-black text-white truncate">{wave.name}</p>
+                                  {waves.length > 1 && (
+                                    <p className="text-[11px] font-black text-white truncate">{wave.name}</p>
+                                  )}
                                   <p className="text-[9px] font-black uppercase tracking-widest text-gray-500">
                                     {booked}/{wave.slotLimit} · {statusLabel}
                                   </p>
