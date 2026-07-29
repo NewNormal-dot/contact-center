@@ -2716,7 +2716,7 @@ export default function CsrDashboard() {
           {bookingModal?.isOpen && (
             <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setBookingModal(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md max-h-[90vh] sm:max-h-[85vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h2 className="text-2xl font-black text-white">Ээлж захиалах</h2>
@@ -2727,7 +2727,7 @@ export default function CsrDashboard() {
                   </button>
                 </div>
 
-                <div className="space-y-4 mb-8">
+                <div className="space-y-2.5 mb-6">
                   {(schedule[bookingModal.dateKey]?.shifts || []).map((shift, idx) => {
                     const isFull = shift.bookedSlots >= shift.totalSlots;
                     const dayData = schedule[bookingModal.dateKey];
@@ -2735,89 +2735,69 @@ export default function CsrDashboard() {
                     return (
                       <div
                         key={`booking-shift-${shift.id}-${idx}`}
-                        className={`p-5 rounded-2xl border transition-all ${
+                        className={`p-3.5 rounded-2xl border transition-all ${
                           isFull
                             ? 'bg-gray-800/20 border-gray-800 opacity-70'
                             : 'bg-gray-800/40 border-gray-700 hover:border-blue-500/50'
                         }`}
                       >
-                        <div className="flex items-center justify-between mb-4">
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-3">
-                              <Clock size={20} className={isFull ? 'text-gray-600' : 'text-blue-400'} />
-                              <span className="text-lg font-bold text-white">{formatShiftTimeForDisplay(shift.time)}</span>
-                            </div>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Нийт: {shift.bookedSlots}/{shift.totalSlots}</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Clock size={16} className={`shrink-0 ${isFull ? 'text-gray-600' : 'text-blue-400'}`} />
+                            <span className="text-sm font-bold text-white truncate">{formatShiftTimeForDisplay(shift.time)}</span>
                           </div>
-                          {isFull && (
-                            <span className="px-2 py-0.5 bg-red-500/10 text-red-500 text-[10px] font-black rounded uppercase">Дүүрсэн</span>
-                          )}
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{shift.bookedSlots}/{shift.totalSlots}</span>
+                            {isFull && (
+                              <span className="px-2 py-0.5 bg-red-500/10 text-red-500 text-[9px] font-black rounded uppercase">Дүүрсэн</span>
+                            )}
+                          </div>
                         </div>
 
-                        <div className="mt-4 border-t border-white/5 pt-4 space-y-3">
-                          <div className="w-full relative h-10 px-1 mt-2">
-                            <div className="absolute top-1/2 left-0 right-14 h-1.5 -translate-y-1/2 bg-gray-800 rounded-full" />
-                            <motion.div 
-                              initial={{ width: 0 }}
-                              animate={{ width: `${Math.min(100, (shift.bookedSlots / Math.max(1, shift.totalSlots)) * 100)}%` }}
-                              className={`absolute top-1/2 left-0 h-1.5 -translate-y-1/2 rounded-full z-10 ${isFull ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.4)]' : 'bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.4)]'}`}
-                              style={{ maxWidth: 'calc(100% - 3.5rem)' }}
-                            />
-                            <motion.div
-                              animate={{ left: `${Math.min(100, (shift.bookedSlots / Math.max(1, shift.totalSlots)) * 100)}%` }}
-                              transition={{ type: "spring", stiffness: 100, damping: 20 }}
-                              className="absolute top-0 -translate-x-1/2 flex flex-col items-center z-20"
-                              style={{ maxWidth: 'calc(100% - 3.5rem)' }}
-                            >
-                              <div className={`text-[12px] font-outfit font-black text-white min-w-[30px] h-[30px] flex items-center justify-center rounded-full shadow-2xl ${isFull ? 'bg-red-600' : 'bg-blue-600'} border-2 border-gray-900`}>
-                                {shift.bookedSlots}
-                              </div>
-                              <div className={`w-0.5 h-1.5 ${isFull ? 'bg-red-600' : 'bg-blue-600'} mt-0.5`} />
-                            </motion.div>
-                            <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-4">
-                              <span className="text-[14px] font-outfit font-black text-gray-500">{shift.totalSlots}</span>
-                            </div>
-                          </div>
+                        <div className="w-full h-1.5 mt-2.5 rounded-full bg-gray-800 overflow-hidden">
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${Math.min(100, (shift.bookedSlots / Math.max(1, shift.totalSlots)) * 100)}%` }}
+                            className={`h-full rounded-full ${isFull ? 'bg-red-500' : 'bg-blue-500'}`}
+                          />
+                        </div>
 
-                          <div className="space-y-2">
-                            {waves.map(wave => {
-                              const booked = getWaveBookedCount(shift, wave.id);
-                              const waveFull = booked >= wave.slotLimit;
-                              const waveAccess = getWaveAccessState(wave, nowTick);
-                              const waveOpen = waveAccess.state === 'open';
-                              const canBook = !isFull && !waveFull && waveOpen;
-                              const statusLabel = waveFull
-                                ? 'Дүүрсэн'
-                                : waveAccess.label;
-                              return (
-                                <div key={wave.id} className={`rounded-2xl border p-3 ${canBook ? 'border-blue-500/30 bg-blue-500/5' : 'border-white/5 bg-black/20 opacity-70'}`}>
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                      <p className="text-xs font-black text-white">{wave.name}</p>
-                                      <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                                        {booked}/{wave.slotLimit} {statusLabel}
-                                      </p>
-                                    </div>
-                                    {canBook ? (
-                                      <button
-                                        onClick={() => {
-                                          handleBookShift(bookingModal.dateKey, shift.id, wave.id);
-                                          setBookingModal(null);
-                                        }}
-                                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-blue-500/20"
-                                      >
-                                        Сонгох
-                                      </button>
-                                    ) : (
-                                      <span className="rounded-xl bg-gray-800 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-gray-500">
-                                        {waveFull ? 'Дүүрсэн' : waveAccess.state === 'expired' ? 'Хаагдсан' : waveAccess.state === 'scheduled' ? 'Хүлээгдэж байна' : 'Хаалттай'}
-                                      </span>
-                                    )}
-                                  </div>
+                        <div className="mt-2.5 space-y-1.5">
+                          {waves.map(wave => {
+                            const booked = getWaveBookedCount(shift, wave.id);
+                            const waveFull = booked >= wave.slotLimit;
+                            const waveAccess = getWaveAccessState(wave, nowTick);
+                            const waveOpen = waveAccess.state === 'open';
+                            const canBook = !isFull && !waveFull && waveOpen;
+                            const statusLabel = waveFull
+                              ? 'Дүүрсэн'
+                              : waveAccess.label;
+                            return (
+                              <div key={wave.id} className={`flex items-center justify-between gap-2 rounded-xl border px-2.5 py-2 ${canBook ? 'border-blue-500/30 bg-blue-500/5' : 'border-white/5 bg-black/20 opacity-70'}`}>
+                                <div className="min-w-0">
+                                  <p className="text-[11px] font-black text-white truncate">{wave.name}</p>
+                                  <p className="text-[9px] font-black uppercase tracking-widest text-gray-500">
+                                    {booked}/{wave.slotLimit} · {statusLabel}
+                                  </p>
                                 </div>
-                              );
-                            })}
-                          </div>
+                                {canBook ? (
+                                  <button
+                                    onClick={() => {
+                                      handleBookShift(bookingModal.dateKey, shift.id, wave.id);
+                                      setBookingModal(null);
+                                    }}
+                                    className="shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-[9px] font-black uppercase tracking-widest rounded-lg transition-all shadow-lg shadow-blue-500/20"
+                                  >
+                                    Сонгох
+                                  </button>
+                                ) : (
+                                  <span className="shrink-0 rounded-lg bg-gray-800 px-2.5 py-1.5 text-[8px] font-black uppercase tracking-widest text-gray-500">
+                                    {waveFull ? 'Дүүрсэн' : waveAccess.state === 'expired' ? 'Хаагдсан' : waveAccess.state === 'scheduled' ? 'Хүлээгдэж байна' : 'Хаалттай'}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                        </div>
                     );
