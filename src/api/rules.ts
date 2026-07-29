@@ -21,22 +21,22 @@ const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
   totalHours: 0,
 };
 
-function makeSegmentTypeKey(segment: string, employmentType: string) {
+function makeSegmentTypeKey(segment: string, employmentType: string, location: string) {
   // No internal "All" fallback - a missing segment here means the caller
   // failed to validate/filter it out upstream. Previously this silently
   // defaulted to "All", which could make a rule invisible in the
   // segment-filtered admin UI (same class of bug fixed elsewhere for
   // slots/schedules). Callers are responsible for skipping/rejecting
   // empty segments before reaching this function.
-  return `${segment}|${employmentType || 'Full Time'}`;
+  return `${location}|${segment}|${employmentType || 'Full Time'}`;
 }
 
-function makeMonthlyFontHourKey(monthKey: string, segment: string, employmentType: string) {
-  return `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
+function makeMonthlyFontHourKey(monthKey: string, segment: string, employmentType: string, location: string) {
+  return `${monthKey}|${makeSegmentTypeKey(segment, employmentType, location)}`;
 }
 
-function makeRuleId(ruleType: string, monthKey: string | null, segment: string, employmentType: string) {
-  return [ruleType, monthKey || 'ALL_MONTHS', segment, employmentType || 'Full Time']
+function makeRuleId(ruleType: string, monthKey: string | null, segment: string, employmentType: string, location: string) {
+  return [ruleType, monthKey || 'ALL_MONTHS', location, segment, employmentType || 'Full Time']
     .map((part) => String(part).trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]/g, '_'))
     .join('__')
     .slice(0, 191);
@@ -52,6 +52,14 @@ function normalizeSegment(value: unknown) {
 function normalizeEmploymentType(value: unknown) {
   const raw = String(value || 'Full Time').trim();
   return raw === 'Part Time' ? 'Part Time' : 'Full Time';
+}
+
+// Location is a hard two-value dimension (unlike segment) - see the same
+// helper/reasoning in src/api/slots.ts. Defaulting to 'Ulaanbaatar' keeps
+// every rule that existed before this dimension was introduced valid and
+// findable with no migration/backfill of the rule rows themselves needed.
+function normalizeLocation(value: unknown) {
+  return String(value || 'Ulaanbaatar').trim() === 'Darkhan' ? 'Darkhan' : 'Ulaanbaatar';
 }
 
 function normalizeMonthKey(value: unknown) {
@@ -92,16 +100,17 @@ function normalizeWeeklyShiftRule(value: any): WeeklyShiftRule {
   };
 }
 
-async function upsertRule(ruleType: string, monthKey: string | null, segment: string, employmentType: string, value: unknown) {
+async function upsertRule(ruleType: string, monthKey: string | null, segment: string, employmentType: string, location: string, value: unknown) {
   if (!VALID_RULE_TYPES.has(ruleType)) throw new Error('Invalid rule type');
 
-  const id = makeRuleId(ruleType, monthKey, segment, employmentType);
+  const id = makeRuleId(ruleType, monthKey, segment, employmentType, location);
   const payload = {
     id,
     rule_type: ruleType,
     month_key: monthKey,
     segment,
     employment_type: employmentType,
+    location,
     value_text: JSON.stringify(value),
     updated_at: db.fn.now(),
   };
@@ -131,6 +140,7 @@ router.get('/', authenticate, async (_req, res) => {
     rows.forEach((row: any) => {
       const segment = normalizeSegment(row.segment);
       const employmentType = normalizeEmploymentType(row.employment_type);
+      const location = normalizeLocation(row.location);
 
       // Legacy/malformed rows with no real segment recorded are skipped
       // rather than folded into a fake "All" bucket - that would make them
@@ -145,11 +155,11 @@ router.get('/', authenticate, async (_req, res) => {
       const value = parseRuleValue(row);
 
       if (row.rule_type === 'monthly_font_hours' && row.month_key) {
-        monthlyFontHourRules[makeMonthlyFontHourKey(row.month_key, segment, employmentType)] = normalizeMonthlyFontHours(value);
+        monthlyFontHourRules[makeMonthlyFontHourKey(row.month_key, segment, employmentType, location)] = normalizeMonthlyFontHours(value);
       }
 
       if (row.rule_type === 'weekly_shift_rules') {
-        weeklyShiftRules[makeSegmentTypeKey(segment, employmentType)] = normalizeWeeklyShiftRule(value);
+        weeklyShiftRules[makeSegmentTypeKey(segment, employmentType, location)] = normalizeWeeklyShiftRule(value);
       }
     });
 
@@ -169,10 +179,11 @@ router.put('/monthly-font-hours', authenticate, authorize(['admin', 'superadmin'
     const segment = normalizeSegment(req.body.segment);
     if (!segment) return res.status(400).json({ error: 'Segment заавал сонгосон байх ёстой' });
     const employmentType = normalizeEmploymentType(req.body.employmentType ?? req.body.employment_type);
+    const location = normalizeLocation(req.body.location);
     const hours = normalizeMonthlyFontHours(req.body.hours);
 
-    await upsertRule('monthly_font_hours', monthKey, segment, employmentType, hours);
-    res.json({ key: makeMonthlyFontHourKey(monthKey, segment, employmentType), hours });
+    await upsertRule('monthly_font_hours', monthKey, segment, employmentType, location, hours);
+    res.json({ key: makeMonthlyFontHourKey(monthKey, segment, employmentType, location), hours });
   } catch (err) {
     console.error('Save monthly font hours error:', err);
     captureError('rules: Save monthly font hours error:', err);
@@ -185,10 +196,11 @@ router.put('/weekly-shift-rules', authenticate, authorize(['admin', 'superadmin'
     const segment = normalizeSegment(req.body.segment);
     if (!segment) return res.status(400).json({ error: 'Segment заавал сонгосон байх ёстой' });
     const employmentType = normalizeEmploymentType(req.body.employmentType ?? req.body.employment_type);
+    const location = normalizeLocation(req.body.location);
     const rule = normalizeWeeklyShiftRule(req.body.rule || req.body);
 
-    await upsertRule('weekly_shift_rules', null, segment, employmentType, rule);
-    res.json({ key: makeSegmentTypeKey(segment, employmentType), rule });
+    await upsertRule('weekly_shift_rules', null, segment, employmentType, location, rule);
+    res.json({ key: makeSegmentTypeKey(segment, employmentType, location), rule });
   } catch (err) {
     console.error('Save weekly shift rule error:', err);
     captureError('rules: Save weekly shift rule error:', err);

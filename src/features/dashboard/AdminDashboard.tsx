@@ -328,12 +328,14 @@ const createDefaultBookingWaves = (
   bookingCloseAt = "",
 ) => {
   const safeTotal = Math.max(0, Number(totalSlots) || 0);
-  const first = safeTotal > 0 ? Math.ceil(safeTotal / 2) : 0;
-  const second = safeTotal > 0 ? safeTotal - first : 0;
 
+  // No automatic 50/50 split. The full quota defaults onto Morning and
+  // Evening starts at 0 - the admin decides the actual split by typing into
+  // each wave's own input, and that input is never recalculated based on
+  // the other one.
   return [
-    createBookingWave(MORNING_WAVE_NAME, first, bookingOpen, bookingOpenAt, bookingCloseAt),
-    createBookingWave(EVENING_WAVE_NAME, second, bookingOpen, bookingOpenAt, bookingCloseAt),
+    createBookingWave(MORNING_WAVE_NAME, safeTotal, bookingOpen, bookingOpenAt, bookingCloseAt),
+    createBookingWave(EVENING_WAVE_NAME, 0, bookingOpen, bookingOpenAt, bookingCloseAt),
   ];
 };
 

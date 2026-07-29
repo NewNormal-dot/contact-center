@@ -33,6 +33,15 @@ function normalizeEmploymentType(value: unknown) {
   return String(value || 'Full Time').trim() === 'Part Time' ? 'Part Time' : 'Full Time';
 }
 
+// Location is a hard two-value dimension like employment type (unlike
+// segment, which is open-ended) - so it gets the same "always resolve to a
+// known value" treatment. 'Ulaanbaatar' is the default for the same reason
+// the DB column defaults to it: every row that existed before this
+// dimension was introduced is implicitly Ulaanbaatar data.
+function normalizeLocation(value: unknown) {
+  return String(value || 'Ulaanbaatar').trim() === 'Darkhan' ? 'Darkhan' : 'Ulaanbaatar';
+}
+
 // IMPORTANT: this is a DISPLAY-ONLY fallback for reading/showing existing
 // records that might have missing segment data (e.g. legacy rows). It must
 // NEVER be used when validating or writing new shifts - segments are fully
@@ -136,6 +145,7 @@ function slotIdentity(slot: any) {
     displayTime(slot.end_time),
     normalizeSegmentForDisplay(slot.segment),
     normalizeEmploymentType(slot.employment_type),
+    normalizeLocation(slot.location),
     boolValue(slot.is_rest) ? '1' : '0',
   ].join('|');
 }
@@ -155,6 +165,7 @@ function mapSlot(slot: any, currentBookings = 0, bookings: any[] = []) {
     bookingDeadline: displayDateTime(slot.booking_deadline),
     segment: normalizeSegmentForDisplay(slot.segment),
     employmentType: normalizeEmploymentType(slot.employment_type),
+    location: normalizeLocation(slot.location),
     isRest,
     createdAt: slot.created_at,
     updatedAt: slot.updated_at,
@@ -181,6 +192,7 @@ function mapBooking(row: any) {
     bookingDeadline: displayDateTime(row.booking_deadline),
     segment: normalizeSegmentForDisplay(row.segment),
     employmentType: normalizeEmploymentType(row.employment_type),
+    location: normalizeLocation(row.location),
     isRest: Boolean(row.is_rest),
     userName: row.user_name,
     userEmail: row.user_email,
@@ -195,8 +207,9 @@ async function getUser(userId: string) {
 async function getRuleForUser(user: any) {
   const segment = normalizeSegmentForDisplay(user.segment || user.lineType);
   const employmentType = normalizeEmploymentType(user.employment_type || user.employmentType);
+  const location = normalizeLocation(user.location);
   const row = await db('shift_rule_settings')
-    .where({ rule_type: 'weekly_shift_rules', segment, employment_type: employmentType })
+    .where({ rule_type: 'weekly_shift_rules', segment, employment_type: employmentType, location })
     .first();
   if (!row?.value_text) return null;
   try { return JSON.parse(row.value_text); } catch { return null; }
@@ -306,6 +319,7 @@ router.get('/bookings', authenticate, async (req: any, res) => {
         'work_slots.booking_deadline',
         'work_slots.segment',
         'work_slots.employment_type',
+        'work_slots.location',
         'work_slots.is_rest',
         // Prefer the live users table, falling back to the snapshot stored
         // on the booking itself if the user account was deleted - keeps
@@ -369,6 +383,7 @@ router.get('/', authenticate, async (_req, res) => {
             db.raw('COALESCE(users.code, slot_bookings.user_code) as user_code'),
             'users.segment as user_segment',
             'users.employment_type as user_employment_type',
+            'users.location as user_location',
           )
       : [];
 
@@ -385,6 +400,7 @@ router.get('/', authenticate, async (_req, res) => {
         bookedAt: b.booked_at,
         segment: b.user_segment,
         employmentType: b.user_employment_type,
+        location: b.user_location,
       });
     }
 
@@ -403,7 +419,7 @@ router.get('/', authenticate, async (_req, res) => {
 });
 
 router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
-  const { date, startTime, endTime, start_time, end_time, capacity, bookingDeadline, booking_deadline, bookingOpen, booking_open, bookingOpenAt, booking_open_at, segment, employmentType, employment_type, isRest, is_rest } = req.body;
+  const { date, startTime, endTime, start_time, end_time, capacity, bookingDeadline, booking_deadline, bookingOpen, booking_open, bookingOpenAt, booking_open_at, segment, employmentType, employment_type, location, isRest, is_rest } = req.body;
   const finalCapacity = Math.max(1, Number(capacity) || 1);
   const rest = Boolean(isRest || is_rest || startTime === 'Амралт' || start_time === 'Амралт');
   const sqlSlotDate = toSqlDate(date);
@@ -426,6 +442,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
   // segment-filtered schedule UI (no dropdown option ever shows "All").
   const finalSegment = String(segment || '').trim();
   const finalEmploymentType = normalizeEmploymentType(employment_type || employmentType);
+  const finalLocation = normalizeLocation(location);
 
   if (!sqlSlotDate || !sqlDeadline || (!rest && (!sqlStartTime || !sqlEndTime))) {
     return res.status(400).json({ error: 'Огноо болон цагийн формат буруу байна' });
@@ -437,7 +454,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
 
   try {
     const duplicateSlot = await db('work_slots')
-      .where({ date: sqlSlotDate, start_time: sqlStartTime, end_time: sqlEndTime, segment: finalSegment, employment_type: finalEmploymentType, is_rest: rest ? 1 : 0 })
+      .where({ date: sqlSlotDate, start_time: sqlStartTime, end_time: sqlEndTime, segment: finalSegment, employment_type: finalEmploymentType, location: finalLocation, is_rest: rest ? 1 : 0 })
       .first();
 
     const duration = rest ? 0 : calculateDuration(sqlStartTime, sqlEndTime, req.body.duration);
@@ -459,6 +476,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
       booking_deadline: finalBookingOpen ? sqlDeadline : null,
       segment: finalSegment,
       employment_type: finalEmploymentType,
+      location: finalLocation,
       is_rest: rest ? 1 : 0,
     });
     res.status(201).json({ id });
@@ -513,6 +531,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
             continue;
           }
           const employmentType = normalizeEmploymentType(shift.employmentType || shift.employment_type);
+          const location = normalizeLocation(shift.location);
           const sqlStart = rest ? '00:00:00' : normalizeTime(startTime);
           const sqlEnd = rest ? '00:00:00' : normalizeTime(endTime);
           if (!rest && (!sqlStart || !sqlEnd)) {
@@ -532,6 +551,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
             booking_deadline: bookingWindow.bookingDeadline,
             segment,
             employment_type: employmentType,
+            location,
             is_rest: rest ? 1 : 0,
             updated_at: trx.fn.now(),
           });
@@ -676,6 +696,9 @@ const bookHandler = async (req: any, res: any) => {
     }
     if (normalizeEmploymentType(slot.employment_type) !== normalizeEmploymentType(user.employment_type)) {
       return res.status(403).json({ error: 'Full/Part төрөл таарахгүй байна' });
+    }
+    if (normalizeLocation(slot.location) !== normalizeLocation(user.location)) {
+      return res.status(403).json({ error: 'Өөр байршлын (location) хуваарь сонгох боломжгүй' });
     }
 
     const existingOnSameDay = await db('slot_bookings')
