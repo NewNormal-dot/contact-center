@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { LazyMedia } from '../../components/LazyMedia';
 import Sidebar from '../../components/Sidebar';
 import { DigitalClock } from '../../components/DigitalClock';
-import { Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, Sparkles, ArrowRightLeft, Edit, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
+import { Bell, Search, Calendar, Clock, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Sparkles, ArrowRightLeft, Edit, History, Palmtree, X, BookOpen, AlertCircle, FileText, Download, ExternalLink, Plus, Filter, Lock } from 'lucide-react';
 import { Notification as AppNotification, TrainingMaterial, VacationQuota, VacationRequest, TradeRequest, HourlyLeaveRequest } from '../../types';
 import { logAction } from '../../utils/logger';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
@@ -706,6 +706,14 @@ export default function CsrDashboard() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [schedule, setSchedule] = useState<Record<string, DayData>>({});
   const [selectedMonth, setSelectedMonth] = useState(formatMonthKey(new Date()));
+  // Default schedule view is a rolling ±10-day window centered on today
+  // (see displayDays below), not tied to calendar month boundaries. Set to
+  // true only when the person explicitly steps to another month using the
+  // new prev/next month arrows next to "N-р сарын фонт цаг" - that switches
+  // to a full calendar-month view (history for past months, a bookable
+  // calendar for future months). Reset back to the rolling default whenever
+  // they land on the schedule tab again (see effect below).
+  const [monthNavActive, setMonthNavActive] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [filterStep, setFilterStep] = useState<'year' | 'month'>('year');
   const [tempYear, setTempYear] = useState(new Date().getFullYear());
@@ -735,6 +743,14 @@ export default function CsrDashboard() {
   useEffect(() => {
     setIsStatsExpanded(false);
   }, [activeTab, selectedMonth]);
+
+  useEffect(() => {
+    if (activeTab === 'schedule') {
+      setMonthNavActive(false);
+      setSelectedMonth(formatMonthKey(new Date()));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const calculateHours = (timeStr: string) => {
     if (!timeStr || timeStr === 'Амралт') return 0;
@@ -843,28 +859,46 @@ export default function CsrDashboard() {
   }, [schedule, currentMonthKey]);
 
   const displayDays = React.useMemo(() => {
-    const [year, month] = selectedMonth.split('-').map(Number);
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-    
-    const days = [];
+
+    const days: Array<{ date: Date; isToday: boolean; isPast: boolean; isTomorrow: boolean; isYesterday: boolean }> = [];
+    const buildDay = (date: Date) => {
+      const isToday = date.toDateString() === now.toDateString();
+      const isPast = date < now;
+      const isTomorrow = new Date(date.getTime() - 24 * 60 * 60 * 1000).toDateString() === now.toDateString();
+      const isYesterday = new Date(date.getTime() + 24 * 60 * 60 * 1000).toDateString() === now.toDateString();
+      return { date, isToday, isPast, isTomorrow, isYesterday };
+    };
+
+    if (!monthNavActive) {
+      // Default rolling view: 10 days back through 10 days forward from
+      // today, regardless of calendar month boundaries.
+      const start = new Date(now);
+      start.setDate(start.getDate() - 10);
+      const end = new Date(now);
+      end.setDate(end.getDate() + 10);
+      const current = new Date(start);
+      while (current <= end) {
+        days.push(buildDay(new Date(current)));
+        current.setDate(current.getDate() + 1);
+      }
+      return days;
+    }
+
+    // Explicit month navigation (prev/next arrows): show the full calendar
+    // month - a full history for past/current months, a full bookable
+    // calendar for future months.
+    const [year, month] = selectedMonth.split('-').map(Number);
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0);
     const current = new Date(startDate);
-    
     while (current <= endDate) {
-      const date = new Date(current);
-      const isToday = date.toDateString() === now.toDateString();
-      const isPast = date < now;
-      const isTomorrow = new Date(date.getTime() - 24*60*60*1000).toDateString() === now.toDateString();
-      const isYesterday = new Date(date.getTime() + 24*60*60*1000).toDateString() === now.toDateString();
-      
-      days.push({ date, isToday, isPast, isTomorrow, isYesterday });
+      days.push(buildDay(new Date(current)));
       current.setDate(current.getDate() + 1);
     }
-
     return days;
-  }, [selectedMonth]);
+  }, [selectedMonth, monthNavActive]);
 
 
   const mapNotificationForUi = (raw: any): AppNotification => {
@@ -1655,15 +1689,42 @@ export default function CsrDashboard() {
     const [year, month] = selectedMonth.split('-').map(Number);
     const currentMonthName = ENG_MONTHS[month - 1];
 
+    const goToPrevMonth = () => {
+      const prevDate = new Date(year, month - 2, 1);
+      setSelectedMonth(formatMonthKey(prevDate));
+      setMonthNavActive(true);
+    };
+    const goToNextMonth = () => {
+      const nextDate = new Date(year, month, 1);
+      setSelectedMonth(formatMonthKey(nextDate));
+      setMonthNavActive(true);
+    };
+
     return (
       <div className="w-full space-y-4">
         <div className="relative">
           <div className="bg-gray-900/40 border border-gray-800 p-4 md:p-5 rounded-2xl backdrop-blur-md space-y-3">
             <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <p className="text-[11px] font-black text-white">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={goToPrevMonth}
+                  className="p-1 rounded-lg text-gray-500 hover:text-blue-400 hover:bg-gray-800 transition-colors"
+                  aria-label="Өмнөх сар"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <p className="text-[11px] font-black text-white whitespace-nowrap">
                   {month}-р сарын фонт цаг: <span className="text-blue-400">{effectiveMonthlyFontTime} ц</span>
                 </p>
+                <button
+                  type="button"
+                  onClick={goToNextMonth}
+                  className="p-1 rounded-lg text-gray-500 hover:text-blue-400 hover:bg-gray-800 transition-colors"
+                  aria-label="Дараа сар"
+                >
+                  <ChevronRight size={16} />
+                </button>
               </div>
               <div className="text-right">
                 <p className="text-[11px] font-black text-white">
