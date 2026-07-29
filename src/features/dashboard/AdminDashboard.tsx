@@ -4681,50 +4681,54 @@ export default function AdminDashboard() {
                 waveKind: "morning" | "evening",
                 value: number,
               ) => {
-                const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
+                const dateKey = selectedDateSchedule;
+                if (!dateKey || isPastScheduleDate(dateKey)) return;
                 const cleanSlots = Math.max(0, Number(value) || 0);
-                const targetTime = getShiftTimeKey(targetShift.time);
                 const newSchedules = { ...schedules };
 
-                targetDateKeys.forEach((dateKey) => {
-                  const currentSchedule = newSchedules[dateKey];
-                  if (!currentSchedule?.shifts?.length) return;
+                const currentSchedule = newSchedules[dateKey];
+                if (!currentSchedule?.shifts?.length) return;
 
-                  newSchedules[dateKey] = {
-                    ...currentSchedule,
-                    shifts: currentSchedule.shifts.map((shift: any) => {
-                      const isSameShift =
-                        getShiftTimeKey(shift.time) === targetTime &&
+                newSchedules[dateKey] = {
+                  ...currentSchedule,
+                  shifts: currentSchedule.shifts.map((shift: any) => {
+                    // Match the exact shift by its DB id whenever it's
+                    // available - this is the only reliable way to be sure
+                    // we're touching THIS shift and not a different one that
+                    // happens to share the same time/segment/employment type.
+                    // Freshly-added, not-yet-saved shifts have no id yet, so
+                    // those fall back to a time-key match, but only within
+                    // this single day - never across other selected dates.
+                    const isSameShift = targetShift.id
+                      ? shift.id === targetShift.id
+                      : getShiftTimeKey(shift.time) === getShiftTimeKey(targetShift.time) &&
                         shift.segment === targetShift.segment &&
                         shift.employmentType === targetShift.employmentType;
 
-                      if (!isSameShift) return shift;
+                    if (!isSameShift) return shift;
 
-                      const existingWaves = getBookingWavesForShift(
-                        shift,
-                        !!currentSchedule.bookingOpen,
-                        currentSchedule.bookingOpenAt || "",
-                        currentSchedule.bookingCloseAt || "",
-                      );
-                      const updatedWaves = existingWaves.map((wave) =>
-                        getWaveKind(wave) === waveKind
-                          ? { ...wave, slotLimit: cleanSlots }
-                          : wave,
-                      );
-                      const nextTotalSlots = sumWaveSlots(updatedWaves);
+                    const existingWaves = getBookingWavesForShift(
+                      shift,
+                      !!currentSchedule.bookingOpen,
+                      currentSchedule.bookingOpenAt || "",
+                      currentSchedule.bookingCloseAt || "",
+                    );
+                    const updatedWaves = existingWaves.map((wave) =>
+                      getWaveKind(wave) === waveKind
+                        ? { ...wave, slotLimit: cleanSlots }
+                        : wave,
+                    );
+                    const nextTotalSlots = sumWaveSlots(updatedWaves);
 
-                      return {
-                        ...shift,
-                        totalSlots: nextTotalSlots,
-                        bookingWaves: updatedWaves,
-                      };
-                    }),
-                  };
-                });
+                    return {
+                      ...shift,
+                      totalSlots: nextTotalSlots,
+                      bookingWaves: updatedWaves,
+                    };
+                  }),
+                };
 
-                if (targetDateKeys.length > 0) {
-                  void persistSchedules(newSchedules, targetDateKeys);
-                }
+                void persistSchedules(newSchedules, [dateKey]);
               };
 
               const toggleWaveSelection = (shift: any, wave: BookingWaveDraft) => {
