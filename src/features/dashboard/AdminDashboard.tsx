@@ -3694,14 +3694,23 @@ export default function AdminDashboard() {
       return `${y}-${m}-${d}`;
     };
 
+    // CSR counts must respect the currently selected location too - a
+    // segment's CSRs are only relevant here if they're also assigned to
+    // activeLocationView, otherwise switching Ulaanbaatar/Darkhan would
+    // show the exact same headcount for both.
     const getCSRCount = (segment: string, type: "Full Time" | "Part Time") => {
       return csrs.filter(
-        (c) => c.lineType === segment && c.employmentType === type,
+        (c) =>
+          c.lineType === segment &&
+          c.employmentType === type &&
+          (normalizeEmployeeLocation(c.location) || "Ulaanbaatar") === activeLocationView,
       ).length;
     };
 
     const hasAnyCSR = (segment: string) => {
-      return csrs.some((c) => c.lineType === segment);
+      return csrs.some(
+        (c) => c.lineType === segment && (normalizeEmployeeLocation(c.location) || "Ulaanbaatar") === activeLocationView,
+      );
     };
 
     const monthDates = getDatesInMonth(
@@ -3710,7 +3719,9 @@ export default function AdminDashboard() {
     );
     const selectedBookingDateSet = new Set(selectedBookingDates);
     const activeSegmentTotal = csrs.filter(
-      (c) => c.lineType === activeSegmentView,
+      (c) =>
+        c.lineType === activeSegmentView &&
+        (normalizeEmployeeLocation(c.location) || "Ulaanbaatar") === activeLocationView,
     ).length;
     const activeEmploymentTotal = getCSRCount(
       activeSegmentView,
@@ -4199,7 +4210,11 @@ export default function AdminDashboard() {
                   className={`h-9 w-full bg-black/60 border rounded-xl pl-4 pr-9 text-[10px] font-black uppercase tracking-wider focus:outline-none cursor-pointer appearance-none shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)] transition-all hover:bg-black/80 ${activeSegmentTotal === 0 ? "border-red-500/40 text-red-400 focus:border-red-500/60" : "border-white/10 text-white focus:border-blue-500/50"}`}
                 >
                   {segments.map((seg) => {
-                    const count = csrs.filter((c) => c.lineType === seg).length;
+                    const count = csrs.filter(
+                      (c) =>
+                        c.lineType === seg &&
+                        (normalizeEmployeeLocation(c.location) || "Ulaanbaatar") === activeLocationView,
+                    ).length;
                     return (
                       <option
                         key={seg}
