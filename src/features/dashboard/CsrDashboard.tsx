@@ -481,11 +481,11 @@ const DayRow = React.memo(({
   const bookingAccess = getDayBookingAccess(dayData, nowTick);
   const isBookingOpen = bookingAccess.canBook;
   // Editing an existing booking has a stricter cutoff than making a brand
-  // new one: only allowed while there's still at least 30 minutes left
+  // new one: only allowed while there's still at least 10 minutes left
   // before booking closes (matches the server-side rule). If there are no
   // other open/bookable slots at all, isBookingOpen is already false, which
   // also correctly hides the Edit option in that case.
-  const canEditBooking = isBookingOpen && (bookingAccess.closeTarget - nowTick > 30 * 60 * 1000);
+  const canEditBooking = isBookingOpen && (bookingAccess.closeTarget - nowTick > 10 * 60 * 1000);
   const bookingStatusText = bookingAccess.state === 'scheduled'
     ? `Захиалга ${bookingAccess.label.toLowerCase()}`
     : bookingAccess.state === 'open' || bookingAccess.state === 'full'
@@ -966,7 +966,14 @@ export default function CsrDashboard() {
       const bookingOpen = Boolean(slot.bookingOpen ?? slot.booking_is_open);
       const bookingOpenAt = slot.bookingOpenAt || slot.booking_open_at || '';
       const bookingCloseAt = slot.bookingDeadline || slot.booking_deadline || '';
+      // IMPORTANT: `id` here must be the slot_bookings.id (see backend
+      // mapping in src/api/slots.ts). handleBookShift's "am I already
+      // booked on this day" detection reads `mine.id` to get the existing
+      // booking's id for the edit/swap flow (editBookingId sent to
+      // POST /slots/book) - without it, editing always looked like a
+      // brand-new booking attempt and got rejected with "already booked".
       const bookedBy = (slot.bookings || []).map((b: any) => ({
+        id: b.id,
         userId: b.userId || b.user_id,
         userName: b.userName || b.user_name || 'CSR',
         userCode: b.userCode || b.user_code,
