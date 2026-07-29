@@ -3934,39 +3934,45 @@ export default function AdminDashboard() {
       );
     };
 
+    // "Бүгдийг устгах" = delete every shift matching the currently
+    // selected location + segment (both employment types) on the
+    // selected day(s). Other segments and the other location's shifts
+    // on the same day(s) are left untouched.
     const handleDeleteSelectedDayShifts = (targetDateKeys: string[]) => {
       const editableDateKeys = targetDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
       if (editableDateKeys.length === 0) return;
 
-      handleConfirm("Сонгосон өдрүүдийн бүх ээлжийг устгах уу?", () => {
-        const newSchedules = { ...schedules };
+      handleConfirm(
+        `${activeLocationView} / ${activeSegmentView} segment-ийн сонгосон өдрүүдийн БҮХ ээлжийг (Full Time + Part Time) устгах уу?`,
+        () => {
+          const newSchedules = { ...schedules };
 
-        editableDateKeys.forEach((dateKey) => {
-          const currentShifts = newSchedules[dateKey]?.shifts || [];
-          const remainingShifts = currentShifts.filter(
-            (shift: any) =>
-              !(
-                shift.segment === activeSegmentView &&
-                shift.employmentType === activeEmploymentView
-              ),
+          editableDateKeys.forEach((dateKey) => {
+            const currentDay = newSchedules[dateKey];
+            if (!currentDay?.shifts?.length) return;
+
+            const remainingShifts = currentDay.shifts.filter(
+              (shift: any) =>
+                !(
+                  shift.segment === activeSegmentView &&
+                  (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === activeLocationView
+                ),
+            );
+
+            if (remainingShifts.length === 0) {
+              delete newSchedules[dateKey];
+            } else {
+              newSchedules[dateKey] = { ...currentDay, shifts: remainingShifts };
+            }
+          });
+
+          void persistSchedules(newSchedules, editableDateKeys);
+          logAction(
+            "Schedule Deleted",
+            `Deleted ${activeLocationView}/${activeSegmentView} shifts from ${editableDateKeys.length} day(s)`,
           );
-
-          if (remainingShifts.length === 0) {
-            delete newSchedules[dateKey];
-          } else {
-            newSchedules[dateKey] = {
-              ...newSchedules[dateKey],
-              shifts: remainingShifts,
-            };
-          }
-        });
-
-        void persistSchedules(newSchedules, editableDateKeys);
-        logAction(
-          "Schedule Deleted",
-          `Deleted ${activeEmploymentView} shifts for ${activeSegmentView} from ${editableDateKeys.length} day(s)`,
-        );
-      });
+        },
+      );
     };
 
     const handleExportScheduleReport = () => {
@@ -4520,11 +4526,30 @@ export default function AdminDashboard() {
               const holidayTargetDates = selectedDateKeys;
               const holidayTargetLabel = formatSelectedDateRange(selectedDateKeys);
               const canEditSelection = selectedDateKeys.some((dateKey) => !isPastScheduleDate(dateKey));
+              // Used for weekly-rule hour availability - must also respect
+              // the active location, otherwise a Darkhan admin would see
+              // hour-availability counts padded out by Ulaanbaatar shifts
+              // (and vice versa) for the same segment/employment type.
               const getMatchingShiftsForDate = (dateKey: string) =>
                 (schedules[dateKey]?.shifts || []).filter(
                   (shift: any) =>
                     shift.segment === activeSegmentView &&
-                    shift.employmentType === activeEmploymentView,
+                    shift.employmentType === activeEmploymentView &&
+                    (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === activeLocationView,
+                );
+
+              // Used by the "Бүгдийг устгах" button - deletes every shift
+              // (both employment types) for the currently selected
+              // location + segment on the selected day(s). Deliberately
+              // NOT employment-type-scoped (that already has its own
+              // per-shift delete button), and NOT a full-day wipe across
+              // other segments/locations - only this location/segment's
+              // shifts are touched.
+              const getDeletableShiftsForDate = (dateKey: string) =>
+                (schedules[dateKey]?.shifts || []).filter(
+                  (shift: any) =>
+                    shift.segment === activeSegmentView &&
+                    (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === activeLocationView,
                 );
 
               const selectedRuleShiftAvailability = selectedKeys.reduce<Record<string, number>>((acc, dateKey) => {
@@ -4542,6 +4567,14 @@ export default function AdminDashboard() {
               const selectedDaysHaveShifts =
                 selectedDateKeys.length > 0 &&
                 selectedDateKeys.every((dateKey) => getMatchingShiftsForDate(dateKey).length > 0);
+
+              // Used only by the "Бүгдийг устгах" button - enabled as soon
+              // as the selected location/segment has ANY shift on ANY
+              // selected day (see getDeletableShiftsForDate above).
+              const selectedDaysHaveAnyShifts = selectedDateKeys.some(
+                (dateKey) => getDeletableShiftsForDate(dateKey).length > 0,
+              );
+
 
               const selectedRuleShiftHours = Object.keys(selectedRuleShiftAvailability).sort((a, b) => {
                 if (a === "rest") return 1;
@@ -5453,7 +5486,7 @@ export default function AdminDashboard() {
                       <button
                         type="button"
                         onClick={() => handleDeleteSelectedDayShifts(selectedDateKeys)}
-                        disabled={!hasSelectedDays || !canEditSelection || !selectedDaysHaveShifts}
+                        disabled={!hasSelectedDays || !canEditSelection || !selectedDaysHaveAnyShifts}
                         className="rounded-2xl border border-red-500/10 bg-red-500/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-red-300 transition-all hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Trash2 size={13} className="inline mr-1" /> Бүгдийг устгах
