@@ -2739,23 +2739,28 @@ export default function CsrDashboard() {
                     const isFull = shift.bookedSlots >= shift.totalSlots;
                     const dayData = schedule[bookingModal.dateKey];
                     const waves = getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '', dayData?.bookingCloseAt || '');
+                    const isMyCurrentShift = Boolean(shift.bookedBy?.some((b: any) => b.userId === csrProfile.id));
                     return (
                       <div
                         key={`booking-shift-${shift.id}-${idx}`}
                         className={`p-3.5 rounded-2xl border transition-all ${
-                          isFull
-                            ? 'bg-gray-800/20 border-gray-800 opacity-70'
-                            : 'bg-gray-800/40 border-gray-700 hover:border-blue-500/50'
+                          isMyCurrentShift
+                            ? 'bg-green-500/5 border-green-500/40'
+                            : isFull
+                              ? 'bg-gray-800/20 border-gray-800 opacity-70'
+                              : 'bg-gray-800/40 border-gray-700 hover:border-blue-500/50'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
-                            <Clock size={16} className={`shrink-0 ${isFull ? 'text-gray-600' : 'text-blue-400'}`} />
+                            <Clock size={16} className={`shrink-0 ${isMyCurrentShift ? 'text-green-400' : isFull ? 'text-gray-600' : 'text-blue-400'}`} />
                             <span className="text-sm font-bold text-white truncate">{formatShiftTimeForDisplay(shift.time)}</span>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{shift.bookedSlots}/{shift.totalSlots}</span>
-                            {isFull && (
+                            {isMyCurrentShift ? (
+                              <span className="px-2 py-0.5 bg-green-500/10 text-green-400 text-[9px] font-black rounded uppercase">Таны сонголт</span>
+                            ) : isFull && (
                               <span className="px-2 py-0.5 bg-red-500/10 text-red-500 text-[9px] font-black rounded uppercase">Дүүрсэн</span>
                             )}
                           </div>
@@ -2765,7 +2770,7 @@ export default function CsrDashboard() {
                           <motion.div
                             initial={{ width: 0 }}
                             animate={{ width: `${Math.min(100, (shift.bookedSlots / Math.max(1, shift.totalSlots)) * 100)}%` }}
-                            className={`h-full rounded-full ${isFull ? 'bg-red-500' : 'bg-blue-500'}`}
+                            className={`h-full rounded-full ${isMyCurrentShift ? 'bg-green-500' : isFull ? 'bg-red-500' : 'bg-blue-500'}`}
                           />
                         </div>
 
@@ -2775,7 +2780,7 @@ export default function CsrDashboard() {
                             const waveFull = booked >= wave.slotLimit;
                             const waveAccess = getWaveAccessState(wave, nowTick);
                             const waveOpen = waveAccess.state === 'open';
-                            const canBook = !isFull && !waveFull && waveOpen;
+                            const canBook = !isMyCurrentShift && !isFull && !waveFull && waveOpen;
                             const statusLabel = waveFull
                               ? 'Дүүрсэн'
                               : waveAccess.label;
@@ -2797,6 +2802,10 @@ export default function CsrDashboard() {
                                   >
                                     Сонгох
                                   </button>
+                                ) : isMyCurrentShift ? (
+                                  <span className="shrink-0 rounded-lg bg-green-500/10 border border-green-500/30 px-2.5 py-1.5 text-[8px] font-black uppercase tracking-widest text-green-400">
+                                    Идэвхтэй
+                                  </span>
                                 ) : (
                                   <span className="shrink-0 rounded-lg bg-gray-800 px-2.5 py-1.5 text-[8px] font-black uppercase tracking-widest text-gray-500">
                                     {waveFull ? 'Дүүрсэн' : waveAccess.state === 'expired' ? 'Хаагдсан' : waveAccess.state === 'scheduled' ? 'Хүлээгдэж байна' : 'Хаалттай'}

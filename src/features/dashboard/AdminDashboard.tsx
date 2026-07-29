@@ -4608,7 +4608,10 @@ export default function AdminDashboard() {
                 return nextCounts;
               };
 
-              const activeRuleTotalSelected = Math.max(0, Math.min(selectedKeys.length, Number(activeWeeklyRule.selectedDays) || 0));
+              const activeRuleTotalSelected = Math.max(
+                selectedKeys.length > 0 ? 1 : 0,
+                Math.min(selectedKeys.length, Number(activeWeeklyRule.selectedDays) || 0),
+              );
               const visibleRuleHourCounts = selectedRuleShiftHours.reduce<Record<string, number>>((acc, hourKey) => {
                 acc[hourKey] = Math.max(
                   0,
@@ -4622,7 +4625,10 @@ export default function AdminDashboard() {
               const activeRuleHourTotal = calculateRuleHourTotal(visibleRuleHourCounts);
 
               const updateSelectedDayLimit = (count: number) => {
-                const nextSelectedDays = Math.max(0, Math.min(selectedKeys.length, Number(count) || 0));
+                const nextSelectedDays = Math.max(
+                  selectedKeys.length > 0 ? 1 : 0,
+                  Math.min(selectedKeys.length, Number(count) || 0),
+                );
                 // SIMPLIFIED MODE (per admin request): only cap the TOTAL
                 // number of selectable days per week. hourCounts is
                 // intentionally kept EMPTY here - the backend's
@@ -4914,7 +4920,9 @@ export default function AdminDashboard() {
                   <div className="rounded-[1.45rem] border border-blue-500/15 bg-gray-950/60 p-3 shadow-inner">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="min-w-0 text-lg font-black leading-tight text-white sm:text-xl">
-                        {checkedDateKeys.length > 0 ? `Сонгосон өдөр: ${checkedDateKeys.length}` : "Өдөр сонгоогүй"}
+                        {checkedDateKeys.length > 0
+                          ? `Сонгосон өдөр: ${checkedDateKeys.map((dk) => formatDateKeyShort(dk)).join(", ")}`
+                          : "Өдөр сонгоогүй"}
                       </h3>
                       <button
                         type="button"
@@ -4934,7 +4942,7 @@ export default function AdminDashboard() {
                     </div>
                   )}
 
-                  {selectedKeys.length > 0 && selectedDaysHaveShifts && (
+                  {selectedKeys.length > 1 && selectedDaysHaveShifts && (
                     <div className="rounded-[1.45rem] border border-blue-500/15 bg-blue-500/5 p-4">
                       <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                         <div>
@@ -4952,16 +4960,13 @@ export default function AdminDashboard() {
                           </span>
                           <input
                             type="number"
-                            min={0}
+                            min={1}
                             max={selectedKeys.length}
                             value={activeRuleTotalSelected}
                             onFocus={(e) => e.target.select()}
                             onChange={(e) => updateSelectedDayLimit(Number(e.target.value))}
                             className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
                           />
-                          <span className="text-[9px] text-gray-500">
-                            Жишээ нь: 7 хоногийн хуваарьт 4 гэж тохируулбал, CSR энэ 7 өдрөөс хамгийн ихдээ 4 өдөр сонгож захиалах эрхтэй болно (үлдсэн өдрүүд амралт болно).
-                          </span>
                         </label>
                         {/*
                           SKIPPED FOR NOW (per admin request, 2026-07): the
@@ -4993,12 +4998,6 @@ export default function AdminDashboard() {
                           </label>
                         ))}
                       </div>
-                    </div>
-                  )}
-
-                  {selectedKeys.length > 0 && !selectedDaysHaveShifts && (
-                    <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-yellow-300">
-                      Сонгосон бүх өдөрт энэ segment/type-ийн shift эсвэл амралт орсон үед дүрэм тохируулна.
                     </div>
                   )}
 
@@ -5413,42 +5412,6 @@ export default function AdminDashboard() {
                   </div>
 
                   <div className="rounded-[1.5rem] border border-white/5 bg-black/20 p-3 space-y-3">
-                    {(() => {
-                      const dayForWaves = schedules[selectedDateSchedule];
-                      const allSelectableWaveKeys = filteredShifts.flatMap((shift: any) => {
-                        const waves = getBookingWavesForShift(
-                          shift,
-                          !!dayForWaves?.bookingOpen,
-                          dayForWaves?.bookingOpenAt || "",
-                          dayForWaves?.bookingCloseAt || "",
-                        );
-                        const morningWave = waves.find((wave) => getWaveKind(wave) === "morning") || createBookingWave(MORNING_WAVE_NAME, 0);
-                        const eveningWave = waves.find((wave) => getWaveKind(wave) === "evening") || createBookingWave(EVENING_WAVE_NAME, 0);
-                        return [morningWave, eveningWave]
-                          .filter((wave) => Number(wave.slotLimit) > 0)
-                          .map((wave) => getShiftWaveSelectionKey(shift, wave));
-                      });
-                      const allWavesSelected =
-                        allSelectableWaveKeys.length > 0 &&
-                        allSelectableWaveKeys.every((key) => selectedWaveKeys.includes(key));
-
-                      // One click selects every open-able Өглөө/Орой slot for
-                      // the day instead of clicking each shift's wave pill
-                      // one by one - this matters most right after a
-                      // successful open/close action, since that clears the
-                      // selection (setSelectedWaveKeys([])) and the buttons
-                      // above go straight back to disabled otherwise.
-                      return allSelectableWaveKeys.length > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedWaveKeys(allWavesSelected ? [] : allSelectableWaveKeys)}
-                          disabled={!canEditSelection}
-                          className="w-full rounded-2xl border border-white/5 bg-gray-800/40 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-gray-300 transition-all hover:border-blue-500/40 hover:text-blue-300 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {allWavesSelected ? "Бүх slot-ын сонголтыг цуцлах" : `Энэ өдрийн бүх slot-г сонгох (${allSelectableWaveKeys.length})`}
-                        </button>
-                      ) : null;
-                    })()}
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => {
@@ -5471,7 +5434,7 @@ export default function AdminDashboard() {
                     </div>
                     {canEditSelection && filteredShifts.length > 0 && selectedWaveKeys.length === 0 && (
                       <p className="text-[10px] font-bold text-gray-500 text-center">
-                        Дээрх slot-уудаас сонгох, эсвэл "Бүх slot-г сонгох" дарснаар Нээх/Хаах товч идэвхжинэ.
+                        Дээрх slot-уудаас сонгоход Нээх/Хаах товч идэвхжинэ.
                       </p>
                     )}
                     <div className="grid grid-cols-2 gap-2">
