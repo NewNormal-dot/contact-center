@@ -573,7 +573,7 @@ const DayRow = React.memo(({
               {isPast 
                 ? 'Ажиллаж дууссан' 
                 : !hasData 
-                  ? 'Уучлаарай, хуваарь одоогоор ороогүй байна' 
+                  ? 'Хуваарь ороогүй байна' 
                   : !myBookedShift
                     ? bookingStatusText
                   : isToday 
@@ -1196,7 +1196,7 @@ export default function CsrDashboard() {
     fetchTradeRequests();
     fetchHolidays();
     fetchHourlyLeaveRequests();
-    const interval = setInterval(() => { loadData(); fetchDbSchedule(); }, 5000);
+    const interval = setInterval(() => { loadData(); fetchDbSchedule(); }, 2000);
     const notificationInterval = setInterval(fetchNotifications, 10000);
     const vacationInterval = setInterval(fetchVacationRequests, 10000);
     const shiftRuleInterval = setInterval(fetchShiftRules, 5000);
@@ -1634,56 +1634,6 @@ export default function CsrDashboard() {
     setTradingModal({ isOpen: true, dateKey, step: 'times' });
   }, []);
 
-  const handleSubmitSchedule = () => {
-    if (!csrProfile) return;
-
-    if (schedule && Object.keys(schedule).filter(d => d.startsWith(currentMonthKey) && schedule[d].shifts.some(s => s.bookedBy?.some(b => b.userId === csrProfile.id))).length === 0) {
-      alert('Та дор хаяж нэг өдөр ээлж захиалах ёстой.');
-      return;
-    }
-
-    const monthWeekKeys = Array.from(new Set(
-      Object.keys(schedule)
-        .filter((dateKey) => dateKey.startsWith(currentMonthKey))
-        .map((dateKey) => getWeekStartDateKey(dateKey)),
-    ));
-
-    for (const weekStartKey of monthWeekKeys) {
-      const weekStats = getMyWeeklyBookingStats(weekStartKey, schedule);
-      if (weekStats.bookedDays === 0) continue;
-      const maxSelectedDays = Number(activeWeeklyRule.selectedDays) || 0;
-      if (maxSelectedDays > 0 && weekStats.bookedDays > maxSelectedDays) {
-        alert(`${weekStartKey}-с эхлэх 7 хоногт нийт сонгох өдөр ${maxSelectedDays}-аас их байна.`);
-        return;
-      }
-      for (const [hourKey, maxCount] of Object.entries(activeWeeklyRule.hourCounts || {})) {
-        const currentCount = weekStats.hourCounts[hourKey] || 0;
-        if (Number(maxCount) > 0 && currentCount > Number(maxCount)) {
-          alert(hourKey === 'rest'
-            ? `${weekStartKey}-с эхлэх 7 хоногт амралтын өдөр ${maxCount}-аас их байна.`
-            : `${weekStartKey}-с эхлэх 7 хоногт ${hourKey} цагтай shift ${maxCount}-аас их байна.`);
-          return;
-        }
-      }
-    }
-
-    try {
-      const allSubmitted = getLocalData('csrSubmittedMonths', {});
-      const userSubmitted = allSubmitted[csrProfile.id] || [];
-      
-      if (!userSubmitted.includes(currentMonthKey)) {
-        const updatedSubmitted = [...userSubmitted, currentMonthKey];
-        allSubmitted[csrProfile.id] = updatedSubmitted;
-        setLocalData('csrSubmittedMonths', allSubmitted);
-        setSubmittedMonths(updatedSubmitted);
-        logAction('Schedule Submitted', `Submitted schedule for ${currentMonthKey}`);
-        triggerSuccess();
-      }
-    } catch (error) {
-      console.error('Error submitting schedule:', error);
-    }
-  };
-
   const renderScheduleView = () => {
     const isSubmitted = submittedMonths.includes(currentMonthKey);
     const [year, month] = selectedMonth.split('-').map(Number);
@@ -1733,7 +1683,7 @@ export default function CsrDashboard() {
               </div>
             </div>
             
-            <div className="relative pt-3 pb-1">
+            <div className="relative pt-1 pb-1">
               <div 
                 className="absolute top-0 transition-all duration-1000 flex flex-col items-center"
                 style={{ 
@@ -1741,7 +1691,7 @@ export default function CsrDashboard() {
                   transform: 'translateX(-50%)'
                 }}
               >
-                <div className="w-px h-3 bg-gradient-to-b from-blue-500 to-transparent"></div>
+                <div className="w-px h-2 bg-gradient-to-b from-blue-500 to-transparent"></div>
               </div>
 
               <div className="h-2.5 bg-gray-800/50 rounded-full overflow-hidden flex border border-gray-700/30">
