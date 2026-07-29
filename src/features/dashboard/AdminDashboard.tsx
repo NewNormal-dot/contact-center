@@ -419,11 +419,15 @@ const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
   totalHours: 0,
 };
 
-const makeSegmentTypeKey = (segment: string, employmentType: string) =>
-  `${segment || "All"}|${employmentType || "Full Time"}`;
+// Key format must match the backend exactly (src/api/rules.ts
+// makeSegmentTypeKey/makeMonthlyFontHourKey): location|segment|employmentType.
+// Location defaults to "Ulaanbaatar" so old data/keys saved before the
+// location dimension existed keep resolving the same way they always did.
+const makeSegmentTypeKey = (segment: string, employmentType: string, location: string = "Ulaanbaatar") =>
+  `${location || "Ulaanbaatar"}|${segment || "All"}|${employmentType || "Full Time"}`;
 
-const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string) =>
-  `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
+const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string, location: string = "Ulaanbaatar") =>
+  `${monthKey}|${makeSegmentTypeKey(segment, employmentType, location)}`;
 
 const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
   const rawHourCounts = value?.hourCounts && typeof value.hourCounts === "object" ? value.hourCounts : {};
@@ -642,6 +646,7 @@ export default function AdminDashboard() {
     time: string;
     segment: string;
     employmentType: "Full Time" | "Part Time";
+    location?: string;
     totalSlots: number;
     bookingWaves?: BookingWaveDraft[];
     dateKey: string;
@@ -681,6 +686,7 @@ export default function AdminDashboard() {
     "Full Time" | "Part Time"
   >("Full Time");
   const [activeSegmentView, setActiveSegmentView] = useState<string>("");
+  const [activeLocationView, setActiveLocationView] = useState<EmployeeLocation>("Ulaanbaatar");
 
   const mapCsrForUi = (raw: any): CSR => {
     const name = raw.name || raw.email?.split("@")?.[0] || "CSR";
@@ -890,12 +896,14 @@ export default function AdminDashboard() {
     segment: string,
     employmentType: "Full Time" | "Part Time",
     hours: number,
+    location: EmployeeLocation = "Ulaanbaatar",
   ) => {
     const normalizedHours = Math.max(0, Number(hours) || 0);
     await apiClient.put("/rules/monthly-font-hours", {
       monthKey,
       segment,
       employmentType,
+      location,
       hours: normalizedHours,
     });
   };
@@ -904,10 +912,12 @@ export default function AdminDashboard() {
     segment: string,
     employmentType: "Full Time" | "Part Time",
     rule: WeeklyShiftRule,
+    location: EmployeeLocation = "Ulaanbaatar",
   ) => {
     await apiClient.put("/rules/weekly-shift-rules", {
       segment,
       employmentType,
+      location,
       rule: normalizeWeeklyShiftRule(rule),
     });
   };
@@ -3708,8 +3718,8 @@ export default function AdminDashboard() {
     );
 
     const selectedMonthKey = `${selectedYearCalendar}-${String(selectedMonthCalendar + 1).padStart(2, "0")}`;
-    const activeRuleKey = makeSegmentTypeKey(activeSegmentView, activeEmploymentView);
-    const activeMonthFontKey = makeMonthlyFontHourKey(selectedMonthKey, activeSegmentView, activeEmploymentView);
+    const activeRuleKey = makeSegmentTypeKey(activeSegmentView, activeEmploymentView, activeLocationView);
+    const activeMonthFontKey = makeMonthlyFontHourKey(selectedMonthKey, activeSegmentView, activeEmploymentView, activeLocationView);
     const activeWeeklyRule = normalizeWeeklyShiftRule(weeklyShiftRules[activeRuleKey]);
     const activeMonthlyFontHours = Math.max(0, Number(monthlyFontHourRules[activeMonthFontKey]) || 0);
 
@@ -3717,17 +3727,21 @@ export default function AdminDashboard() {
       const nextHours = Math.max(0, Number(value) || 0);
       const next = { ...monthlyFontHourRules, [activeMonthFontKey]: nextHours };
       setMonthlyFontHourRules(next);
-      saveMonthlyFontHoursRule(selectedMonthKey, activeSegmentView, activeEmploymentView, nextHours).catch((error) => {
+      saveMonthlyFontHoursRule(selectedMonthKey, activeSegmentView, activeEmploymentView, nextHours, activeLocationView).catch((error) => {
         console.error("Save monthly font hours rule error:", error);
         alert("Сарын фонт цаг DB-д хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
       });
     };
 
+    // The font-hours grid manager is scoped to the currently selected
+    // location (activeLocationView) - switch location above to manage the
+    // other location's segment/employment-type grid separately. Keys are
+    // monthKey|location|segment|employmentType (see makeMonthlyFontHourKey).
     const openFontHoursManager = () => {
       const draft: Record<string, number> = {};
       segments.forEach((segment) => {
         (["Full Time", "Part Time"] as const).forEach((employmentType) => {
-          const key = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType);
+          const key = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType, activeLocationView);
           draft[key] = Math.max(0, Number(monthlyFontHourRules[key]) || 0);
         });
       });
@@ -3741,8 +3755,8 @@ export default function AdminDashboard() {
       const next = { ...fontHoursDraft };
       segments.forEach((segment) => {
         (["Full Time", "Part Time"] as const).forEach((employmentType) => {
-          const prevKey = makeMonthlyFontHourKey(prevMonthKey, segment, employmentType);
-          const currentKey = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType);
+          const prevKey = makeMonthlyFontHourKey(prevMonthKey, segment, employmentType, activeLocationView);
+          const currentKey = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType, activeLocationView);
           const prevValue = Number(monthlyFontHourRules[prevKey]) || 0;
           if (prevValue > 0) next[currentKey] = prevValue;
         });
@@ -3754,16 +3768,17 @@ export default function AdminDashboard() {
       setIsSavingFontHours(true);
       try {
         const entries = Object.entries(fontHoursDraft).filter(
-          ([key]) => key.startsWith(`${selectedMonthKey}|`),
+          ([key]) => key.startsWith(`${selectedMonthKey}|${activeLocationView}|`),
         );
         await Promise.all(
           entries.map(([key, hours]) => {
-            const [, segment, employmentType] = key.split("|");
+            const [, location, segment, employmentType] = key.split("|");
             return saveMonthlyFontHoursRule(
               selectedMonthKey,
               segment,
               employmentType as "Full Time" | "Part Time",
               hours,
+              location as EmployeeLocation,
             );
           }),
         );
@@ -3781,7 +3796,7 @@ export default function AdminDashboard() {
       const nextRule = normalizeWeeklyShiftRule({ ...activeWeeklyRule, ...patch });
       const next = { ...weeklyShiftRules, [activeRuleKey]: nextRule };
       setWeeklyShiftRules(next);
-      saveWeeklyShiftRule(activeSegmentView, activeEmploymentView, nextRule).catch((error) => {
+      saveWeeklyShiftRule(activeSegmentView, activeEmploymentView, nextRule, activeLocationView).catch((error) => {
         console.error("Save weekly shift rule error:", error);
         alert("7 хоногийн дүрэм DB-д хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
       });
@@ -4157,6 +4172,25 @@ export default function AdminDashboard() {
               </div>
             </div>
 
+            <div className="w-[150px] shrink min-w-[130px]">
+              <div className="relative group">
+                <select
+                  value={activeLocationView}
+                  onChange={(e) => setActiveLocationView(e.target.value as EmployeeLocation)}
+                  className="h-9 w-full bg-black/60 border border-white/10 rounded-xl pl-4 pr-9 text-[10px] font-black uppercase tracking-wider text-white focus:outline-none focus:border-blue-500/50 cursor-pointer appearance-none shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)] transition-all hover:bg-black/80"
+                >
+                  {EMPLOYEE_LOCATIONS.map((loc) => (
+                    <option key={loc} value={loc} className="bg-gray-900 text-white font-bold py-4">
+                      {loc}
+                    </option>
+                  ))}
+                </select>
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-blue-500/50 group-hover:text-blue-400 transition-colors">
+                  <ChevronDown size={14} />
+                </div>
+              </div>
+            </div>
+
             <div className="w-[220px] shrink min-w-[170px]">
               <div className="relative group">
                 <select
@@ -4451,6 +4485,7 @@ export default function AdminDashboard() {
                         time: "09-18",
                         segment: activeSegmentView,
                         employmentType: activeEmploymentView,
+                        location: activeLocationView,
                         totalSlots: 5,
                         bookingWaves: createDefaultBookingWaves(
                           5,
@@ -4599,6 +4634,7 @@ export default function AdminDashboard() {
                   time: normalizedBulkShiftTime,
                   segment: activeSegmentView,
                   employmentType: activeEmploymentView,
+                  location: activeLocationView,
                   totalSlots: bulkSlotCount,
                   bookingWaves: createDefaultBookingWaves(
                     bulkSlotCount,
@@ -4656,6 +4692,7 @@ export default function AdminDashboard() {
                     bookedSlots: 0,
                     segment: activeSegmentView,
                     employmentType: activeEmploymentView,
+                    location: activeLocationView,
                     bookingWaves: createDefaultBookingWaves(
                       Math.max(1, totalSlots),
                       false,
@@ -5422,7 +5459,7 @@ export default function AdminDashboard() {
               />
               <div className="relative w-full max-w-2xl max-h-[90vh] sm:max-h-[85vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
                 <h2 className="text-lg sm:text-xl font-black text-white mb-1">
-                  Сарын фонт цаг — {monthNames[selectedMonthCalendar]} {selectedYearCalendar}
+                  Сарын фонт цаг — {monthNames[selectedMonthCalendar]} {selectedYearCalendar} · {activeLocationView}
                 </h2>
                 <p className="text-xs sm:text-sm text-gray-400 mb-4 sm:mb-6">
                   Segment бүрийн Full Time болон Part Time ажилтны сард ажиллах ёстой нийт цагийг тохируулна. Ажилтан энэ цагийн дагуу л slot захиалах эрхтэй болно (илүү ч биш, дутуу ч биш).
@@ -5453,7 +5490,7 @@ export default function AdminDashboard() {
                     >
                       <span className="col-span-2 sm:col-span-1 text-sm font-bold text-white truncate">{segment}</span>
                       {(["Full Time", "Part Time"] as const).map((employmentType) => {
-                        const key = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType);
+                        const key = makeMonthlyFontHourKey(selectedMonthKey, segment, employmentType, activeLocationView);
                         return (
                           <div key={employmentType} className="sm:contents">
                             <span className="sm:hidden text-[9px] font-black uppercase tracking-widest text-gray-500 block mb-1">
@@ -8158,6 +8195,7 @@ export default function AdminDashboard() {
                           employmentType,
                           totalSlots,
                         } = editingShiftData;
+                        const location = normalizeEmployeeLocation(editingShiftData.location) || activeLocationView;
                         const time = normalizeShiftTime(editingShiftData.time);
                         const targetDateKeys =
                           bulkShiftDateKeys.length > 0 && !id
@@ -8253,6 +8291,7 @@ export default function AdminDashboard() {
                                 isRest: time === REST_SHIFT_LABEL,
                                 segment,
                                 employmentType,
+                                location,
                                 totalSlots: cleanTotalSlots,
                                 bookingWaves: cleanWaves,
                               };
@@ -8266,6 +8305,7 @@ export default function AdminDashboard() {
                               bookedSlots: 0,
                               segment,
                               employmentType,
+                              location,
                               bookingWaves: cleanWaves.map((wave) => ({
                                 ...wave,
                                 id: Math.random().toString(36).substr(2, 9),

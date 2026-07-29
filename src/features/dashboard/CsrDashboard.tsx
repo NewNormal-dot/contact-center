@@ -62,11 +62,15 @@ const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
   totalHours: 0,
 };
 
-const makeSegmentTypeKey = (segment: string, employmentType: string) =>
-  `${segment || 'All'}|${employmentType || 'Full Time'}`;
+// Key format must match the backend exactly (src/api/rules.ts
+// makeSegmentTypeKey/makeMonthlyFontHourKey): location|segment|employmentType.
+// Location defaults to "Ulaanbaatar" so old data/keys saved before the
+// location dimension existed keep resolving the same way they always did.
+const makeSegmentTypeKey = (segment: string, employmentType: string, location: string = 'Ulaanbaatar') =>
+  `${location || 'Ulaanbaatar'}|${segment || 'All'}|${employmentType || 'Full Time'}`;
 
-const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string) =>
-  `${monthKey}|${makeSegmentTypeKey(segment, employmentType)}`;
+const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string, location: string = 'Ulaanbaatar') =>
+  `${monthKey}|${makeSegmentTypeKey(segment, employmentType, location)}`;
 
 const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
   const rawHourCounts = value?.hourCounts && typeof value.hourCounts === 'object' ? value.hourCounts : {};
@@ -766,12 +770,13 @@ export default function CsrDashboard() {
   const currentMonthKey = selectedMonth;
   const csrSegment = csrProfile?.lineType || '';
   const csrEmploymentType = csrProfile?.employmentType || 'Full Time';
+  const csrLocation = csrProfile?.location || 'Ulaanbaatar';
   const monthlyFontTime = Math.max(
     0,
-    Number(monthlyFontHourRules[makeMonthlyFontHourKey(currentMonthKey, csrSegment, csrEmploymentType)] ?? csrProfile?.monthlyFontTime?.[currentMonthKey] ?? 0) || 0,
+    Number(monthlyFontHourRules[makeMonthlyFontHourKey(currentMonthKey, csrSegment, csrEmploymentType, csrLocation)] ?? csrProfile?.monthlyFontTime?.[currentMonthKey] ?? 0) || 0,
   );
   const activeWeeklyRule = normalizeWeeklyShiftRule(
-    weeklyShiftRules[makeSegmentTypeKey(csrSegment, csrEmploymentType)],
+    weeklyShiftRules[makeSegmentTypeKey(csrSegment, csrEmploymentType, csrLocation)],
   );
 
   const holidayDates = React.useMemo(() => {
