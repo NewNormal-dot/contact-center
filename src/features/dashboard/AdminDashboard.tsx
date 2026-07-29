@@ -4251,7 +4251,7 @@ export default function AdminDashboard() {
 
         </div>
 
-        <div className="grid grid-cols-[minmax(620px,760px)_minmax(360px,430px)] justify-center gap-5 items-start w-full min-w-0">
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(620px,760px)_minmax(360px,430px)] justify-center gap-5 items-start w-full min-w-0">
           {/* Calendar Grid */}
           <div className="w-full max-w-[760px] min-w-0 bg-black/40 rounded-[1.5rem] border border-white/5 p-3 overflow-hidden">
             <div className="grid grid-cols-7 gap-2 w-full max-w-[720px] mx-auto">
@@ -4317,7 +4317,7 @@ export default function AdminDashboard() {
                   <button
                     key={dateKey}
                     onClick={() => toggleBookingDateSelection(dateKey)}
-                    className={`group aspect-square w-full max-w-[96px] mx-auto relative overflow-hidden rounded-xl border-2 transition-all duration-300 flex items-center justify-center p-2 ${
+                    className={`group aspect-square w-full max-w-[120px] mx-auto relative overflow-hidden rounded-xl border-2 transition-all duration-300 flex items-center justify-center p-2 ${
                       isBulkSelected
                         ? "bg-blue-600 border-blue-300 text-white shadow-[0_0_24px_rgba(37,99,235,0.35)] z-10 scale-[1.02]"
                         : holiday && isPast
@@ -4338,6 +4338,20 @@ export default function AdminDashboard() {
                       >
                         {bookingBadge.text}
                       </span>
+                    )}
+                    {!isPast && (
+                      hasAnyShifts ? (
+                        <span
+                          className="absolute left-1 bottom-1 rounded-md bg-black/50 border border-white/10 px-1 py-0.5 text-[6px] font-black uppercase tracking-widest text-cyan-300"
+                          title={`${dayShiftsForActiveFilter.length} shift, ${daySlotTotal} slot (${activeSegmentView} / ${activeEmploymentView})`}
+                        >
+                          {dayShiftsForActiveFilter.length} shift
+                        </span>
+                      ) : (
+                        <span className="absolute left-1 bottom-1 rounded-md bg-black/30 border border-white/5 px-1 py-0.5 text-[6px] font-black uppercase tracking-widest text-gray-600">
+                          хоосон
+                        </span>
+                      )
                     )}
                     <span
                       className={`pointer-events-none absolute inset-0 flex items-center justify-center text-[clamp(1.15rem,1.8vw,1.75rem)] font-outfit font-black tracking-tighter leading-none transition-transform group-hover:scale-105 ${
