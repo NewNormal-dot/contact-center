@@ -4251,6 +4251,60 @@ export default function AdminDashboard() {
 
         </div>
 
+        {(() => {
+          const monthShiftsForActiveFilter = monthDates
+            .filter(Boolean)
+            .flatMap((date) => schedules[formatDateKey(date as Date)]?.shifts || [])
+            .filter((s: any) => s.segment === activeSegmentView && s.employmentType === activeEmploymentView);
+          const hasFontHours = activeMonthlyFontHours > 0;
+          const hasWeeklyLimit = Number(activeWeeklyRule.selectedDays) > 0;
+          const hasShifts = monthShiftsForActiveFilter.length > 0;
+          const hasOpenBooking = monthDates
+            .filter(Boolean)
+            .some((date) => schedules[formatDateKey(date as Date)]?.bookingOpen);
+
+          const steps = [
+            { done: hasFontHours, label: "Сарын фонт цаг тохируулах", onClick: openFontHoursManager },
+            { done: hasWeeklyLimit, label: "Долоо хоногийн лимит тохируулах" },
+            { done: hasShifts, label: "Shift + slot оруулах" },
+            { done: hasOpenBooking, label: "Захиалга нээх" },
+          ];
+
+          if (steps.every((step) => step.done)) return null;
+
+          return (
+            <div className="rounded-[1.5rem] border border-blue-500/20 bg-blue-500/5 px-5 py-4">
+              <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-blue-300">
+                {activeSegmentView} / {activeEmploymentView} — эхлүүлэх дараалал ({steps.filter((s) => s.done).length}/{steps.length})
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {steps.map((step, idx) => (
+                  <button
+                    key={step.label}
+                    type="button"
+                    onClick={step.onClick}
+                    disabled={!step.onClick}
+                    className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
+                      step.done
+                        ? "border-green-500/30 bg-green-500/10 text-green-300"
+                        : "border-white/10 bg-black/30 text-gray-400"
+                    } ${step.onClick && !step.done ? "hover:border-blue-400/50 hover:text-blue-300 cursor-pointer" : ""}`}
+                  >
+                    <span
+                      className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] ${
+                        step.done ? "bg-green-500 text-black" : "bg-white/10 text-gray-500"
+                      }`}
+                    >
+                      {step.done ? "✓" : idx + 1}
+                    </span>
+                    {step.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.8fr)_minmax(360px,1fr)] gap-5 items-start w-full min-w-0">
           {/* Calendar Grid */}
           <div className="w-full min-w-0 bg-black/40 rounded-[1.5rem] border border-white/5 p-3 overflow-hidden">
