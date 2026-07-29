@@ -4251,10 +4251,10 @@ export default function AdminDashboard() {
 
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(620px,760px)_minmax(360px,430px)] justify-center gap-5 items-start w-full min-w-0">
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.8fr)_minmax(360px,1fr)] gap-5 items-start w-full min-w-0">
           {/* Calendar Grid */}
-          <div className="w-full max-w-[760px] min-w-0 bg-black/40 rounded-[1.5rem] border border-white/5 p-3 overflow-hidden">
-            <div className="grid grid-cols-7 gap-2 w-full max-w-[720px] mx-auto">
+          <div className="w-full min-w-0 bg-black/40 rounded-[1.5rem] border border-white/5 p-3 overflow-hidden">
+            <div className="grid grid-cols-7 gap-2 w-full mx-auto">
               {dayNames.map((day, idx) => (
                 <div
                   key={day}
@@ -4268,7 +4268,7 @@ export default function AdminDashboard() {
                   return (
                     <div
                       key={`empty-${idx}`}
-                      className="aspect-square w-full max-w-[96px] mx-auto"
+                      className="aspect-square w-full max-w-[160px] mx-auto"
                     />
                   );
 
@@ -4317,7 +4317,7 @@ export default function AdminDashboard() {
                   <button
                     key={dateKey}
                     onClick={() => toggleBookingDateSelection(dateKey)}
-                    className={`group aspect-square w-full max-w-[120px] mx-auto relative overflow-hidden rounded-xl border-2 transition-all duration-300 flex items-center justify-center p-2 ${
+                    className={`group aspect-square w-full max-w-[160px] mx-auto relative overflow-hidden rounded-xl border-2 transition-all duration-300 flex items-center justify-center p-2 ${
                       isBulkSelected
                         ? "bg-blue-600 border-blue-300 text-white shadow-[0_0_24px_rgba(37,99,235,0.35)] z-10 scale-[1.02]"
                         : holiday && isPast
