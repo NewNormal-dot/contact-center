@@ -887,9 +887,19 @@ export default function AdminDashboard() {
     setLocalData("schedules", nextSchedules);
     if (uniqueDateKeys.length === 0) return;
 
+    // Only send the day(s) actually being changed, not the whole in-memory
+    // schedules map - that map can span many months' worth of data, and
+    // sending it in full on every single add/delete-a-shift action (most
+    // of which touch just one day) is what made those actions feel slow.
+    // The backend only ever reads the entries matching dateKeys anyway.
+    const scopedSchedules: Record<string, any> = {};
+    uniqueDateKeys.forEach((dateKey) => {
+      if (nextSchedules[dateKey]) scopedSchedules[dateKey] = nextSchedules[dateKey];
+    });
+
     try {
       await apiClient.post("/slots/sync-schedules", {
-        schedules: nextSchedules,
+        schedules: scopedSchedules,
         dateKeys: uniqueDateKeys,
       });
     } catch (error: any) {
