@@ -47,19 +47,6 @@ async function createNotification(payload: { title: string; content: string; aut
   });
 }
 
-async function notifyAdmins(title: string, content: string, tradeId: string, authorId?: string | null, trx: any = db) {
-  const admins = await trx('users').whereIn('role', ['admin', 'superadmin']).select('id');
-  await Promise.all(admins.map((admin: any) => createNotification({
-    title,
-    content,
-    authorId: authorId || null,
-    targetUserId: admin.id,
-    relatedEntityType: 'trade_requests',
-    relatedEntityId: tradeId,
-    type: 'important',
-  }, trx)));
-}
-
 function mapTrade(row: any) {
   return {
     id: row.id,
@@ -95,7 +82,9 @@ function baseTradeQuery(trx: any = db) {
     .select(
       'trade_requests.*',
       'sender.name as sender_name',
+      'sender.email as sender_email',
       'receiver.name as receiver_name',
+      'receiver.email as receiver_email',
       'sender.segment as sender_segment',
       'receiver.segment as receiver_segment',
       'sender.employment_type as sender_employment_type',
@@ -199,25 +188,13 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
   const { status } = req.body;
   if (!['accepted', 'rejected'].includes(status)) return res.status(400).json({ error: 'Хариуны төлөв буруу байна' });
 
-  try {
-    const trade = await baseTradeQuery().where('trade_requests.id', id).first();
-    if (!trade || trade.receiver_id !== req.user.id) return res.status(404).json({ error: 'Арилжааны хүсэлт олдсонгүй' });
-    if (trade.status !== 'pending') return res.status(400).json({ error: 'Зөвхөн хүлээгдэж буй хүсэлтэд хариу өгнө' });
+  if (status === 'rejected') {
+    try {
+      const trade = await baseTradeQuery().where('trade_requests.id', id).first();
+      if (!trade || trade.receiver_id !== req.user.id) return res.status(404).json({ error: 'Арилжааны хүсэлт олдсонгүй' });
+      if (trade.status !== 'pending') return res.status(400).json({ error: 'Зөвхөн хүлээгдэж буй хүсэлтэд хариу өгнө' });
 
-    await db('trade_requests').where({ id }).update({ status, receiver_responded_at: db.fn.now(), updated_at: db.fn.now() });
-
-    if (status === 'accepted') {
-      await notifyAdmins('Trade approve шаардлагатай', `${trade.sender_name} ↔ ${trade.receiver_name} trade хүсэлт receiver зөвшөөрсөн.`, id, req.user.id);
-      await createNotification({
-        title: 'Trade хүсэлт зөвшөөрөгдлөө',
-        content: `${trade.receiver_name} таны trade хүсэлтийг зөвшөөрлөө. Одоо admin approve хүлээгдэж байна.`,
-        authorId: req.user.id,
-        targetUserId: trade.sender_id,
-        relatedEntityType: 'trade_requests',
-        relatedEntityId: id,
-        type: 'important',
-      });
-    } else {
+      await db('trade_requests').where({ id }).update({ status: 'rejected', receiver_responded_at: db.fn.now(), updated_at: db.fn.now() });
       await createNotification({
         title: 'Trade хүсэлт татгалзлаа',
         content: `${trade.receiver_name} таны trade хүсэлтээс татгалзлаа.`,
@@ -227,36 +204,73 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
         relatedEntityId: id,
         type: 'important',
       });
+      return res.json({ message: 'Амжилттай хариу илгээлээ' });
+    } catch (err) {
+      console.error('Respond trade error:', err);
+      captureError('trades: Respond trade error:', err);
+      return res.status(500).json({ error: 'Trade хүсэлтэд хариу өгөхөд алдаа гарлаа' });
+    }
+  }
+
+  // status === 'accepted': the receiver accepting immediately finalizes the
+  // trade between the two CSRs - no admin approval step, no admin-facing
+  // notification. The slot swap happens atomically right here, and an
+  // audit log entry (timestamp, segment, both users' emails) is recorded
+  // instead. See findOrCreateAdjustedSlot below for the swap mechanics.
+  const trx = await db.transaction();
+  try {
+    const trade = await baseTradeQuery(trx).where('trade_requests.id', id).first();
+    if (!trade || trade.receiver_id !== req.user.id) {
+      await trx.rollback();
+      return res.status(404).json({ error: 'Арилжааны хүсэлт олдсонгүй' });
+    }
+    if (trade.status !== 'pending') {
+      await trx.rollback();
+      return res.status(400).json({ error: 'Зөвхөн хүлээгдэж буй хүсэлтэд хариу өгнө' });
     }
 
-    res.json({ message: 'Амжилттай хариу илгээлээ' });
+    const senderSlot = await trx('work_slots').where({ id: trade.sender_slot_id }).first();
+    const receiverSlot = await trx('work_slots').where({ id: trade.receiver_slot_id }).first();
+    if (!senderSlot || !receiverSlot) throw new Error('Missing slots');
+
+    const senderNewSlot = await findOrCreateAdjustedSlot(trx, { ...receiverSlot, segment: senderSlot.segment, employment_type: senderSlot.employment_type }, displayDate(receiverSlot.date), Number(senderSlot.duration), 'end');
+    const receiverNewSlot = await findOrCreateAdjustedSlot(trx, { ...senderSlot, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type }, displayDate(senderSlot.date), Number(receiverSlot.duration), 'start');
+
+    const senderBooking = await trx('slot_bookings').where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id, status: 'confirmed' }).first();
+    const receiverBooking = await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' }).first();
+    if (!senderBooking || !receiverBooking) throw new Error('Bookings are no longer available');
+
+    await trx('slot_bookings').where({ id: senderBooking.id }).update({ slot_id: senderNewSlot.id, booked_at: trx.fn.now() });
+    await trx('slot_bookings').where({ id: receiverBooking.id }).update({ slot_id: receiverNewSlot.id, booked_at: trx.fn.now() });
+
+    const tradeUpdated = await trx('trade_requests')
+      .where({ id, status: 'pending' })
+      .update({ status: 'approved', receiver_responded_at: trx.fn.now(), admin_decided_at: trx.fn.now(), updated_at: trx.fn.now() });
+
+    if (tradeUpdated !== 1) {
+      await trx.rollback();
+      return res.status(409).json({ error: 'Арилжааны төлөв өөрчлөгдсөн байна' });
+    }
+
+    await createNotification({ title: 'Ээлж амжилттай солигдлоо', content: `Таны шинэ хуваарь: ${displayDate(senderNewSlot.date)} ${slotTimeLabel(senderNewSlot)}.`, authorId: req.user.id, targetUserId: trade.sender_id, relatedEntityType: 'trade_requests', relatedEntityId: id, type: 'important' }, trx);
+    await createNotification({ title: 'Ээлж амжилттай солигдлоо', content: `Таны шинэ хуваарь: ${displayDate(receiverNewSlot.date)} ${slotTimeLabel(receiverNewSlot)}.`, authorId: req.user.id, targetUserId: trade.receiver_id, relatedEntityType: 'trade_requests', relatedEntityId: id, type: 'important' }, trx);
+
+    await trx.commit();
+
+    await logAction(
+      req.user.id,
+      'TRADE_COMPLETED',
+      'trade_requests',
+      id,
+      `${trade.sender_name} (${trade.sender_email}) <-> ${trade.receiver_name} (${trade.receiver_email}) | segment: ${trade.sender_segment} | ${displayDate(senderSlot.date)} ${slotTimeLabel(senderSlot)} <-> ${displayDate(receiverSlot.date)} ${slotTimeLabel(receiverSlot)}`,
+    );
+
+    res.json({ message: 'Арилжаа амжилттай хийгдэж хуваарь автоматаар солигдлоо' });
   } catch (err) {
+    await trx.rollback();
     console.error('Respond trade error:', err);
     captureError('trades: Respond trade error:', err);
     res.status(500).json({ error: 'Trade хүсэлтэд хариу өгөхөд алдаа гарлаа' });
-  }
-});
-
-router.patch('/:id/reject', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
-  try {
-    const trade = await baseTradeQuery().where('trade_requests.id', req.params.id).first();
-    if (!trade) return res.status(404).json({ error: 'Trade хүсэлт олдсонгүй' });
-    if (trade.status === 'approved') {
-      return res.status(400).json({ error: 'Батлагдсан арилжааг татгалзах боломжгүй' });
-    }
-    const rejected = await db('trade_requests')
-      .where({ id: req.params.id })
-      .whereNot({ status: 'approved' })
-      .update({ status: 'rejected', approved_by: req.user.id, admin_decided_at: db.fn.now(), updated_at: db.fn.now() });
-    if (!rejected) return res.status(409).json({ error: 'Арилжааны төлөв өөрчлөгдсөн байна' });
-    await createNotification({ title: 'Trade хүсэлт татгалзлаа', content: 'Admin таны trade хүсэлтээс татгалзлаа.', authorId: req.user.id, targetUserId: trade.sender_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' });
-    await createNotification({ title: 'Trade хүсэлт татгалзлаа', content: 'Admin таны оролцсон trade хүсэлтээс татгалзлаа.', authorId: req.user.id, targetUserId: trade.receiver_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' });
-    await logAction(req.user.id, 'REJECT_TRADE', 'trade_requests', req.params.id, 'Trade rejected');
-    res.json({ message: 'Арилжааны хүсэлт татгалзагдлаа' });
-  } catch (err) {
-    console.error('Reject trade error:', err);
-    captureError('trades: Reject trade error:', err);
-    res.status(500).json({ error: 'Арилжаа татгалзахад алдаа гарлаа' });
   }
 });
 
@@ -289,50 +303,5 @@ async function findOrCreateAdjustedSlot(trx: any, baseSlot: any, targetDate: str
   await trx('work_slots').insert(payload);
   return payload;
 }
-
-router.patch('/:id/approve', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
-  const trx = await db.transaction();
-  try {
-    const trade = await baseTradeQuery(trx).where('trade_requests.id', req.params.id).first();
-    if (!trade || trade.status !== 'accepted') {
-      await trx.rollback();
-      return res.status(400).json({ error: 'Зөвхөн receiver зөвшөөрсөн хүсэлтийг батална' });
-    }
-
-    const senderSlot = await trx('work_slots').where({ id: trade.sender_slot_id }).first();
-    const receiverSlot = await trx('work_slots').where({ id: trade.receiver_slot_id }).first();
-    if (!senderSlot || !receiverSlot) throw new Error('Missing slots');
-
-    const senderNewSlot = await findOrCreateAdjustedSlot(trx, { ...receiverSlot, segment: senderSlot.segment, employment_type: senderSlot.employment_type }, displayDate(receiverSlot.date), Number(senderSlot.duration), 'end');
-    const receiverNewSlot = await findOrCreateAdjustedSlot(trx, { ...senderSlot, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type }, displayDate(senderSlot.date), Number(receiverSlot.duration), 'start');
-
-    const senderBooking = await trx('slot_bookings').where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id, status: 'confirmed' }).first();
-    const receiverBooking = await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' }).first();
-    if (!senderBooking || !receiverBooking) throw new Error('Bookings are no longer available');
-
-    await trx('slot_bookings').where({ id: senderBooking.id }).update({ slot_id: senderNewSlot.id, booked_at: trx.fn.now() });
-    await trx('slot_bookings').where({ id: receiverBooking.id }).update({ slot_id: receiverNewSlot.id, booked_at: trx.fn.now() });
-    const tradeUpdated = await trx('trade_requests')
-      .where({ id: req.params.id, status: 'accepted' })
-      .update({ status: 'approved', approved_by: req.user.id, admin_decided_at: trx.fn.now(), updated_at: trx.fn.now() });
-
-    if (tradeUpdated !== 1) {
-      await trx.rollback();
-      return res.status(409).json({ error: 'Арилжааны төлөв өөрчлөгдсөн байна' });
-    }
-
-    await createNotification({ title: 'Trade батлагдлаа', content: `Таны шинэ хуваарь: ${displayDate(senderNewSlot.date)} ${slotTimeLabel(senderNewSlot)}.`, authorId: req.user.id, targetUserId: trade.sender_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' }, trx);
-    await createNotification({ title: 'Trade батлагдлаа', content: `Таны шинэ хуваарь: ${displayDate(receiverNewSlot.date)} ${slotTimeLabel(receiverNewSlot)}.`, authorId: req.user.id, targetUserId: trade.receiver_id, relatedEntityType: 'trade_requests', relatedEntityId: req.params.id, type: 'important' }, trx);
-
-    await trx.commit();
-    await logAction(req.user.id, 'APPROVE_TRADE', 'trade_requests', req.params.id, `Trade approved between ${trade.sender_id} and ${trade.receiver_id}`);
-    res.json({ message: 'Арилжаа батлагдаж хуваарь автоматаар солигдлоо' });
-  } catch (err) {
-    await trx.rollback();
-    console.error('Approve trade error:', err);
-    captureError('trades: Approve trade error:', err);
-    res.status(500).json({ error: 'Trade approve хийхэд алдаа гарлаа' });
-  }
-});
 
 export default router;

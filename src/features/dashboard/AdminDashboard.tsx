@@ -651,6 +651,13 @@ export default function AdminDashboard() {
     bookingWaves?: BookingWaveDraft[];
     dateKey: string;
   } | null>(null);
+  // Debounces the DB save for the quick wave-slot-count input (see
+  // updateShiftWaveSlotsForSelection below) so rapid typing/spinner clicks
+  // don't fire one network save per keystroke - overlapping saves could
+  // resolve out of order, and the 2s schedule poll landing mid-typing would
+  // stomp the newer edit with a slightly-stale server snapshot, which is
+  // what caused the "changes flicker / takes a while to update" feel.
+  const waveSlotSaveTimerRef = useRef<number | null>(null);
   const [filters, setFilters] = useState({
     segment: "All",
     location: "All",
@@ -960,30 +967,6 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleApproveTradeNotification = async (tradeId?: string) => {
-    if (!tradeId) return;
-    try {
-      await apiClient.patch(`/trades/${tradeId}/approve`);
-      await fetchNotificationsFromDb();
-      alert('Trade батлагдаж хуваарь автоматаар солигдлоо.');
-    } catch (error: any) {
-      console.error('Approve trade error:', error);
-      alert(error.response?.data?.error || 'Trade approve хийхэд алдаа гарлаа.');
-    }
-  };
-
-  const handleRejectTradeNotification = async (tradeId?: string) => {
-    if (!tradeId) return;
-    try {
-      await apiClient.patch(`/trades/${tradeId}/reject`);
-      await fetchNotificationsFromDb();
-      alert('Trade хүсэлт татгалзагдлаа.');
-    } catch (error: any) {
-      console.error('Reject trade error:', error);
-      alert(error.response?.data?.error || 'Trade reject хийхэд алдаа гарлаа.');
-    }
-  };
-
   const generateRandomPassword = (length = 10) => {
     const charset =
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+";
@@ -1166,6 +1149,9 @@ export default function AdminDashboard() {
       clearInterval(interval);
       clearInterval(apiRefreshInterval);
       window.removeEventListener("storage", handleStorageUpdate);
+      if (waveSlotSaveTimerRef.current) {
+        window.clearTimeout(waveSlotSaveTimerRef.current);
+      }
     };
   }, []);
 
@@ -3257,22 +3243,6 @@ export default function AdminDashboard() {
                                 <p className="text-sm text-gray-400 leading-relaxed">
                                   {notif.content}
                                 </p>
-                                {(notif.relatedEntityType === "trade_requests" || notif.tradeRequestId) && (
-                                  <div className="flex flex-wrap items-center gap-2 pt-2">
-                                    <button
-                                      onClick={() => handleApproveTradeNotification(notif.tradeRequestId || notif.relatedEntityId)}
-                                      className="px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-[10px] font-black uppercase tracking-widest transition-all"
-                                    >
-                                      Approve
-                                    </button>
-                                    <button
-                                      onClick={() => handleRejectTradeNotification(notif.tradeRequestId || notif.relatedEntityId)}
-                                      className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-widest transition-all"
-                                    >
-                                      Reject
-                                    </button>
-                                  </div>
-                                )}
                                 <div className="flex items-center gap-3">
                                   <button
                                     onClick={() =>
@@ -4821,7 +4791,18 @@ export default function AdminDashboard() {
                   }),
                 };
 
-                void persistSchedules(newSchedules, [dateKey]);
+                // Instant local update so typing/spinner clicks feel
+                // responsive, but the actual DB save is debounced (see
+                // waveSlotSaveTimerRef above) - collapses rapid edits into
+                // a single save instead of one per keystroke.
+                setSchedules(newSchedules);
+                setLocalData("schedules", newSchedules);
+                if (waveSlotSaveTimerRef.current) {
+                  window.clearTimeout(waveSlotSaveTimerRef.current);
+                }
+                waveSlotSaveTimerRef.current = window.setTimeout(() => {
+                  void persistSchedules(newSchedules, [dateKey]);
+                }, 600);
               };
 
               const toggleWaveSelection = (shift: any, wave: BookingWaveDraft) => {
