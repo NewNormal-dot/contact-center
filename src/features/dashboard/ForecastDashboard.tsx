@@ -478,11 +478,25 @@ export default function ForecastDashboard() {
     const days = buildDaysForMonth(activeMonth);
     return days.map(day => {
       const dayRows = filteredRows.filter(row => formatDayKey(row.date) === day.key);
+      // Required HR for the day = morning window's peak + evening window's
+      // peak (09:00-13:00 and 13:00-20:00), not the single peak across the
+      // whole day - staffing has to cover both windows' busiest moments,
+      // which don't necessarily land on the same hour.
+      const morningRows = dayRows.filter(row => {
+        const h = row.date.getHours();
+        return h >= 9 && h < 13;
+      });
+      const eveningRows = dayRows.filter(row => {
+        const h = row.date.getHours();
+        return h >= 13 && h < 20;
+      });
+      const morningPeakHr = morningRows.length ? max(morningRows.map(row => row.hr)) : 0;
+      const eveningPeakHr = eveningRows.length ? max(eveningRows.map(row => row.hr)) : 0;
       return {
         key: day.key,
         label: day.label,
         forecast: Math.round(dayRows.reduce((sum, row) => sum + row.forecast, 0)),
-        hr: Math.round(max(dayRows.map(row => row.hr))),
+        hr: Math.round(morningPeakHr + eveningPeakHr),
         hasData: dayRows.length > 0,
       };
     });
