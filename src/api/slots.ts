@@ -281,7 +281,6 @@ async function validateUserWeeklyLimit(userId: string, targetSlot: any, excludeS
   const rule = await getRuleForUser(user);
   if (!rule) return '';
 
-  const selectedDaysLimit = Number(rule.selectedDays || 0);
   const hourCounts = rule.hourCounts || {};
   const targetDate = displayDate(targetSlot.date);
   const weekStart = getWeekStart(targetDate);
@@ -295,9 +294,6 @@ async function validateUserWeeklyLimit(userId: string, targetSlot: any, excludeS
     .select('slot_bookings.slot_id', 'work_slots.duration', 'work_slots.is_rest', 'work_slots.start_time', 'work_slots.end_time');
 
   const filtered = rows.filter((row: any) => row.slot_id !== excludeSlotId);
-  if (selectedDaysLimit > 0 && filtered.length + 1 > selectedDaysLimit) {
-    return `Та аль хэдийн ${selectedDaysLimit} өдрийн хуваарь сонгосон байна.`;
-  }
 
   const targetHourKey = hourKeyForSlot(targetSlot);
   if (targetHourKey && Object.prototype.hasOwnProperty.call(hourCounts, targetHourKey)) {

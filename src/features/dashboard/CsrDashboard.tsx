@@ -1459,23 +1459,29 @@ export default function CsrDashboard() {
   const validateShiftRuleBeforeBooking = React.useCallback((dateKey: string, targetShift: Shift, sourceSchedule: Record<string, DayData>) => {
     const weekStats = getMyWeeklyBookingStats(dateKey, sourceSchedule);
     const targetHourKey = getShiftRuleHourKey(targetShift);
-    const maxSelectedDays = Number(activeWeeklyRule.selectedDays) || 0;
 
-    if (maxSelectedDays > 0 && weekStats.bookedDays + 1 > maxSelectedDays) {
-      return `Энэ 7 хоногт нийт ${maxSelectedDays} өдөр сонгох тохиргоотой.`;
-    }
-
+    // selectedDays is now purely a derived/informational total (sum of the
+    // per-duration counts an admin explicitly sets - see AdminDashboard's
+    // updateDynamicWeeklyRule), not an independent limit. Enforcing it here
+    // too double-counted the same restriction and could block a still-under-
+    // quota duration just because the overall derived total was reached.
     if (targetHourKey) {
-      const maxForHour = Number((activeWeeklyRule.hourCounts || {})[targetHourKey] || 0);
-      if (maxForHour > 0 && (weekStats.hourCounts[targetHourKey] || 0) + 1 > maxForHour) {
-        return targetHourKey === 'rest'
-          ? `Энэ 7 хоногт амралтын өдөр хамгийн ихдээ ${maxForHour} удаа сонгоно.`
-          : `Энэ 7 хоногт ${targetHourKey} цагтай shift хамгийн ихдээ ${maxForHour} удаа сонгоно.`;
-      }
-      if (maxForHour === 0 && Object.keys(activeWeeklyRule.hourCounts || {}).length > 0) {
-        return targetHourKey === 'rest'
-          ? 'Энэ 7 хоногт амралтын өдөр сонгох боломжгүй.'
-          : `Энэ 7 хоногт ${targetHourKey} цагтай shift сонгох боломжгүй.`;
+      const hourCounts = activeWeeklyRule.hourCounts || {};
+      // Only a duration the admin has EXPLICITLY set a count for is
+      // restricted - a duration missing from hourCounts entirely is not
+      // limited, matching the backend's validateUserWeeklyLimit.
+      if (Object.prototype.hasOwnProperty.call(hourCounts, targetHourKey)) {
+        const maxForHour = Number(hourCounts[targetHourKey] || 0);
+        if (maxForHour === 0) {
+          return targetHourKey === 'rest'
+            ? 'Энэ 7 хоногт амралтын өдөр сонгох боломжгүй.'
+            : `Энэ 7 хоногт ${targetHourKey} цагтай shift сонгох боломжгүй.`;
+        }
+        if ((weekStats.hourCounts[targetHourKey] || 0) + 1 > maxForHour) {
+          return targetHourKey === 'rest'
+            ? `Энэ 7 хоногт амралтын өдөр хамгийн ихдээ ${maxForHour} удаа сонгоно.`
+            : `Энэ 7 хоногт ${targetHourKey} цагтай shift хамгийн ихдээ ${maxForHour} удаа сонгоно.`;
+        }
       }
     }
 
