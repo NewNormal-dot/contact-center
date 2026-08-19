@@ -4588,10 +4588,11 @@ export default function AdminDashboard() {
                 return nextCounts;
               };
 
-              const activeRuleTotalSelected = Math.max(
-                selectedKeys.length > 0 ? 1 : 0,
-                Math.min(selectedKeys.length, Number(activeWeeklyRule.selectedDays) || 0),
-              );
+              // "Нийт сонгох боломжтой" is purely informational now - the SUM
+              // of whatever's been set per duration below, not a separate
+              // pre-constraint admins have to set first (see
+              // updateDynamicWeeklyRule for why that coupling was removed).
+              const activeRuleTotalSelected = Math.min(selectedKeys.length, sumRuleCounts(activeWeeklyRule.hourCounts || {}));
               const visibleRuleHourCounts = selectedRuleShiftHours.reduce<Record<string, number>>((acc, hourKey) => {
                 acc[hourKey] = Math.max(
                   0,
@@ -4604,40 +4605,21 @@ export default function AdminDashboard() {
               }, {});
               const activeRuleHourTotal = calculateRuleHourTotal(visibleRuleHourCounts);
 
-              const updateSelectedDayLimit = (count: number) => {
-                const nextSelectedDays = Math.max(
-                  selectedKeys.length > 0 ? 1 : 0,
-                  Math.min(selectedKeys.length, Number(count) || 0),
-                );
-                // SIMPLIFIED MODE (per admin request): only cap the TOTAL
-                // number of selectable days per week. hourCounts is
-                // intentionally kept EMPTY here - the backend's
-                // validateUserWeeklyLimit only enforces the per-shift-duration
-                // breakdown when hourCounts has entries, so leaving it empty
-                // means a CSR can pick ANY N days out of the week (whichever
-                // ones they don't pick effectively become their days off),
-                // without restricting which specific shift-durations those
-                // days must be. The old per-duration UI/logic below is kept
-                // in place (not deleted) in case this granularity is needed
-                // again later - just not rendered for now.
-                updateActiveWeeklyRule({
-                  selectedDays: nextSelectedDays,
-                  hourCounts: {},
-                  restDays: 0,
-                  totalHours: 0,
-                });
-              };
-
+              // Each duration's count is independent: bounded only by (a)
+              // how many shifts of that duration exist among the selected
+              // days, and (b) how many of the selected days remain
+              // unclaimed by the OTHER durations already set. There is no
+              // separate "set the total first" step - the total is just the
+              // sum of whatever's configured here (see activeRuleTotalSelected).
               const updateDynamicWeeklyRule = (hourKey: string, count: number) => {
                 const maxAvailable = Math.max(0, Number(selectedRuleShiftAvailability[hourKey]) || 0);
-                const selectedDayLimit = Math.max(0, Math.min(selectedKeys.length, activeRuleTotalSelected || selectedKeys.length));
-                const currentCounts = clampRuleHourCounts(activeWeeklyRule.hourCounts || {}, selectedDayLimit);
+                const currentCounts = activeWeeklyRule.hourCounts || {};
                 const otherTotal = sumRuleCounts({ ...currentCounts, [hourKey]: 0 });
-                const maxBySelectedDays = Math.max(0, selectedDayLimit - otherTotal);
-                const nextCount = Math.max(0, Math.min(maxAvailable, maxBySelectedDays, Number(count) || 0));
-                const nextHourCounts = clampRuleHourCounts({ ...currentCounts, [hourKey]: nextCount }, selectedDayLimit);
+                const maxByRemainingDays = Math.max(0, selectedKeys.length - otherTotal);
+                const nextCount = Math.max(0, Math.min(maxAvailable, maxByRemainingDays, Number(count) || 0));
+                const nextHourCounts = clampRuleHourCounts({ ...currentCounts, [hourKey]: nextCount }, selectedKeys.length);
                 updateActiveWeeklyRule({
-                  selectedDays: selectedDayLimit,
+                  selectedDays: sumRuleCounts(nextHourCounts),
                   hourCounts: nextHourCounts,
                   restDays: Number(nextHourCounts.rest) || 0,
                   totalHours: calculateRuleHourTotal(nextHourCounts),
@@ -4938,40 +4920,39 @@ export default function AdminDashboard() {
                       <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                         <div>
                           <p className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-300">Сонгосон өдрийн дүрэм</p>
-                          
+                          <p className="text-[9px] text-gray-500">Доор тохируулсан цаг тус бүрийн тооны нийлбэрээр CSR-ийн сонгож болох нийт өдрийн тоо автоматаар тодорхойлогдоно.</p>
                         </div>
                         <div className="text-right text-[10px] font-black uppercase tracking-widest text-gray-500">
                           Нийт сонгох боломжтой: <span className="text-white">{activeRuleTotalSelected}</span> өдөр / {selectedKeys.length} өдөр
                         </div>
                       </div>
                       <div className="grid grid-cols-1 gap-3">
-                        <label className="flex min-w-0 flex-col gap-1">
-                          <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">
-                            Нийт сонгох боломжтой (7 хоногоос хамгийн ихдээ)
-                          </span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={selectedKeys.length}
-                            value={activeRuleTotalSelected}
-                            onFocus={(e) => e.target.select()}
-                            onChange={(e) => updateSelectedDayLimit(Number(e.target.value))}
-                            className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
-                          />
-                        </label>
                         {/*
-                          SKIPPED FOR NOW (per admin request, 2026-07): the
-                          per-shift-duration breakdown inputs (e.g. "8 цагтай
-                          /1", "5 цагтай /1") were confusing/felt broken in
-                          practice. Simplified to just ONE limit: total days
-                          selectable per week (see updateSelectedDayLimit,
-                          which now always saves hourCounts as {} so the
-                          backend's per-duration check never triggers).
-                          To bring this granular per-duration limit feature
-                          back later, remove this comment block and the
-                          `false &&` guard below.
+                          Re-enabled per user request (2026-08): input rows
+                          are generated dynamically from selectedRuleShiftHours,
+                          i.e. only for shift durations that actually appear
+                          in the selected days' shifts - so a duration that
+                          isn't part of this week's schedule never silently
+                          becomes "0 = fully blocked" for CSRs the way a
+                          static fixed list could. The "/N" next to each
+                          label is how many shifts of that duration exist
+                          across the selected days.
+
+                          Each duration's count is independent - it is NOT
+                          capped by a separately pre-set "total days" number
+                          (that used to force setting a total FIRST, then
+                          silently clamp every duration to fit inside it -
+                          e.g. 7h=1 set first would leave zero room for a
+                          6h=1 set right after, even though 3 days were
+                          selected). The only ceiling per duration is how
+                          many such shifts actually exist among the selected
+                          days, and the running total across all durations
+                          can't exceed the number of selected days. The
+                          "Нийт сонгох боломжтой" total above is purely the
+                          SUM of whatever's set below - e.g. 7ц=1 + 6ц=1 = 2
+                          өдөр сонгох боломжтой, exactly as expected.
                         */}
-                        {false && selectedRuleShiftHours.map((hourKey) => (
+                        {selectedRuleShiftHours.map((hourKey) => (
                           <label key={hourKey} className="flex min-w-0 flex-col gap-1">
                             <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">
                               {hourKey === "rest" ? "Амралт" : `${hourKey} цагтай`}

@@ -300,13 +300,19 @@ async function validateUserWeeklyLimit(userId: string, targetSlot: any, excludeS
   }
 
   const targetHourKey = hourKeyForSlot(targetSlot);
-  if (targetHourKey) {
+  if (targetHourKey && Object.prototype.hasOwnProperty.call(hourCounts, targetHourKey)) {
+    // Only enforce a limit for a duration the admin has EXPLICITLY set a
+    // count for. A duration that's simply absent from hourCounts (never
+    // configured for this segment/type/location) is NOT restricted -
+    // previously ANY configured rule implicitly blocked every duration
+    // that wasn't listed, which silently broke bookings whenever a week's
+    // schedule introduced a shift length the admin hadn't touched yet.
     const maxForHour = Number(hourCounts[targetHourKey] || 0);
     const currentForHour = filtered.filter((row: any) => hourKeyForSlot(row) === targetHourKey).length;
-    if (maxForHour === 0 && Object.keys(hourCounts).length > 0) {
+    if (maxForHour === 0) {
       return targetHourKey === 'rest' ? 'Амралтын өдөр сонгох боломжгүй.' : `${targetHourKey} цагтай хуваарь сонгох боломжгүй.`;
     }
-    if (maxForHour > 0 && currentForHour + 1 > maxForHour) {
+    if (currentForHour + 1 > maxForHour) {
       return targetHourKey === 'rest'
         ? `Амралтын өдрийг ${maxForHour}-с олон сонгох боломжгүй.`
         : `${targetHourKey} цагтай хуваарийг ${maxForHour}-с олон сонгох боломжгүй.`;
