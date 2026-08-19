@@ -4,6 +4,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlDateTime, toSqlTime, displayDate, displayTime } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
+import { logAction } from './audit';
 
 const router = express.Router();
 
@@ -91,6 +92,37 @@ function calculateDuration(startTime: string, endTime: string, explicitDuration?
   return duration;
 }
 
+// Single source of truth for a slot's duration in hours, used both for
+// display (mapSlot/mapBooking, what admins/CSRs see) and for weekly-rule
+// enforcement (hourKeyForSlot). Always prefers recomputing from the actual
+// start_time/end_time span over trusting the stored `duration` column, so
+// a stale/mismatched duration value can never again cause the wrong shift
+// length to be displayed or enforced. When a real mismatch is found, it's
+// logged server-side (visible in Azure log stream / recent-errors) so the
+// stale DB row can be identified and re-saved to fix it at the source.
+function resolveSlotDurationHours(slot: any) {
+  if (slot.is_rest || slot.isRest) return 0;
+  const start = slot.start_time || slot.startTime;
+  const end = slot.end_time || slot.endTime;
+  const stored = Number(slot.duration || 0);
+  if (!start || !end) return stored;
+
+  const computed = calculateDuration(String(start), String(end));
+  if (!Number.isFinite(computed) || computed <= 0) return stored;
+
+  if (stored > 0 && Math.round(computed) !== Math.round(stored)) {
+    console.warn('Slot duration mismatch detected (using computed value):', {
+      slotId: slot.id,
+      date: slot.date,
+      start_time: start,
+      end_time: end,
+      stored_duration: stored,
+      computed_duration: computed,
+    });
+  }
+  return computed;
+}
+
 function boolValue(value: unknown) {
   return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
 }
@@ -158,7 +190,7 @@ function mapSlot(slot: any, currentBookings = 0, bookings: any[] = []) {
     date: displayDate(slot.date),
     startTime: isRest ? 'Амралт' : displayTime(slot.start_time),
     endTime: isRest ? 'Амралт' : displayTime(slot.end_time),
-    duration: Number(slot.duration || 0),
+    duration: Number(resolveSlotDurationHours(slot).toFixed(2)),
     capacity: Number(slot.capacity || 0),
     bookingOpen: boolValue(slot.booking_is_open),
     bookingOpenAt: displayDateTime(slot.booking_open_at),
@@ -185,7 +217,7 @@ function mapBooking(row: any) {
     date: displayDate(row.date),
     startTime: row.is_rest ? 'Амралт' : displayTime(row.start_time),
     endTime: row.is_rest ? 'Амралт' : displayTime(row.end_time),
-    duration: Number(row.duration || 0),
+    duration: Number(resolveSlotDurationHours(row).toFixed(2)),
     capacity: Number(row.capacity || 0),
     bookingOpen: boolValue(row.booking_is_open),
     bookingOpenAt: displayDateTime(row.booking_open_at),
@@ -239,7 +271,7 @@ function addDays(dateKey: string, days: number) {
 
 function hourKeyForSlot(slot: any) {
   if (slot.is_rest || slot.isRest) return 'rest';
-  const duration = Math.round(Number(slot.duration || 0));
+  const duration = Math.round(resolveSlotDurationHours(slot));
   return duration >= 4 && duration <= 9 ? String(duration) : '';
 }
 
@@ -260,7 +292,7 @@ async function validateUserWeeklyLimit(userId: string, targetSlot: any, excludeS
     .where({ 'slot_bookings.user_id': userId, 'slot_bookings.status': 'confirmed' })
     .where('work_slots.date', '>=', weekStart)
     .where('work_slots.date', '<', weekEnd)
-    .select('slot_bookings.slot_id', 'work_slots.duration', 'work_slots.is_rest');
+    .select('slot_bookings.slot_id', 'work_slots.duration', 'work_slots.is_rest', 'work_slots.start_time', 'work_slots.end_time');
 
   const filtered = rows.filter((row: any) => row.slot_id !== excludeSlotId);
   if (selectedDaysLimit > 0 && filtered.length + 1 > selectedDaysLimit) {
@@ -692,12 +724,15 @@ const bookHandler = async (req: any, res: any) => {
     // their own segment. (Previously slot.segment === 'All' let ANY CSR
     // from ANY segment book it, which is not the intended business rule.)
     if (String(slot.segment || '').trim() !== String(user.segment || '').trim()) {
+      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: segment mismatch (slot=${slot.segment}, user=${user.segment})`);
       return res.status(403).json({ error: 'Өөр segment-ийн хуваарь сонгох боломжгүй' });
     }
     if (normalizeEmploymentType(slot.employment_type) !== normalizeEmploymentType(user.employment_type)) {
+      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: employment type mismatch (slot=${slot.employment_type}, user=${user.employment_type})`);
       return res.status(403).json({ error: 'Full/Part төрөл таарахгүй байна' });
     }
     if (normalizeLocation(slot.location) !== normalizeLocation(user.location)) {
+      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: location mismatch (slot=${slot.location}, user=${user.location})`);
       return res.status(403).json({ error: 'Өөр байршлын (location) хуваарь сонгох боломжгүй' });
     }
 
@@ -712,7 +747,16 @@ const bookHandler = async (req: any, res: any) => {
     }
 
     const ruleError = await validateUserWeeklyLimit(userId, slot, editBookingId ? existingOnSameDay?.slot_id : undefined);
-    if (ruleError) return res.status(400).json({ error: ruleError });
+    if (ruleError) {
+      await logAction(
+        userId,
+        'BOOKING_REJECTED',
+        'work_slots',
+        slot_id,
+        `${user.email} (${user.segment || '-'}, ${user.employment_type || '-'}, ${user.location || '-'}): ${ruleError} | slot ${displayDate(slot.date)} ${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`,
+      );
+      return res.status(400).json({ error: ruleError });
+    }
 
     const bookingResult = await db.transaction(async trx => {
       // Row-level locking to close the booking race condition:
