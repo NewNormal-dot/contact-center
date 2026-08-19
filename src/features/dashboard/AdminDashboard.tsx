@@ -4916,47 +4916,27 @@ export default function AdminDashboard() {
                   )}
 
                   {selectedKeys.length > 1 && selectedDaysHaveShifts && (
-                    <div className="rounded-[1.45rem] border border-blue-500/15 bg-blue-500/5 p-4">
-                      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                        <div>
-                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-300">Сонгосон өдрийн дүрэм</p>
-                          <p className="text-[9px] text-gray-500">Доор тохируулсан цаг тус бүрийн тооны нийлбэрээр CSR-ийн сонгож болох нийт өдрийн тоо автоматаар тодорхойлогдоно.</p>
-                        </div>
-                        <div className="text-right text-[10px] font-black uppercase tracking-widest text-gray-500">
-                          Нийт сонгох боломжтой: <span className="text-white">{activeRuleTotalSelected}</span> өдөр / {selectedKeys.length} өдөр
-                        </div>
+                    <div className="rounded-2xl border border-blue-500/15 bg-blue-500/5 p-3">
+                      <div className="mb-2.5 flex items-center justify-between gap-2">
+                        <p className="text-[9px] font-black uppercase tracking-[0.15em] text-blue-300">Сонгосон өдрийн дүрэм</p>
+                        <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap">
+                          Нийт: <span className="text-white">{activeRuleTotalSelected}</span>/{selectedKeys.length} өдөр
+                        </p>
                       </div>
-                      <div className="grid grid-cols-1 gap-3">
+                      <div className="grid grid-cols-2 gap-2">
                         {/*
                           Re-enabled per user request (2026-08): input rows
-                          are generated dynamically from selectedRuleShiftHours,
-                          i.e. only for shift durations that actually appear
-                          in the selected days' shifts - so a duration that
-                          isn't part of this week's schedule never silently
-                          becomes "0 = fully blocked" for CSRs the way a
-                          static fixed list could. The "/N" next to each
-                          label is how many shifts of that duration exist
-                          across the selected days.
-
-                          Each duration's count is independent - it is NOT
-                          capped by a separately pre-set "total days" number
-                          (that used to force setting a total FIRST, then
-                          silently clamp every duration to fit inside it -
-                          e.g. 7h=1 set first would leave zero room for a
-                          6h=1 set right after, even though 3 days were
-                          selected). The only ceiling per duration is how
-                          many such shifts actually exist among the selected
-                          days, and the running total across all durations
-                          can't exceed the number of selected days. The
-                          "Нийт сонгох боломжтой" total above is purely the
-                          SUM of whatever's set below - e.g. 7ц=1 + 6ц=1 = 2
-                          өдөр сонгох боломжтой, exactly as expected.
+                          are generated dynamically from selectedRuleShiftHours
+                          (durations that actually appear in the selected
+                          days' shifts), each independent - not capped by a
+                          separately pre-set total. "Нийт" above is just the
+                          SUM of whatever's set below.
                         */}
                         {selectedRuleShiftHours.map((hourKey) => (
                           <label key={hourKey} className="flex min-w-0 flex-col gap-1">
-                            <span className="flex h-8 items-end text-[9px] font-black uppercase leading-tight tracking-widest text-gray-500">
-                              {hourKey === "rest" ? "Амралт" : `${hourKey} цагтай`}
-                              <span className="ml-1 text-[8px] text-blue-300/70">/{Number(selectedRuleShiftAvailability[hourKey]) || 0}</span>
+                            <span className="text-[8px] font-black uppercase tracking-widest text-gray-500">
+                              {hourKey === "rest" ? "Амралт" : `${hourKey} цаг`}
+                              <span className="ml-1 text-blue-300/70">/{Number(selectedRuleShiftAvailability[hourKey]) || 0}</span>
                             </span>
                             <input
                               type="number"
@@ -4965,7 +4945,7 @@ export default function AdminDashboard() {
                               value={Number(visibleRuleHourCounts[hourKey] || 0)}
                               onFocus={(e) => e.target.select()}
                               onChange={(e) => updateDynamicWeeklyRule(hourKey, Number(e.target.value))}
-                              className="h-10 w-full rounded-xl border border-white/10 bg-black/50 px-3 text-sm font-black text-white outline-none focus:border-blue-500/60"
+                              className="h-8 w-full rounded-lg border border-white/10 bg-black/50 px-2.5 text-xs font-black text-white outline-none focus:border-blue-500/60"
                             />
                           </label>
                         ))}
