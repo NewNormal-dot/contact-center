@@ -227,19 +227,19 @@ router.post('/', authenticate, async (req: any, res) => {
 
     let invitationSent = false;
     try {
-      await sendPasswordSetupEmail({
+      invitationSent = await sendPasswordSetupEmail({
         to: email,
         name,
         setupUrl,
         expiresAt: setup.expiresAt,
       });
-      if (shouldStorePasswordSetupFields) {
+      if (invitationSent && shouldStorePasswordSetupFields) {
         await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
       }
-      invitationSent = true;
     } catch (emailErr) {
       console.error('Create user invite email failed:', emailErr);
       captureError('users: Create user invite email failed', emailErr);
+      invitationSent = false;
     }
 
     await logAction(
@@ -413,19 +413,19 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
 
     let invitationSent = false;
     try {
-      await sendPasswordSetupEmail({
+      invitationSent = await sendPasswordSetupEmail({
         to: userToUpdate.email,
         name: userToUpdate.name,
         setupUrl,
         expiresAt: setup.expiresAt,
       });
-      if (shouldStorePasswordSetupFields) {
+      if (invitationSent && shouldStorePasswordSetupFields) {
         await db('users').where({ id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
       }
-      invitationSent = true;
     } catch (emailErr) {
       console.error('Reset password link email failed:', emailErr);
       captureError('users: Reset password link email failed', emailErr);
+      invitationSent = false;
     }
 
     await logAction(actingUser.id, 'SEND_PASSWORD_SETUP_LINK', 'users', id, `Sent password setup link to ${userToUpdate.email || userToUpdate.name}`);

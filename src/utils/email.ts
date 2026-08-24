@@ -17,7 +17,7 @@ export function buildPasswordSetupUrl(token: string) {
   return `${getPublicBaseUrl()}/setup-password?token=${encodeURIComponent(token)}`;
 }
 
-export async function sendEmail(payload: EmailPayload) {
+export async function sendEmail(payload: EmailPayload): Promise<boolean> {
   const webhookUrl = process.env.EMAIL_INVITE_WEBHOOK_URL || process.env.EMAIL_WEBHOOK_URL;
 
   if (!webhookUrl) {
@@ -25,7 +25,7 @@ export async function sendEmail(payload: EmailPayload) {
       to: payload.to,
       subject: payload.subject,
     });
-    return;
+    return false;
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -43,6 +43,7 @@ export async function sendEmail(payload: EmailPayload) {
     const body = await response.text().catch(() => '');
     throw new Error(`Email webhook failed (${response.status}): ${body.slice(0, 500)}`);
   }
+  return true;
 }
 
 export async function sendPasswordSetupEmail(params: {
@@ -50,7 +51,7 @@ export async function sendPasswordSetupEmail(params: {
   name: string;
   setupUrl: string;
   expiresAt: Date;
-}) {
+}): Promise<boolean> {
   const expires = params.expiresAt.toLocaleString('mn-MN', { hour12: false });
   const subject = 'Contact Center системийн нууц үг тохируулах холбоос';
   const text = [
@@ -75,7 +76,7 @@ export async function sendPasswordSetupEmail(params: {
     </div>
   `;
 
-  await sendEmail({ to: params.to, subject, text, html });
+  return sendEmail({ to: params.to, subject, text, html });
 }
 
 function escapeHtml(value: string) {

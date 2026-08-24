@@ -1814,8 +1814,18 @@ export default function AdminDashboard() {
         "Password Reset Link",
         `Sent password setup link to CSR ${user.name} (${user.email})`,
       );
+      // Always surface the link as a manual-share fallback (Viber/chat etc.)
+      // regardless of invitationSent - if the automatic email genuinely
+      // failed to send (or the email service isn't configured), the admin
+      // must not be left with nothing to act on. The modal's wording below
+      // reflects whether the automatic email actually went out.
       if (response.data?.setupUrl) {
-        setSetupLinkToShare({ name: user.name, email: user.email || "", url: response.data.setupUrl });
+        setSetupLinkToShare({
+          name: user.name,
+          email: user.email || "",
+          url: response.data.setupUrl,
+          invitationSent: Boolean(response.data?.invitationSent),
+        });
       } else {
         alert(response.data?.message || `${user.email || user.name} хэрэглэгчийн и-мэйл рүү нууц үг тохируулах холбоос илгээгдлээ.`);
       }
@@ -1985,7 +1995,7 @@ export default function AdminDashboard() {
   const [isManagingFontHours, setIsManagingFontHours] = useState(false);
   const [fontHoursDraft, setFontHoursDraft] = useState<Record<string, number>>({});
   const [isSavingFontHours, setIsSavingFontHours] = useState(false);
-  const [setupLinkToShare, setSetupLinkToShare] = useState<{ name: string; email: string; url: string } | null>(null);
+  const [setupLinkToShare, setSetupLinkToShare] = useState<{ name: string; email: string; url: string; invitationSent: boolean } | null>(null);
   const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [editingUser, setEditingUser] = useState<CSR | null>(null);
@@ -2069,7 +2079,12 @@ export default function AdminDashboard() {
       });
       logAction("Employee Added", `Added employee: ${newUser.name}`);
       if (response.data?.setupUrl) {
-        setSetupLinkToShare({ name: newUser.name, email: newUser.email, url: response.data.setupUrl });
+        setSetupLinkToShare({
+          name: newUser.name,
+          email: newUser.email,
+          url: response.data.setupUrl,
+          invitationSent: Boolean(response.data?.invitationSent),
+        });
       } else {
         alert(response.data?.message || `CSR амжилттай нэмэгдэж, ${newUser.email} хаяг руу нууц үг тохируулах холбоос илгээгдлээ.`);
       }
@@ -8328,8 +8343,17 @@ export default function AdminDashboard() {
                 Нууц үг тохируулах холбоос
               </h2>
               <p className="text-sm text-gray-400 mb-4">
-                И-мэйл автоматаар илгээгдэхгүй тохиргоотой байна. Доорх холбоосыг хуулж, <strong className="text-white">{setupLinkToShare.name}</strong>
-                {setupLinkToShare.email ? ` (${setupLinkToShare.email})` : ""} хэрэглэгчид Viber/чат зэргээр гараар илгээнэ үү.
+                {setupLinkToShare.invitationSent ? (
+                  <>
+                    <strong className="text-green-400">И-мэйл амжилттай илгээгдлээ.</strong> Хэрэв <strong className="text-white">{setupLinkToShare.name}</strong>
+                    {setupLinkToShare.email ? ` (${setupLinkToShare.email})` : ""} хүлээж аваагүй бол доорх холбоосыг Viber/чат зэргээр гараар илгээж болно.
+                  </>
+                ) : (
+                  <>
+                    И-мэйл автоматаар илгээгдэхгүй тохиргоотой байна. Доорх холбоосыг хуулж, <strong className="text-white">{setupLinkToShare.name}</strong>
+                    {setupLinkToShare.email ? ` (${setupLinkToShare.email})` : ""} хэрэглэгчид Viber/чат зэргээр гараар илгээнэ үү.
+                  </>
+                )}
               </p>
               <div className="bg-black/40 border border-gray-800 rounded-2xl p-4 mb-4">
                 <p className="text-xs text-blue-300 break-all font-mono select-all">
