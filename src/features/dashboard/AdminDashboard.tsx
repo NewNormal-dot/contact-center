@@ -2806,14 +2806,14 @@ export default function AdminDashboard() {
                             <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => handleEditUserClick(csr)}
-                              className="p-2.5 text-gray-600 hover:text-blue-500 hover:bg-blue-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                              className="p-2.5 text-gray-500 hover:text-blue-500 hover:bg-blue-500/10 rounded-xl transition-all"
                               title="Засах"
                             >
                               <Edit size={20} />
                             </button>
                             <button
                               onClick={() => handleResetUserPassword(csr)}
-                              className="p-2.5 text-gray-600 hover:text-green-500 hover:bg-green-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                              className="p-2.5 text-gray-500 hover:text-green-500 hover:bg-green-500/10 rounded-xl transition-all"
                               title="Нууц үг reset"
                             >
                               <RefreshCcw size={20} />
@@ -2826,7 +2826,7 @@ export default function AdminDashboard() {
                                   () => handleDeleteUser(csr.id),
                                 )
                               }
-                              className="p-2.5 text-gray-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                              className="p-2.5 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
                             >
                               <Trash2 size={20} />
                             </button>
