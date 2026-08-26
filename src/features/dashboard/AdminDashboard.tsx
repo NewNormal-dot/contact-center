@@ -958,6 +958,7 @@ export default function AdminDashboard() {
     authorId: raw.authorId || raw.author_id || '',
     authorName: raw.authorName || raw.author_name || 'System',
     targetUserId: raw.targetUserId || raw.target_user_id,
+    targetUserName: raw.targetUserName || raw.target_user_name || '',
     relatedEntityType: raw.relatedEntityType || raw.related_entity_type,
     relatedEntityId: raw.relatedEntityId || raw.related_entity_id,
     tradeRequestId: raw.relatedEntityType === 'trade_requests' || raw.related_entity_type === 'trade_requests'
@@ -3286,6 +3287,11 @@ export default function AdminDashboard() {
                                     <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-glow shadow-blue-500" />
                                   )}
                                 </div>
+                                {notif.targetUserId && (
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-blue-400">
+                                    → {notif.targetUserName || "Тодорхойгүй хэрэглэгч"}-д зориулагдсан
+                                  </p>
+                                )}
                                 <p className="text-sm text-gray-400 leading-relaxed">
                                   {notif.content}
                                 </p>

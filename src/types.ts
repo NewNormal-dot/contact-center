@@ -150,6 +150,7 @@ export interface Notification {
   authorName?: string;
   type?: 'general' | 'training' | 'important';
   targetUserId?: string;
+  targetUserName?: string;
   relatedEntityType?: string;
   relatedEntityId?: string;
   tradeRequestId?: string;

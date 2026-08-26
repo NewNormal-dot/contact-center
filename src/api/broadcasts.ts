@@ -14,6 +14,7 @@ function mapNotification(row: any) {
     imageUrl: row.image_url,
     authorId: row.author_id,
     targetUserId: row.target_user_id,
+    targetUserName: row.target_user_name,
     relatedEntityType: row.related_entity_type,
     relatedEntityId: row.related_entity_id,
     createdAt: row.created_at,
@@ -40,6 +41,7 @@ router.get('/notifications', authenticate, async (req: any, res) => {
       // For admin/superadmin, get all notifications with read receipts from all users
       const notifications = await db('notifications')
         .leftJoin('users', 'notifications.author_id', '=', 'users.id')
+        .leftJoin('users as target_users', 'notifications.target_user_id', '=', 'target_users.id')
         .select(
           'notifications.id',
           'notifications.title',
@@ -52,7 +54,8 @@ router.get('/notifications', authenticate, async (req: any, res) => {
           'notifications.related_entity_id',
           'notifications.created_at',
           'notifications.author_id',
-          'users.name as author_name'
+          'users.name as author_name',
+          'target_users.name as target_user_name'
         )
         .orderBy('notifications.created_at', 'desc');
 
