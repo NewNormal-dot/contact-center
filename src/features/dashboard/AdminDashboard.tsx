@@ -1506,6 +1506,7 @@ export default function AdminDashboard() {
       getCsrLocation(csr),
       getCsrSupervisorName(csr),
       csr.status,
+      csr.isActivated ? "Идэвхтэй" : "Хүлээгдэж буй",
     ]
       .filter(Boolean)
       .join(" ")
