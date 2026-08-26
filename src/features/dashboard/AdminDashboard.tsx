@@ -5718,6 +5718,17 @@ export default function AdminDashboard() {
           {label}
         </span>
       )}
+      {Boolean(badge) && (
+        <span
+          className={`flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-black shadow-lg shadow-red-500/30 ${
+            isSidebarCollapsed
+              ? "absolute -top-1 -right-1 h-5 min-w-[20px] px-1"
+              : "ml-auto h-5 min-w-[20px] px-1.5"
+          }`}
+        >
+          {badge! > 99 ? "99+" : badge}
+        </span>
+      )}
       {activeTab === id && (
         <motion.div
           layoutId="sidebar-active"
@@ -5803,7 +5814,12 @@ export default function AdminDashboard() {
           {SHOW_VACATION_FEATURE && (
             <SidebarItem id="vacation" icon={Palmtree} label="Ээлжийн амралт" />
           )}
-          <SidebarItem id="hourlyLeave" icon={Clock} label="Чөлөө" />
+          <SidebarItem
+            id="hourlyLeave"
+            icon={Clock}
+            label="Чөлөө"
+            badge={hourlyLeaveRequests.filter((req) => req.status === "pending").length}
+          />
           <SidebarItem id="forecast" icon={BarChart3} label="Forecast" />
           <SidebarItem
             id="notifications"
