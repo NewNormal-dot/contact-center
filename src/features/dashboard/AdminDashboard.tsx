@@ -956,6 +956,7 @@ export default function AdminDashboard() {
     imageUrl: raw.imageUrl || raw.image_url || '',
     deadline: raw.deadline || '',
     createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
+    updatedAt: raw.updatedAt || raw.updated_at || '',
     authorId: raw.authorId || raw.author_id || '',
     authorName: raw.authorName || raw.author_name || 'System',
     targetUserId: raw.targetUserId || raw.target_user_id,
@@ -3349,9 +3350,23 @@ export default function AdminDashboard() {
                                     → {notif.targetUserName || "Тодорхойгүй хэрэглэгч"}-д зориулагдсан
                                   </p>
                                 )}
-                                <p className="text-sm text-gray-400 leading-relaxed">
+                                <p className={`text-sm text-gray-400 leading-relaxed ${statusInfo ? "bg-white/[0.03] rounded-2xl px-4 py-3" : ""}`}>
                                   {notif.content}
                                 </p>
+                                {statusInfo && (
+                                  <div className="flex flex-col gap-1 text-[10px] text-gray-500">
+                                    <div className="flex items-center gap-1.5">
+                                      <Send size={12} />
+                                      <span>Илгээсэн: {new Date(notif.createdAt).toLocaleString()}</span>
+                                    </div>
+                                    {statusInfo.label !== "Хүлээгдэж буй" && notif.updatedAt && (
+                                      <div className={`flex items-center gap-1.5 ${statusInfo.badgeClass.match(/text-\S+/)?.[0] || "text-gray-400"}`}>
+                                        {statusInfo.icon === "check" ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+                                        <span>{statusInfo.label}: {new Date(notif.updatedAt).toLocaleString()}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                                 {isBroadcast && (
                                   <div className="flex items-center gap-3">
                                     <button

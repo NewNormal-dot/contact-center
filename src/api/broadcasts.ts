@@ -18,6 +18,7 @@ function mapNotification(row: any) {
     relatedEntityType: row.related_entity_type,
     relatedEntityId: row.related_entity_id,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
     readAt: row.read_at,
   };
 }
@@ -75,6 +76,7 @@ router.get('/notifications', authenticate, async (req: any, res) => {
           'notifications.related_entity_type',
           'notifications.related_entity_id',
           'notifications.created_at',
+          'notifications.updated_at',
           'notifications.author_id',
           'users.name as author_name',
           'target_users.name as target_user_name'

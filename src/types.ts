@@ -146,6 +146,7 @@ export interface Notification {
   imageUrl?: string;
   deadline?: string;
   createdAt: string;
+  updatedAt?: string;
   authorId: string;
   authorName?: string;
   type?: 'general' | 'training' | 'important';
