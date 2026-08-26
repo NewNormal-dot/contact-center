@@ -36,6 +36,13 @@ export interface CSR {
   password?: string;
   monthlyFontTime?: Record<string, number>;
   employmentType?: 'Full Time' | 'Part Time' | string;
+  // Whether this CSR has completed their password-setup link (i.e. their
+  // account is actually usable) - see /api/users/csr and the
+  // password_changed_at column. Not to be confused with `status` above,
+  // which tracks online/offline presence, not account activation.
+  isActivated?: boolean;
+  passwordChangedAt?: string | null;
+  invitedAt?: string | null;
 }
 
 export interface EmployeeProfile extends User {

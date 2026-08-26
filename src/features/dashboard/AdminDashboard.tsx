@@ -712,6 +712,9 @@ export default function AdminDashboard() {
         raw.photoUrl ||
         raw.photo_url ||
         `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=2563eb&color=fff&size=128`,
+      isActivated: Boolean(raw.isActivated ?? raw.passwordChangedAt ?? raw.password_changed_at),
+      passwordChangedAt: raw.passwordChangedAt || raw.password_changed_at || null,
+      invitedAt: raw.invitedAt || raw.invited_at || null,
     };
   };
 
@@ -2783,8 +2786,25 @@ export default function AdminDashboard() {
                             </span>
                           </td>
                           <td className="px-6 py-5 align-middle whitespace-nowrap">
-                            <div className="max-w-[210px] truncate text-base font-black text-white group-hover:translate-x-1 transition-transform inline-block cursor-default tracking-wide uppercase">
-                              {csr.name}
+                            <div className="flex items-center gap-2">
+                              <div className="max-w-[210px] truncate text-base font-black text-white group-hover:translate-x-1 transition-transform inline-block cursor-default tracking-wide uppercase">
+                                {csr.name}
+                              </div>
+                              {csr.isActivated ? (
+                                <span
+                                  className="shrink-0 rounded-full bg-green-500/10 border border-green-500/30 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-green-400"
+                                  title="Нууц үгээ идэвхжүүлсэн"
+                                >
+                                  Идэвхтэй
+                                </span>
+                              ) : (
+                                <span
+                                  className="shrink-0 rounded-full bg-orange-500/10 border border-orange-500/30 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-orange-400"
+                                  title="Нууц үг тохируулах холбоос хараахан хэрэглээгүй байна"
+                                >
+                                  Хүлээгдэж буй
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-5 align-middle whitespace-nowrap">

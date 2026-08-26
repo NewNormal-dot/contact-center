@@ -89,6 +89,8 @@ function userSelectColumns(includeLocation: boolean, includeSupervisorName: bool
     'segment',
     'employment_type',
     'weekly_rule_id',
+    'password_changed_at',
+    'invited_at',
     ...(includeCreatedAt ? ['created_at'] : []),
   ];
 }
@@ -130,7 +132,10 @@ router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req,
       photoUrl: u.photo_url,
       lineType: u.segment || '',
       employmentType: u.employment_type,
-      weeklyRuleId: u.weekly_rule_id
+      weeklyRuleId: u.weekly_rule_id,
+      passwordChangedAt: u.password_changed_at,
+      invitedAt: u.invited_at,
+      isActivated: Boolean(u.password_changed_at),
     }));
     res.json(formattedUsers);
   } catch (err) {
