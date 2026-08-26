@@ -1842,19 +1842,21 @@ export default function AdminDashboard() {
     }
   };
 
-  // Derives a status label (Хүлээгдэж буй / Зөвшөөрсөн / Татгалзсан) from the
-  // notification's title, so the card can show a meaningful state badge
-  // instead of a generic warning icon for every single notification.
+  // Derives a status (Хүлээгдэж буй / Зөвшөөрсөн / Татгалзсан) from the
+  // notification's CONTENT - the title is now the same ("Ээлж солих
+  // хүсэлт") across every state so it can't be used to tell them apart,
+  // but the content wording genuinely differs per state (see trades.ts).
   const getNotificationStatusInfo = (notif: Notification) => {
+    const content = notif.content || "";
     const title = notif.title || "";
-    if (/зөвшөөр|батлагдл|баталгаажл/.test(title)) {
-      return { label: "Зөвшөөрсөн", badgeClass: "bg-green-500/10 text-green-400 border-green-500/30" };
+    if (/цуцлагдлаа|татгалз|үлдлээ/.test(content) || /татгалз/.test(title)) {
+      return { label: "Татгалзсан", badgeClass: "bg-red-500/10 text-red-400 border-red-500/30", icon: "x" as const };
     }
-    if (/татгалз/.test(title)) {
-      return { label: "Татгалзсан", badgeClass: "bg-red-500/10 text-red-400 border-red-500/30" };
+    if (/одоо .+ ажиллана/.test(content) || /зөвшөөр|батлагдл|баталгаажл/.test(title)) {
+      return { label: "Зөвшөөрсөн", badgeClass: "bg-green-500/10 text-green-400 border-green-500/30", icon: "check" as const };
     }
-    if (/ирлээ|хүсэлт/.test(title)) {
-      return { label: "Хүлээгдэж буй", badgeClass: "bg-orange-500/10 text-orange-400 border-orange-500/30" };
+    if (/санал болгож байна|ирлээ|хүсэлт/.test(content) || /ирлээ|хүсэлт/.test(title)) {
+      return { label: "Хүлээгдэж буй", badgeClass: "bg-orange-500/10 text-orange-400 border-orange-500/30", icon: "alert" as const };
     }
     return null;
   };
@@ -3313,13 +3315,24 @@ export default function AdminDashboard() {
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex gap-4">
-                              <div
-                                className={`mt-1 p-3 rounded-2xl ${statusInfo ? statusInfo.badgeClass : notif.type === "important" ? "bg-red-500/10 text-red-400" : "bg-blue-500/10 text-blue-400"}`}
-                              >
-                                {notif.type === "important" ? (
-                                  <AlertCircle size={20} />
-                                ) : (
-                                  <Info size={20} />
+                              <div className="flex flex-col items-center gap-1.5 shrink-0 w-16">
+                                <div
+                                  className={`p-3 rounded-2xl ${statusInfo ? statusInfo.badgeClass : notif.type === "important" ? "bg-red-500/10 text-red-400" : "bg-blue-500/10 text-blue-400"}`}
+                                >
+                                  {statusInfo?.icon === "check" ? (
+                                    <CheckCircle2 size={20} />
+                                  ) : statusInfo?.icon === "x" ? (
+                                    <XCircle size={20} />
+                                  ) : notif.type === "important" ? (
+                                    <AlertCircle size={20} />
+                                  ) : (
+                                    <Info size={20} />
+                                  )}
+                                </div>
+                                {statusInfo && (
+                                  <span className={`text-center text-[9px] font-black uppercase leading-tight tracking-widest ${statusInfo.badgeClass.match(/text-\S+/)?.[0] || "text-gray-400"}`}>
+                                    {statusInfo.label}
+                                  </span>
                                 )}
                               </div>
                               <div className="space-y-2">
@@ -3327,11 +3340,6 @@ export default function AdminDashboard() {
                                   <h3 className="font-black text-white">
                                     {notif.title}
                                   </h3>
-                                  {statusInfo && (
-                                    <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${statusInfo.badgeClass}`}>
-                                      {statusInfo.label}
-                                    </span>
-                                  )}
                                   {isUnread && (
                                     <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-glow shadow-blue-500" />
                                   )}
