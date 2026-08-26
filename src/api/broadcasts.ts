@@ -42,6 +42,15 @@ router.get('/notifications', authenticate, async (req: any, res) => {
       const notifications = await db('notifications')
         .leftJoin('users', 'notifications.author_id', '=', 'users.id')
         .leftJoin('users as target_users', 'notifications.target_user_id', '=', 'target_users.id')
+        .where(function () {
+          // Only broadcast notifications (everyone) or ones addressed to
+          // THIS admin specifically - not other users' personal
+          // notifications (a CSR's trade offer, another admin's own copy
+          // of a leave-request alert, etc.), which aren't this admin's
+          // concern and only cluttered the page.
+          this.whereNull('notifications.target_user_id')
+            .orWhere('notifications.target_user_id', userId);
+        })
         .select(
           'notifications.id',
           'notifications.title',

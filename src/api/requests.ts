@@ -293,6 +293,15 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
       updated_at: db.fn.now(),
     });
 
+    // Clear the original "хүсэлт ирлээ" notifications that were sent to
+    // every admin when this request was created - now that it's resolved,
+    // those stale pending-alerts should stop showing for admins who didn't
+    // act on it. The CSR's own copy (if any) is untouched.
+    await db('notifications')
+      .where({ related_entity_type: 'leave_request', related_entity_id: id })
+      .whereIn('target_user_id', db('users').select('id').whereIn('role', ['admin', 'superadmin']))
+      .del();
+
     const isApproved = status === 'approved';
     const actingUser = await db('users').where({ id: actingUserId }).first();
     const isShiftLeave = request.type === 'shift_leave';
@@ -402,6 +411,11 @@ router.patch('/vacation/:id', authenticate, authorize(['admin', 'superadmin']), 
       updated_at: db.fn.now(),
     });
     const isApproved = status === 'approved';
+
+    await db('notifications')
+      .where({ related_entity_type: 'vacation_request', related_entity_id: id })
+      .whereIn('target_user_id', db('users').select('id').whereIn('role', ['admin', 'superadmin']))
+      .del();
 
     await createNotificationForUser({
       userId: request.user_id,

@@ -1841,6 +1841,23 @@ export default function AdminDashboard() {
     }
   };
 
+  // Derives a status label (Хүлээгдэж буй / Зөвшөөрсөн / Татгалзсан) from the
+  // notification's title, so the card can show a meaningful state badge
+  // instead of a generic warning icon for every single notification.
+  const getNotificationStatusInfo = (notif: Notification) => {
+    const title = notif.title || "";
+    if (/зөвшөөр|батлагдл|баталгаажл/.test(title)) {
+      return { label: "Зөвшөөрсөн", badgeClass: "bg-green-500/10 text-green-400 border-green-500/30" };
+    }
+    if (/татгалз/.test(title)) {
+      return { label: "Татгалзсан", badgeClass: "bg-red-500/10 text-red-400 border-red-500/30" };
+    }
+    if (/ирлээ|хүсэлт/.test(title)) {
+      return { label: "Хүлээгдэж буй", badgeClass: "bg-orange-500/10 text-orange-400 border-orange-500/30" };
+    }
+    return null;
+  };
+
   const exportNotificationSeenList = (notif: Notification) => {
     const data = csrs.map((csr) => {
       const seenInfo = notif.seenBy?.find((s) => s.userId === csr.id);
@@ -3262,6 +3279,8 @@ export default function AdminDashboard() {
                       const isUnread = !notif.seenBy?.some(
                         (s) => s.userId === "admin",
                       );
+                      const statusInfo = getNotificationStatusInfo(notif);
+                      const isBroadcast = !notif.targetUserId;
                       return (
                         <div
                           key={`notif-${notif.id}-${idx}`}
@@ -3270,7 +3289,7 @@ export default function AdminDashboard() {
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex gap-4">
                               <div
-                                className={`mt-1 p-3 rounded-2xl ${notif.type === "important" ? "bg-red-500/10 text-red-400" : "bg-blue-500/10 text-blue-400"}`}
+                                className={`mt-1 p-3 rounded-2xl ${statusInfo ? statusInfo.badgeClass : notif.type === "important" ? "bg-red-500/10 text-red-400" : "bg-blue-500/10 text-blue-400"}`}
                               >
                                 {notif.type === "important" ? (
                                   <AlertCircle size={20} />
@@ -3283,6 +3302,11 @@ export default function AdminDashboard() {
                                   <h3 className="font-black text-white">
                                     {notif.title}
                                   </h3>
+                                  {statusInfo && (
+                                    <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${statusInfo.badgeClass}`}>
+                                      {statusInfo.label}
+                                    </span>
+                                  )}
                                   {isUnread && (
                                     <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-glow shadow-blue-500" />
                                   )}
@@ -3295,35 +3319,37 @@ export default function AdminDashboard() {
                                 <p className="text-sm text-gray-400 leading-relaxed">
                                   {notif.content}
                                 </p>
-                                <div className="flex items-center gap-3">
-                                  <button
-                                    onClick={() =>
-                                      exportNotificationSeenList(notif)
-                                    }
-                                    className="flex items-center gap-1.5 text-blue-400/80 hover:text-blue-400 transition-colors text-[10px] font-black uppercase tracking-widest"
-                                  >
-                                    <Download size={12} />
-                                    {notif.seenBy?.length || 0} үзсэн
-                                  </button>
-                                  <button
-                                    onClick={() =>
-                                      exportNotificationUnseenList(notif)
-                                    }
-                                    className="flex items-center gap-1.5 text-orange-400/80 hover:text-orange-400 transition-colors text-[10px] font-black uppercase tracking-widest"
-                                  >
-                                    <Download size={12} />
-                                    {csrs.length -
-                                      (notif.seenBy?.length || 0)}{" "}
-                                    үзээгүй
-                                  </button>
-                                  <button
-                                    onClick={() => setShowSeenDetails(notif)}
-                                    className="flex items-center gap-1.5 text-green-400/80 hover:text-green-400 transition-colors text-[10px] font-black uppercase tracking-widest"
-                                  >
-                                    <Eye size={12} />
-                                    Дэлгэрэнгүй
-                                  </button>
-                                </div>
+                                {isBroadcast && (
+                                  <div className="flex items-center gap-3">
+                                    <button
+                                      onClick={() =>
+                                        exportNotificationSeenList(notif)
+                                      }
+                                      className="flex items-center gap-1.5 text-blue-400/80 hover:text-blue-400 transition-colors text-[10px] font-black uppercase tracking-widest"
+                                    >
+                                      <Download size={12} />
+                                      {notif.seenBy?.length || 0} үзсэн
+                                    </button>
+                                    <button
+                                      onClick={() =>
+                                        exportNotificationUnseenList(notif)
+                                      }
+                                      className="flex items-center gap-1.5 text-orange-400/80 hover:text-orange-400 transition-colors text-[10px] font-black uppercase tracking-widest"
+                                    >
+                                      <Download size={12} />
+                                      {csrs.length -
+                                        (notif.seenBy?.length || 0)}{" "}
+                                      үзээгүй
+                                    </button>
+                                    <button
+                                      onClick={() => setShowSeenDetails(notif)}
+                                      className="flex items-center gap-1.5 text-green-400/80 hover:text-green-400 transition-colors text-[10px] font-black uppercase tracking-widest"
+                                    >
+                                      <Eye size={12} />
+                                      Дэлгэрэнгүй
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
