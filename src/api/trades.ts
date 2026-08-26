@@ -47,6 +47,50 @@ async function createNotification(payload: { title: string; content: string; aut
   });
 }
 
+// Admins see trade activity for oversight (no action needed - see the
+// /respond handler), as ONE evolving notification per trade rather than a
+// stack of separate "received/approved/declined" rows. Each admin gets
+// their own row (matches the createNotificationForAdmins pattern used for
+// leave requests) so it never leaks into a CSR's notification feed; the
+// SAME rows get updated in place as the trade's status changes.
+async function upsertAdminTradeNotification(tradeId: string, title: string, content: string, trx: any = db) {
+  const admins = await trx('users').where({ role: 'admin', status: 'active' }).select('id');
+  if (admins.length === 0) return;
+  const adminIds = admins.map((a: any) => a.id);
+  const existing = await trx('notifications')
+    .where({ related_entity_type: 'trade_requests', related_entity_id: tradeId })
+    .whereIn('target_user_id', adminIds)
+    .select('id', 'target_user_id');
+  const existingByTarget = new Map(existing.map((row: any) => [row.target_user_id, row.id]));
+
+  for (const adminId of adminIds) {
+    const existingId = existingByTarget.get(adminId);
+    if (existingId) {
+      await trx('notifications').where({ id: existingId }).update({
+        title,
+        content,
+        type: 'important',
+        updated_at: trx.fn.now(),
+      });
+    } else {
+      await trx('notifications').insert({
+        id: uuidv4(),
+        title,
+        content,
+        type: 'important',
+        target_user_id: adminId,
+        related_entity_type: 'trade_requests',
+        related_entity_id: tradeId,
+        author_id: null,
+      });
+    }
+  }
+}
+
+function tradeShiftDesc(slot: any) {
+  return `${displayDate(slot.date)} ${slotTimeLabel(slot)}`;
+}
+
 function mapTrade(row: any) {
   return {
     id: row.id,
@@ -102,8 +146,52 @@ function baseTradeQuery(trx: any = db) {
     );
 }
 
+function todayDateKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+// A pending trade that never got a response is auto-declined once either
+// shift date it involves has arrived (00:00 that day) - past that point the
+// swap no longer makes sense for the earlier of the two shifts, so there's
+// nothing left to approve. Runs opportunistically whenever trades are
+// listed (both CSR and admin dashboards poll this route).
+async function autoDeclineExpiredTrades() {
+  const today = todayDateKey();
+  const expired = await baseTradeQuery()
+    .where('trade_requests.status', 'pending')
+    .where(function () {
+      this.where('sender_slot.date', '<', today).orWhere('receiver_slot.date', '<', today);
+    });
+
+  for (const trade of expired) {
+    const updated = await db('trade_requests')
+      .where({ id: trade.id, status: 'pending' })
+      .update({ status: 'rejected', updated_at: db.fn.now() });
+    if (!updated) continue;
+
+    await createNotification({
+      title: 'Trade хүсэлтэд хариу ирээгүй',
+      content: `Таны trade хүсэлтэд хугацаанд нь хариу ирээгүй тул автоматаар цуцлагдлаа.`,
+      targetUserId: trade.sender_id,
+      relatedEntityType: 'trade_requests',
+      relatedEntityId: trade.id,
+      type: 'important',
+    });
+
+    const senderSlotView = { date: trade.sender_date, is_rest: trade.sender_is_rest, start_time: trade.sender_start, end_time: trade.sender_end };
+    const receiverSlotView = { date: trade.receiver_date, is_rest: trade.receiver_is_rest, start_time: trade.receiver_start, end_time: trade.receiver_end };
+    await upsertAdminTradeNotification(
+      trade.id,
+      'Ээлж солих хүсэлт',
+      `Хүсэлт илгээгч ${trade.sender_name} ${tradeShiftDesc(senderSlotView)} ээлжээрээ ажиллах хэвээр, хүсэлт хүлээн авагч ${trade.receiver_name} ${tradeShiftDesc(receiverSlotView)}-тай хуваартайгаа үлдлээ. Хариу өгөөгүй тул автоматаар цуцлагдлаа.`,
+    );
+  }
+}
+
 router.get('/', authenticate, async (req: any, res) => {
   try {
+    await autoDeclineExpiredTrades();
     let query = baseTradeQuery();
     if (req.user.role === 'csr') {
       query = query.where(function () {
@@ -175,6 +263,12 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
       type: 'important',
     });
 
+    await upsertAdminTradeNotification(
+      id,
+      'Ээлж солих хүсэлт',
+      `Хүсэлт илгээгч ${sender.name} ${tradeShiftDesc(senderSlot)}-ийн хүсэлтийг, хүлээн авагч ${receiver.name} ${tradeShiftDesc(receiverSlot)}-тай солихоор санал болгож байна.`,
+    );
+
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create trade error:', err);
@@ -204,6 +298,11 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
         relatedEntityId: id,
         type: 'important',
       });
+      await upsertAdminTradeNotification(
+        id,
+        'Ээлж солих хүсэлт',
+        `Хүсэлт илгээгч ${trade.sender_name} ${tradeShiftDesc({ date: trade.sender_date, is_rest: trade.sender_is_rest, start_time: trade.sender_start, end_time: trade.sender_end })} ээлжээрээ ажиллах хэвээр, хүсэлт хүлээн авагч ${trade.receiver_name} ${tradeShiftDesc({ date: trade.receiver_date, is_rest: trade.receiver_is_rest, start_time: trade.receiver_start, end_time: trade.receiver_end })}-тай хуваартайгаа үлдлээ.`,
+      );
       return res.json({ message: 'Амжилттай хариу илгээлээ' });
     } catch (err) {
       console.error('Respond trade error:', err);
@@ -254,6 +353,12 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
 
     await createNotification({ title: 'Ээлж амжилттай солигдлоо', content: `Таны шинэ хуваарь: ${displayDate(senderNewSlot.date)} ${slotTimeLabel(senderNewSlot)}.`, authorId: req.user.id, targetUserId: trade.sender_id, relatedEntityType: 'trade_requests', relatedEntityId: id, type: 'important' }, trx);
     await createNotification({ title: 'Ээлж амжилттай солигдлоо', content: `Таны шинэ хуваарь: ${displayDate(receiverNewSlot.date)} ${slotTimeLabel(receiverNewSlot)}.`, authorId: req.user.id, targetUserId: trade.receiver_id, relatedEntityType: 'trade_requests', relatedEntityId: id, type: 'important' }, trx);
+    await upsertAdminTradeNotification(
+      id,
+      'Ээлж солих хүсэлт',
+      `${trade.sender_name} одоо ${tradeShiftDesc(senderNewSlot)} ажиллана, ${trade.receiver_name} одоо ${tradeShiftDesc(receiverNewSlot)} ажиллана.`,
+      trx,
+    );
 
     await trx.commit();
 

@@ -33,10 +33,23 @@ function mapTraining(row: any) {
   };
 }
 
+function threeMonthsAgo() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth() - 3, now.getDate(), now.getHours(), now.getMinutes(), now.getSeconds());
+}
+
+// Notifications older than 3 months (from today, not from when they were
+// created - so the visible window rolls forward one day at a time) are
+// purged. Runs opportunistically on every fetch instead of a cron job.
+async function purgeOldNotifications() {
+  await db('notifications').where('created_at', '<', threeMonthsAgo()).del();
+}
+
 router.get('/notifications', authenticate, async (req: any, res) => {
   const userId = req.user.id;
   const userRole = req.user.role;
   try {
+    await purgeOldNotifications();
     if (userRole === 'admin' || userRole === 'superadmin') {
       // For admin/superadmin, get all notifications with read receipts from all users
       const notifications = await db('notifications')

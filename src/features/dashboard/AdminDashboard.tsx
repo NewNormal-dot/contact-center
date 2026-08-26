@@ -542,6 +542,7 @@ export default function AdminDashboard() {
   const [notifSubTab, setNotifSubTab] = useState<"inbox" | "send">("inbox");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [notifSearchQuery, setNotifSearchQuery] = useState("");
 
   // Data States
   const [csrs, setCsrs] = useState<CSR[]>([]);
@@ -3226,10 +3227,21 @@ export default function AdminDashboard() {
   };
 
   const renderNotificationsView = () => {
+    const normalizedNotifSearch = notifSearchQuery.trim().toLowerCase();
     const notificationGroups = groupNotificationsByDay(
-      notifications.filter(
-        (n) => n.type === "general" || n.type === "important",
-      ),
+      notifications
+        .filter((n) => n.type === "general" || n.type === "important")
+        .filter((n) => {
+          if (!normalizedNotifSearch) return true;
+          // Matches free-text (username, keyword in title/content) or a
+          // YYYY-MM date - e.g. "2026-08" filters to that month.
+          const createdMonth = String(n.createdAt || "").slice(0, 7);
+          const haystack = [n.title, n.content, n.authorName, n.targetUserName, createdMonth]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(normalizedNotifSearch);
+        }),
     );
 
     return (
@@ -3260,6 +3272,19 @@ export default function AdminDashboard() {
             </button>
           </div>
         </div>
+
+        {notifSubTab === "inbox" && (
+          <div className="relative">
+            <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              type="text"
+              value={notifSearchQuery}
+              onChange={(e) => setNotifSearchQuery(e.target.value)}
+              placeholder="Нэр, түлхүүр үг, эсвэл 2026-08 гэх мэт огноогоор хайх..."
+              className="w-full h-11 pl-11 pr-4 rounded-2xl bg-gray-900 border border-gray-800 text-sm text-white placeholder:text-gray-600 outline-none focus:border-blue-500/50 transition-all"
+            />
+          </div>
+        )}
 
         {notifSubTab === "inbox" ? (
           <div className="space-y-8">
@@ -3311,7 +3336,7 @@ export default function AdminDashboard() {
                                     <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-glow shadow-blue-500" />
                                   )}
                                 </div>
-                                {notif.targetUserId && (
+                                {notif.targetUserId && notif.relatedEntityType !== "trade_requests" && (
                                   <p className="text-[10px] font-black uppercase tracking-widest text-blue-400">
                                     → {notif.targetUserName || "Тодорхойгүй хэрэглэгч"}-д зориулагдсан
                                   </p>
@@ -3352,28 +3377,30 @@ export default function AdminDashboard() {
                                 )}
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              {!isUnread && (
-                                <button
-                                  onClick={() =>
-                                    handleDeleteNotification(notif.id)
-                                  }
-                                  className="p-2 text-gray-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
-                                >
-                                  <Trash2 size={20} />
-                                </button>
-                              )}
-                              {isUnread && (
-                                <button
-                                  onClick={() =>
-                                    markNotificationAsRead(notif.id)
-                                  }
-                                  className="p-2 text-blue-400 hover:bg-blue-500/10 rounded-xl transition-all"
-                                >
-                                  <CheckCircle2 size={24} />
-                                </button>
-                              )}
-                            </div>
+                            {notif.relatedEntityType !== "trade_requests" && (
+                              <div className="flex items-center gap-2">
+                                {!isUnread && (
+                                  <button
+                                    onClick={() =>
+                                      handleDeleteNotification(notif.id)
+                                    }
+                                    className="p-2 text-gray-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
+                                  >
+                                    <Trash2 size={20} />
+                                  </button>
+                                )}
+                                {isUnread && (
+                                  <button
+                                    onClick={() =>
+                                      markNotificationAsRead(notif.id)
+                                    }
+                                    className="p-2 text-blue-400 hover:bg-blue-500/10 rounded-xl transition-all"
+                                  >
+                                    <CheckCircle2 size={24} />
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
