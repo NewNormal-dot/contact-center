@@ -118,8 +118,14 @@ async function startServer() {
     contentSecurityPolicy: false,
   }));
   app.use(cors());
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  // Default express.json() limit is 100kb, which is too small for bulk
+  // schedule operations - e.g. creating/editing shifts across many selected
+  // days at once (each day's shifts + booking waves add up) easily exceeds
+  // that on /api/slots/sync-schedules, failing with a generic
+  // "PayloadTooLargeError: request entity too large" that surfaced to
+  // admins as an unhelpful "Дотоод алдаа гарлаа" alert.
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // API Routes
   app.use("/api/auth", authRoutes);
@@ -174,6 +180,11 @@ async function startServer() {
       console.error(err.stack);
     }
     captureError(`${req.method} ${req.path}`, err);
+    if (err.type === 'entity.too.large' || err.status === 413) {
+      return res.status(413).json({
+        error: 'Хадгалах өгөгдөл хэт том байна. Сонгосон өдрийн тоог багасгаад дахин оролдоно уу.',
+      });
+    }
     res.status(500).json({ 
       error: "Дотоод алдаа гарлаа",
       message: process.env.NODE_ENV === 'production' ? undefined : err.message
