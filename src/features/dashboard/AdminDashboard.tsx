@@ -5033,6 +5033,15 @@ export default function AdminDashboard() {
                     </div>
                   )}
 
+                  {selectedKeys.length === 1 && Object.keys(activeWeeklyRule.hourCounts || {}).length > 0 && (
+                    <div className="rounded-2xl border border-blue-500/15 bg-blue-500/5 px-4 py-3 text-[10px] font-bold text-blue-300 flex items-start gap-2">
+                      <Info size={14} className="shrink-0 mt-0.5" />
+                      <span>
+                        {activeSegmentView} / {activeEmploymentView} / {activeLocationView}-ийн 7 хоногийн дүрэм аль хэдийн тохируулагдсан байна — энэ дүрэм зөвхөн энэ өдөрт биш, тухайн segment/type/location-ийн БҮХ өдөрт нэгэн адил хамаарна. Тохиргоог харах/өөрчлөх бол хэд хэдэн өдрийг сонгоно уу (2+ өдөр).
+                      </span>
+                    </div>
+                  )}
+
                   {selectedKeys.length > 1 && selectedDaysHaveShifts && (
                     <div className="rounded-2xl border border-blue-500/15 bg-blue-500/5 p-3">
                       <div className="mb-2.5 flex items-center justify-between gap-2">
