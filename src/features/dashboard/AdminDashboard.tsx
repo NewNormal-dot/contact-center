@@ -872,6 +872,16 @@ export default function AdminDashboard() {
     try {
       const response = await apiClient.get("/slots");
       const dbSchedules = mapDbSlotsToSchedules(response.data || []);
+      // Skip overwriting local schedules state while a debounced
+      // wave-slot-count save (see waveSlotSaveTimerRef) is still pending -
+      // otherwise this poll (which runs every 2s) can land BEFORE that
+      // save reaches the server and clobber the just-made local edit with
+      // stale data, discarding it. The pending save will land within
+      // ~600ms regardless; the next poll tick after that picks up the
+      // now-persisted result correctly.
+      if (waveSlotSaveTimerRef.current) {
+        return dbSchedules;
+      }
       if (Object.keys(dbSchedules).length > 0) {
         setSchedules(dbSchedules);
         setLocalData("schedules", dbSchedules);
