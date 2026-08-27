@@ -511,6 +511,7 @@ const mapDbSlotsToSchedules = (slots: any[] = []) => {
           bookedBy,
           segment: slot.segment || 'All',
           employmentType: slot.employmentType || slot.employment_type || 'Full Time',
+          location: slot.location || 'Ulaanbaatar',
           bookingWaves: createDefaultBookingWaves(
             Number(slot.capacity || slot.totalSlots || 1),
             bookingOpen,
