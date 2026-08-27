@@ -3946,7 +3946,8 @@ export default function AdminDashboard() {
       const matchingShifts = previousDayShifts.filter(
         (s: any) =>
           s.employmentType === activeEmploymentView &&
-          s.segment === activeSegmentView,
+          s.segment === activeSegmentView &&
+          (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") === activeLocationView,
       );
 
       if (matchingShifts.length === 0) {
@@ -3976,7 +3977,8 @@ export default function AdminDashboard() {
           .filter(
             (s: any) =>
               s.employmentType === activeEmploymentView &&
-              s.segment === activeSegmentView,
+              s.segment === activeSegmentView &&
+              (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") === activeLocationView,
           )
           .map((s: any) => normalizeShiftTime(s.time)),
       );
@@ -4432,16 +4434,18 @@ export default function AdminDashboard() {
                 const holiday = holidays.find((h) => h.date === dateKey);
                 const isWeekend = idx % 7 >= 5;
                 // Filter to only the shifts matching the currently selected
-                // segment + employment type filter (activeSegmentView /
-                // activeEmploymentView) - previously this used ALL shifts
-                // for the day regardless of segment, so a day could show
-                // "Хаалттай" (closed) or slot totals based on a completely
-                // different segment's data than the one currently being
-                // viewed/filtered.
+                // segment + employment type + location filter
+                // (activeSegmentView / activeEmploymentView /
+                // activeLocationView) - previously this used ALL shifts for
+                // the day regardless of segment/location, so a day could
+                // show "Хаалттай" (closed) or slot totals based on a
+                // completely different segment/location's data than the one
+                // currently being viewed/filtered.
                 const dayShiftsForActiveFilter = (daySchedule?.shifts || []).filter(
                   (s: any) =>
                     s.employmentType === activeEmploymentView &&
-                    s.segment === activeSegmentView,
+                    s.segment === activeSegmentView &&
+                    (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") === activeLocationView,
                 );
                 const hasAnyShifts = dayShiftsForActiveFilter.length > 0;
                 const daySlotTotal = dayShiftsForActiveFilter.reduce(
@@ -4556,7 +4560,8 @@ export default function AdminDashboard() {
                 .filter(
                   (s: any) =>
                     s.employmentType === activeEmploymentView &&
-                    s.segment === activeSegmentView,
+                    s.segment === activeSegmentView &&
+                    (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") === activeLocationView,
                 )
                 .sort(
                   (a: any, b: any) =>
@@ -4829,7 +4834,8 @@ export default function AdminDashboard() {
                     (shift: any) =>
                       getShiftTimeKey(shift.time) === normalizedTime &&
                       shift.segment === activeSegmentView &&
-                      shift.employmentType === activeEmploymentView,
+                      shift.employmentType === activeEmploymentView &&
+                      (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === activeLocationView,
                   ),
                 );
 
@@ -5302,7 +5308,8 @@ export default function AdminDashboard() {
                                     (shift: any) =>
                                       getShiftTimeKey(shift.time) === normalizedTime &&
                                       shift.segment === activeSegmentView &&
-                                      shift.employmentType === activeEmploymentView,
+                                      shift.employmentType === activeEmploymentView &&
+                                      (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === activeLocationView,
                                   ),
                                 );
                               });
@@ -5420,7 +5427,8 @@ export default function AdminDashboard() {
                                           const sameContext =
                                             getShiftTimeKey(s.time) === targetTime &&
                                             s.segment === activeSegmentView &&
-                                            s.employmentType === activeEmploymentView;
+                                            s.employmentType === activeEmploymentView &&
+                                            (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") === activeLocationView;
                                           return !(sameId || sameContext);
                                         });
 

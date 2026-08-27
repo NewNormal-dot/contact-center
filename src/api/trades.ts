@@ -17,6 +17,10 @@ function normalizeSegment(value: unknown) {
   return String(value || '').trim();
 }
 
+function normalizeLocation(value: unknown) {
+  return String(value || 'Ulaanbaatar').trim() === 'Darkhan' ? 'Darkhan' : 'Ulaanbaatar';
+}
+
 function timeToMinutes(value: string) {
   const [h, m] = String(value || '00:00').split(':').map(Number);
   return (Number(h) || 0) * 60 + (Number(m) || 0);
@@ -233,6 +237,9 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     }
     if (normalizeEmploymentType(sender.employment_type) !== normalizeEmploymentType(receiver.employment_type)) {
       return res.status(400).json({ error: 'Full Time нь Full Time-тай, Part Time нь Part Time-тай trade хийнэ' });
+    }
+    if (normalizeLocation(sender.location) !== normalizeLocation(receiver.location)) {
+      return res.status(400).json({ error: 'Зөвхөн ижил байршлын (location) CSR хооронд trade хийх боломжтой' });
     }
 
     const senderBooking = await db('slot_bookings').where({ user_id: senderId, slot_id: senderSlotIdFinal, status: 'confirmed' }).first();

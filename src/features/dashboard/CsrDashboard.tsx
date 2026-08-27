@@ -13,6 +13,13 @@ import { SHOW_VACATION_FEATURE } from '../../config/features';
 import { validatePasswordStrength } from '../../utils/passwordValidation';
 
 const WEEKDAYS = ['Ням', 'Даваа', 'Мягмар', 'Лхагва', 'Пүрэв', 'Баасан', 'Бямба'];
+
+const EMPLOYEE_LOCATIONS = ['Ulaanbaatar', 'Darkhan'] as const;
+const normalizeEmployeeLocation = (value: unknown): typeof EMPLOYEE_LOCATIONS[number] | '' => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return EMPLOYEE_LOCATIONS.find((location) => location.toLowerCase() === normalized) || '';
+};
+
 const MONTHS = [
   '1-р сар', '2-р сар', '3-р сар', '4-р сар', '5-р сар', '6-р сар',
   '7-р сар', '8-р сар', '9-р сар', '10-р сар', '11-р сар', '12-р сар'
@@ -992,7 +999,10 @@ export default function CsrDashboard() {
       // that must not happen.
       const matchesSegment = (slot.segment === csrProfile.lineType) || (csrProfile.lineType === 'VIP' && slot.segment === 'Premium');
       const matchesEmployment = (slot.employmentType || slot.employment_type || 'Full Time') === csrProfile.employmentType;
-      if (!matchesSegment || !matchesEmployment) return;
+      const slotLocation = normalizeEmployeeLocation(slot.location) || 'Ulaanbaatar';
+      const csrLocationForMatch = normalizeEmployeeLocation(csrProfile.location) || 'Ulaanbaatar';
+      const matchesLocation = slotLocation === csrLocationForMatch;
+      if (!matchesSegment || !matchesEmployment || !matchesLocation) return;
       const time = slot.isRest || slot.is_rest ? 'Амралт' : `${String(slot.startTime || '').slice(0,5)}-${String(slot.endTime || '').slice(0,5)}`;
       const bookingOpen = Boolean(slot.bookingOpen ?? slot.booking_is_open);
       const bookingOpenAt = slot.bookingOpenAt || slot.booking_open_at || '';
