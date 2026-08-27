@@ -4257,8 +4257,8 @@ export default function AdminDashboard() {
     return (
       <div className="space-y-3 min-w-0">
         {/* Compact Controls */}
-        <div className="rounded-2xl border border-gray-800 bg-gray-900/40 px-3 py-2 shadow-2xl backdrop-blur-xl overflow-hidden">
-          <div className="flex w-full min-w-0 items-center gap-3 whitespace-nowrap">
+        <div className="rounded-2xl border border-gray-800 bg-gray-900/40 px-3 py-2 shadow-2xl backdrop-blur-xl">
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
             <div className="w-[220px] shrink-0">
               <div className="flex h-9 items-center bg-black/40 rounded-xl p-1 border border-white/5">
                 <button
@@ -4372,23 +4372,23 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
               <button
                 onClick={openFontHoursManager}
-                className="h-9 px-4 rounded-xl border border-white/10 bg-black/50 hover:border-blue-500/60 hover:bg-blue-500/10 transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:text-blue-300"
+                className="h-9 px-4 rounded-xl border border-white/10 bg-black/50 hover:border-blue-500/60 hover:bg-blue-500/10 transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:text-blue-300 whitespace-nowrap"
               >
                 <Clock size={13} />
                 Сарын фонт цаг: {activeMonthlyFontHours || 0}ц
               </button>
               <button
                 onClick={handleExportScheduleReport}
-                className="ml-auto h-9 px-4 bg-green-600/10 hover:bg-green-600 text-green-500 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-green-500/20 flex items-center justify-center gap-1.5"
+                className="sm:ml-auto h-9 px-4 bg-green-600/10 hover:bg-green-600 text-green-500 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-green-500/20 flex items-center justify-center gap-1.5 whitespace-nowrap"
               >
                 <Download size={13} /> Татах
               </button>
               <button
                 onClick={() => setIsManagingShiftTemplates(true)}
-                className="h-9 px-4 bg-gray-800/60 hover:bg-gray-800 text-gray-300 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/5"
+                className="h-9 px-4 bg-gray-800/60 hover:bg-gray-800 text-gray-300 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/5 whitespace-nowrap"
               >
                 Shift загвар
               </button>
@@ -4397,7 +4397,7 @@ export default function AdminDashboard() {
                   setHolidayData({ id: "", date: "", name: "" });
                   setIsAddingHoliday(true);
                 }}
-                className="h-9 px-4 bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-red-500/20 flex items-center justify-center gap-1.5"
+                className="h-9 px-4 bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-red-500/20 flex items-center justify-center gap-1.5 whitespace-nowrap"
               >
                 <Palmtree size={12} /> Баяр
               </button>
@@ -4689,11 +4689,26 @@ export default function AdminDashboard() {
               const sumRuleCounts = (hourCounts: Record<string, number>) =>
                 Object.values(hourCounts || {}).reduce((sum, count) => sum + (Number(count) || 0), 0);
 
+              // IMPORTANT: hourCounts is one shared object per
+              // (location, segment, employmentType) - NOT scoped to the
+              // specific days currently selected (see the "Сонгосон
+              // өдрийн дүрэм" info banner above). A duration that doesn't
+              // appear in the CURRENT day selection (so isn't in
+              // selectedRuleShiftHours) may still be a real, intentionally
+              // configured value for a DIFFERENT day-range sharing this
+              // same rule. clampRuleHourCounts must preserve those
+              // untouched - only the currently-visible duration keys get
+              // re-clamped against the current selection's day budget.
               const clampRuleHourCounts = (
                 hourCounts: Record<string, number>,
                 selectedDayLimit: number,
               ) => {
                 const nextCounts: Record<string, number> = {};
+                Object.entries(hourCounts || {}).forEach(([key, value]) => {
+                  if (!selectedRuleShiftHours.includes(key) && Number(value) > 0) {
+                    nextCounts[key] = Number(value);
+                  }
+                });
                 let remaining = Math.max(0, Number(selectedDayLimit) || 0);
                 selectedRuleShiftHours.forEach((hourKey) => {
                   const maxAvailable = Math.max(0, Number(selectedRuleShiftAvailability[hourKey]) || 0);
@@ -4707,10 +4722,11 @@ export default function AdminDashboard() {
               };
 
               // "Нийт сонгох боломжтой" is purely informational now - the SUM
-              // of whatever's been set per duration below, not a separate
-              // pre-constraint admins have to set first (see
+              // of whatever's been set per duration below (only the
+              // durations relevant to the CURRENT day selection - not any
+              // preserved-but-irrelevant entries for other day-ranges), not
+              // a separate pre-constraint admins have to set first (see
               // updateDynamicWeeklyRule for why that coupling was removed).
-              const activeRuleTotalSelected = Math.min(selectedKeys.length, sumRuleCounts(activeWeeklyRule.hourCounts || {}));
               const visibleRuleHourCounts = selectedRuleShiftHours.reduce<Record<string, number>>((acc, hourKey) => {
                 acc[hourKey] = Math.max(
                   0,
@@ -4721,6 +4737,7 @@ export default function AdminDashboard() {
                 );
                 return acc;
               }, {});
+              const activeRuleTotalSelected = Math.min(selectedKeys.length, sumRuleCounts(visibleRuleHourCounts));
               const activeRuleHourTotal = calculateRuleHourTotal(visibleRuleHourCounts);
 
               // Each duration's count is independent: bounded only by (a)
@@ -4732,7 +4749,15 @@ export default function AdminDashboard() {
               const updateDynamicWeeklyRule = (hourKey: string, count: number) => {
                 const maxAvailable = Math.max(0, Number(selectedRuleShiftAvailability[hourKey]) || 0);
                 const currentCounts = activeWeeklyRule.hourCounts || {};
-                const otherTotal = sumRuleCounts({ ...currentCounts, [hourKey]: 0 });
+                // Only count OTHER durations that are actually part of the
+                // currently selected days (selectedRuleShiftHours) - the
+                // shared rule object can carry leftover entries from a
+                // different day-selection (e.g. a stale "9 цаг" count from
+                // an earlier session), and those must not eat into the
+                // room available for durations that ARE relevant right now.
+                const otherTotal = selectedRuleShiftHours
+                  .filter((key) => key !== hourKey)
+                  .reduce((sum, key) => sum + (Number(currentCounts[key]) || 0), 0);
                 const maxByRemainingDays = Math.max(0, selectedKeys.length - otherTotal);
                 const nextCount = Math.max(0, Math.min(maxAvailable, maxByRemainingDays, Number(count) || 0));
                 const nextHourCounts = clampRuleHourCounts({ ...currentCounts, [hourKey]: nextCount }, selectedKeys.length);

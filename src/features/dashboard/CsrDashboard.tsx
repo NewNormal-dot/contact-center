@@ -569,7 +569,7 @@ const DayRow = React.memo(({
                 </span>
               )}
             </div>
-            <p className="text-gray-500 text-sm font-medium mt-1">
+            <p className="text-gray-500 text-sm font-medium mt-1 break-words max-w-full">
               {isPast 
                 ? 'Ажиллаж дууссан' 
                 : !hasData 
@@ -672,10 +672,10 @@ const DayRow = React.memo(({
                       ) : (
                         <button
                           disabled
-                          className="px-6 py-2.5 rounded-xl bg-gray-800/50 text-gray-500 font-bold border border-gray-800 flex items-center gap-2 cursor-not-allowed opacity-70"
+                          className="px-6 py-2.5 rounded-xl bg-gray-800/50 text-gray-500 font-bold border border-gray-800 flex items-center gap-2 cursor-not-allowed opacity-70 max-w-full"
                         >
-                          <Lock size={18} />
-                          {disabledBookingLabel}
+                          <Lock size={18} className="shrink-0" />
+                          <span className="text-left break-words">{disabledBookingLabel}</span>
                         </button>
                       )
                     )
@@ -2788,11 +2788,11 @@ export default function CsrDashboard() {
                               : waveAccess.label;
                             return (
                               <div key={wave.id} className={`flex items-center justify-between gap-2 rounded-xl border px-2.5 py-2 ${canBook ? 'border-blue-500/30 bg-blue-500/5' : 'border-white/5 bg-black/20 opacity-70'}`}>
-                                <div className="min-w-0">
+                                <div className="min-w-0 flex-1">
                                   {waves.length > 1 && (
                                     <p className="text-[11px] font-black text-white truncate">{wave.name}</p>
                                   )}
-                                  <p className="text-[9px] font-black uppercase tracking-widest text-gray-500">
+                                  <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 break-words">
                                     {booked}/{wave.slotLimit} · {statusLabel}
                                   </p>
                                 </div>
