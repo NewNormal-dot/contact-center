@@ -4899,15 +4899,18 @@ export default function AdminDashboard() {
                     // Match the exact shift by its DB id whenever it's
                     // available - this is the only reliable way to be sure
                     // we're touching THIS shift and not a different one that
-                    // happens to share the same time/segment/employment type.
-                    // Freshly-added, not-yet-saved shifts have no id yet, so
-                    // those fall back to a time-key match, but only within
-                    // this single day - never across other selected dates.
+                    // happens to share the same time/segment/employment
+                    // type/location. Freshly-added, not-yet-saved shifts
+                    // have no id yet, so those fall back to a
+                    // time+segment+employmentType+location match, but only
+                    // within this single day - never across other selected
+                    // dates.
                     const isSameShift = targetShift.id
                       ? shift.id === targetShift.id
                       : getShiftTimeKey(shift.time) === getShiftTimeKey(targetShift.time) &&
                         shift.segment === targetShift.segment &&
-                        shift.employmentType === targetShift.employmentType;
+                        shift.employmentType === targetShift.employmentType &&
+                        (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === (normalizeEmployeeLocation(targetShift.location) || "Ulaanbaatar");
 
                     if (!isSameShift) return shift;
 
@@ -8077,6 +8080,8 @@ export default function AdminDashboard() {
                               s.segment === editingShiftData.segment &&
                               s.employmentType ===
                                 editingShiftData.employmentType &&
+                              (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") ===
+                                (normalizeEmployeeLocation(editingShiftData.location) || activeLocationView) &&
                               s.id !== editingShiftData.id,
                           );
                           return (
@@ -8402,12 +8407,13 @@ export default function AdminDashboard() {
                                 normalizeShiftTime(s.time) === time &&
                                 s.segment === segment &&
                                 s.employmentType === employmentType &&
+                                (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") === location &&
                                 s.id !== id,
                             ),
                         );
                         if (duplicateDate) {
                           alert(
-                            `${duplicateDate} өдөр ${segment} ${employmentType} зориулалттай ${time} цагийн ээлж аль хэдийн нэмэгдсэн байна.`,
+                            `${duplicateDate} өдөр ${location} / ${segment} / ${employmentType} зориулалттай ${time} цагийн ээлж аль хэдийн нэмэгдсэн байна.`,
                           );
                           return;
                         }
