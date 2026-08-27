@@ -4885,55 +4885,56 @@ export default function AdminDashboard() {
                 waveKind: "morning" | "evening",
                 value: number,
               ) => {
-                const dateKey = selectedDateSchedule;
-                if (!dateKey || isPastScheduleDate(dateKey)) return;
+                // Applies to every currently selected day (selectedDateKeys
+                // - falls back to just the single focused day when nothing
+                // is multi-selected), matching each day's shift by
+                // time+segment+employmentType+location. Per user request:
+                // adjusting a shift's slot quota while multiple days are
+                // checked should update all of them identically, the same
+                // way "Бүгдийг устгах" and other bulk actions already do.
+                const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
+                if (targetDateKeys.length === 0) return;
                 const cleanSlots = Math.max(0, Number(value) || 0);
+                const targetTimeKey = getShiftTimeKey(targetShift.time);
+                const targetLocation = normalizeEmployeeLocation(targetShift.location) || "Ulaanbaatar";
                 const newSchedules = { ...schedules };
 
-                const currentSchedule = newSchedules[dateKey];
-                if (!currentSchedule?.shifts?.length) return;
+                targetDateKeys.forEach((dateKey) => {
+                  const currentSchedule = newSchedules[dateKey];
+                  if (!currentSchedule?.shifts?.length) return;
 
-                newSchedules[dateKey] = {
-                  ...currentSchedule,
-                  shifts: currentSchedule.shifts.map((shift: any) => {
-                    // Match the exact shift by its DB id whenever it's
-                    // available - this is the only reliable way to be sure
-                    // we're touching THIS shift and not a different one that
-                    // happens to share the same time/segment/employment
-                    // type/location. Freshly-added, not-yet-saved shifts
-                    // have no id yet, so those fall back to a
-                    // time+segment+employmentType+location match, but only
-                    // within this single day - never across other selected
-                    // dates.
-                    const isSameShift = targetShift.id
-                      ? shift.id === targetShift.id
-                      : getShiftTimeKey(shift.time) === getShiftTimeKey(targetShift.time) &&
+                  newSchedules[dateKey] = {
+                    ...currentSchedule,
+                    shifts: currentSchedule.shifts.map((shift: any) => {
+                      const isSameShift =
+                        getShiftTimeKey(shift.time) === targetTimeKey &&
                         shift.segment === targetShift.segment &&
                         shift.employmentType === targetShift.employmentType &&
-                        (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === (normalizeEmployeeLocation(targetShift.location) || "Ulaanbaatar");
+                        (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === targetLocation;
 
-                    if (!isSameShift) return shift;
+                      if (!isSameShift) return shift;
 
-                    const existingWaves = getBookingWavesForShift(
-                      shift,
-                      !!currentSchedule.bookingOpen,
-                      currentSchedule.bookingOpenAt || "",
-                      currentSchedule.bookingCloseAt || "",
-                    );
-                    const updatedWaves = existingWaves.map((wave) =>
-                      getWaveKind(wave) === waveKind
-                        ? { ...wave, slotLimit: cleanSlots }
-                        : wave,
-                    );
-                    const nextTotalSlots = sumWaveSlots(updatedWaves);
+                      const existingWaves = getBookingWavesForShift(
+                        shift,
+                        !!currentSchedule.bookingOpen,
+                        currentSchedule.bookingOpenAt || "",
+                        currentSchedule.bookingCloseAt || "",
+                      );
+                      const updatedWaves = existingWaves.map((wave) =>
+                        getWaveKind(wave) === waveKind
+                          ? { ...wave, slotLimit: cleanSlots }
+                          : wave,
+                      );
+                      const nextTotalSlots = sumWaveSlots(updatedWaves);
 
-                    return {
-                      ...shift,
-                      totalSlots: nextTotalSlots,
-                      bookingWaves: updatedWaves,
-                    };
-                  }),
-                };
+                      return {
+                        ...shift,
+                        totalSlots: nextTotalSlots,
+                        bookingWaves: updatedWaves,
+                      };
+                    }),
+                  };
+                });
 
                 // Instant local update so typing/spinner clicks feel
                 // responsive, but the actual DB save is debounced (see
@@ -4945,7 +4946,7 @@ export default function AdminDashboard() {
                   window.clearTimeout(waveSlotSaveTimerRef.current);
                 }
                 waveSlotSaveTimerRef.current = window.setTimeout(() => {
-                  void persistSchedules(newSchedules, [dateKey]);
+                  void persistSchedules(newSchedules, targetDateKeys);
                 }, 600);
               };
 
@@ -5407,6 +5408,11 @@ export default function AdminDashboard() {
                                     {isDuplicateShift && (
                                       <span className="rounded-full bg-red-500 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-white">
                                         Давхардсан
+                                      </span>
+                                    )}
+                                    {selectedDateKeys.length > 1 && (
+                                      <span className="rounded-full bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-blue-300">
+                                        {selectedDateKeys.length} өдөрт хамт
                                       </span>
                                     )}
                                   </div>
