@@ -4584,8 +4584,11 @@ export default function AdminDashboard() {
             className="w-full min-w-0 self-start rounded-[1.5rem] border border-gray-800 bg-gray-900/95 p-4 shadow-2xl"
           >
             {(() => {
+              const checkedDateKeys = [...selectedBookingDates].filter(Boolean).sort();
+              const selectedKeys = checkedDateKeys;
+              const selectedDateKeys = selectedKeys.length > 0 ? selectedKeys : [selectedDateSchedule].filter(Boolean);
               const dayShifts = schedules[selectedDateSchedule]?.shifts || [];
-              const filteredShifts = dayShifts
+              const singleDayFilteredShifts = dayShifts
                 .filter(
                   (s: any) =>
                     s.employmentType === activeEmploymentView &&
@@ -4596,6 +4599,34 @@ export default function AdminDashboard() {
                   (a: any, b: any) =>
                     getStartTimeValue(a.time) - getStartTimeValue(b.time),
                 );
+              // When multiple days are selected, show one row per DISTINCT
+              // shift pattern found across ALL of them (e.g. "Амралт", each
+              // time slot) - not just whatever the single currently-focused
+              // day happens to have. Otherwise a pattern that exists on some
+              // selected days but not the focused one never got a row at
+              // all, so its checkbox could never be checked and it silently
+              // never took part in any bulk action (Нээх/Хаах, wave-count
+              // edits) even though "N days selected" implied it should.
+              const filteredShifts = (() => {
+                if (selectedDateKeys.length <= 1) return singleDayFilteredShifts;
+                const seen = new Map<string, any>();
+                selectedDateKeys.forEach((dateKey) => {
+                  (schedules[dateKey]?.shifts || [])
+                    .filter(
+                      (s: any) =>
+                        s.employmentType === activeEmploymentView &&
+                        s.segment === activeSegmentView &&
+                        (normalizeEmployeeLocation(s.location) || "Ulaanbaatar") === activeLocationView,
+                    )
+                    .forEach((s: any) => {
+                      const key = `${getShiftTimeKey(s.time)}|${Boolean(s.isRest)}`;
+                      if (!seen.has(key)) seen.set(key, s);
+                    });
+                });
+                return Array.from(seen.values()).sort(
+                  (a: any, b: any) => getStartTimeValue(a.time) - getStartTimeValue(b.time),
+                );
+              })();
               const totalSlots = filteredShifts.reduce(
                 (sum: number, shift: any) =>
                   sum + (Number(shift.totalSlots) || 0),
@@ -4650,9 +4681,6 @@ export default function AdminDashboard() {
                 setIsEditingShiftModal(true);
               };
 
-              const checkedDateKeys = [...selectedBookingDates].filter(Boolean).sort();
-              const selectedKeys = checkedDateKeys;
-              const selectedDateKeys = selectedKeys.length > 0 ? selectedKeys : [selectedDateSchedule].filter(Boolean);
               const isMultiSelect = selectedKeys.length > 0;
               const hasSelectedDays = selectedDateKeys.length > 0;
               const holidayTargetDates = selectedDateKeys;
