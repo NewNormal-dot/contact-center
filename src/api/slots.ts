@@ -129,26 +129,32 @@ function boolValue(value: unknown) {
 
 function resolveBookingWindow(day: any, shift: any) {
   const waves = Array.isArray(shift?.bookingWaves) ? shift.bookingWaves : [];
-  const openWaves = waves.filter((wave: any) => boolValue(wave.bookingOpen));
-  const openAt = openWaves.find((wave: any) => wave.bookingOpenAt)?.bookingOpenAt
+
+  // A wave counts as "configured" (and therefore keeps the booking window
+  // open) when the admin either explicitly opened it (bookingOpen) OR
+  // scheduled a future open time (bookingOpenAt).
+  //
+  // FIX (Амралт бол slot 0 байсан ч нээгддэг болгох): previously this
+  // filtered ONLY on boolValue(wave.bookingOpen). A "Амралт" (rest) wave
+  // can legitimately arrive carrying just a scheduled bookingOpenAt
+  // timestamp without the immediate boolean flag - so it was silently
+  // dropped, openWaves ended up empty, and booking_is_open was written as
+  // 0 even though booking_open_at (e.g. 2026-08-28T12:10) WAS persisted.
+  // That left the contradictory "bookingOpen=false but bookingOpenAt set"
+  // state seen in the console. Treating a present bookingOpenAt as
+  // "configured" here fixes rest (and any 0/scheduled) waves.
+  const configuredWaves = waves.filter(
+    (wave: any) => boolValue(wave.bookingOpen) || Boolean(wave.bookingOpenAt),
+  );
+
+  const openAt = configuredWaves.find((wave: any) => wave.bookingOpenAt)?.bookingOpenAt
     || shift.bookingOpenAt
     || null;
-  const closeAt = openWaves.find((wave: any) => wave.bookingCloseAt)?.bookingCloseAt
+  const closeAt = configuredWaves.find((wave: any) => wave.bookingCloseAt)?.bookingCloseAt
     || shift.bookingCloseAt
     || shift.bookingDeadline
     || null;
 
-  // A booking window counts as "configured" (and gets persisted with
-  // booking_is_open = 1) whenever the admin explicitly opened it immediately
-  // OR scheduled a future open time. Previously, setting only a future
-  // bookingOpenAt (without also flipping the immediate "open" toggle) caused
-  // the scheduled time to be silently discarded (stored as null) - so slots
-  // scheduled to open later never actually opened for CSRs, since
-  // booking_is_open stayed false forever. The real-time gate (has the
-  // scheduled time actually arrived yet?) is handled live, per booking
-  // request, by comparing booking_open_at against now() in the booking
-  // handler - this flag only needs to say "a window was configured at all".
-  //
   // IMPORTANT: this must be resolved PER SHIFT (segment + employment type),
   // never from the day-level `day.bookingOpen` flag. A single sync-schedules
   // request carries every shift for a date across ALL segments and
@@ -159,7 +165,7 @@ function resolveBookingWindow(day: any, shift: any) {
   // UI actually scopes to the segment + employment type being edited, so
   // that - and only that - is what should decide this shift's window.
   const explicitlyOpen = shift?.bookingOpen === undefined ? false : boolValue(shift.bookingOpen);
-  const bookingOpen = explicitlyOpen || openWaves.length > 0 || Boolean(openAt);
+  const bookingOpen = explicitlyOpen || configuredWaves.length > 0 || Boolean(openAt);
 
   return {
     bookingOpen,
@@ -573,13 +579,17 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
             continue;
           }
           const bookingWindow = resolveBookingWindow(day, shift);
+          // Capacity: Амралт-ын хувьд admin хэдэн хүн авахыг тоогоор
+          // тохируулдаг тул тэр тоог (totalSlots/capacity) шууд хэрэглэнэ.
+          // Хэрэв тохируулаагүй бол хамгийн багадаа 1 (ажлын shift-тэй адил).
+          const capacity = Math.max(1, Number(shift.totalSlots || shift.capacity || 1) || 1);
           incomingSlots.push({
             id: toValidUuidOrNew(shift.id),
             date: dateKey,
             start_time: sqlStart,
             end_time: sqlEnd,
             duration: rest ? 0 : calculateDuration(sqlStart, sqlEnd),
-            capacity: Math.max(1, Number(shift.totalSlots || shift.capacity || 1) || 1),
+            capacity,
             booking_open_at: bookingWindow.bookingOpenAt,
             booking_is_open: bookingWindow.bookingOpen ? 1 : 0,
             booking_deadline: bookingWindow.bookingDeadline,
