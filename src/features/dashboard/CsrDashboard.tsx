@@ -478,6 +478,7 @@ const DayRow = React.memo(({
   date, isToday, isTomorrow, isYesterday, isPast, 
   dayData, csrProfile, isSubmitted, 
   onBookShift, onTradeShift, nowTick,
+  onCancelShift,
 }: any) => {
   const dateKey = formatDateKey(date);
   const myBookedShift = dayData.shifts.find((s: any) => s.bookedBy?.some((b: any) => b.userId === csrProfile.id));
@@ -655,6 +656,15 @@ const DayRow = React.memo(({
                         >
                           <Edit size={18} />
                           Edit
+                        </button>
+                      )}
+                      {!isSubmitted && !isPast && (
+                        <button
+                          onClick={() => onCancelShift(dateKey, myBookedShift.id)}
+                          className="px-4 py-2.5 rounded-xl bg-red-600/15 border border-red-500/30 text-red-300 font-bold hover:bg-red-600 hover:text-white transition-all flex items-center gap-2"
+                        >
+                          <X size={18} />
+                          Цуцлах
                         </button>
                       )}
                       {!isSubmitted && !isBookingOpen && bookingAccess.state === 'expired' && (
@@ -1292,12 +1302,10 @@ export default function CsrDashboard() {
   };
 
   const handleSendTradeRequest = async (receiverId: string, receiverName: string, receiverShiftId: string, receiverShiftTime: string, dateKey: string) => {
-    let myShift: { date: string, shift: Shift } | null = null;
-    Object.entries(schedule).forEach(([date, data]) => {
-      const dayData = data as DayData;
-      const s = dayData.shifts.find(sh => sh.bookedBy?.some(b => b.userId === csrProfile.id));
-      if (s) myShift = { date, shift: s };
-    });
+    const dayData = schedule[dateKey] as DayData | undefined;
+    const myShift = dayData
+      ? dayData.shifts.find(sh => sh.bookedBy?.some(b => b.userId === csrProfile.id))
+      : undefined;
 
     if (!myShift) {
       alert('Танд солих ээлж байхгүй байна. Эхлээд ээлж захиална уу.');
@@ -1307,7 +1315,7 @@ export default function CsrDashboard() {
     try {
       await apiClient.post('/trades', {
         receiver_id: receiverId,
-        sender_slot_id: myShift.shift.id,
+        sender_slot_id: myShift.id,
         receiver_slot_id: receiverShiftId,
       });
       await fetchTradeRequests();
@@ -1797,6 +1805,7 @@ export default function CsrDashboard() {
                 isSubmitted={isSubmitted}
                 onBookShift={handleBookShift}
                 onTradeShift={handleTradeShift}
+                onCancelShift={handleCancelShift}
                 nowTick={nowTick}
               />
             );
