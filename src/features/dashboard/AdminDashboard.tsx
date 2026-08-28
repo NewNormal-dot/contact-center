@@ -673,6 +673,7 @@ export default function AdminDashboard() {
   const [bookingOpenAtInput, setBookingOpenAtInput] = useState(
     formatDateTimeLocal(),
   );
+  const [bookingOpenImmediately, setBookingOpenImmediately] = useState(false);
   const [bookingCloseAtInput, setBookingCloseAtInput] = useState(() =>
     addHoursToDateTimeLocal(formatDateTimeLocal(), 6),
   );
@@ -5075,7 +5076,7 @@ export default function AdminDashboard() {
                 );
               };
 
-              const setBookingAccessForSelectedWaves = (isOpen: boolean) => {
+              const setBookingAccessForSelectedWaves = (isOpen: boolean, openImmediately = false) => {
                 const targetDateKeys = selectedDateKeys.filter((dateKey) => !isPastScheduleDate(dateKey));
                 if (targetDateKeys.length === 0) {
                   alert("Захиалга нээх ирээдүйн өдөр сонгоно уу.");
@@ -5088,7 +5089,7 @@ export default function AdminDashboard() {
 
                 let touchedWaves = 0;
                 let zeroSlotSelected = false;
-                const nextBookingOpenAt = isOpen ? bookingOpenAtInput : "";
+                const nextBookingOpenAt = isOpen && !openImmediately ? bookingOpenAtInput : "";
                 const newSchedules = { ...schedules };
 
                 targetDateKeys.forEach((dateKey) => {
@@ -5280,11 +5281,13 @@ export default function AdminDashboard() {
                                 label: "Нээгдэх өдөр/цаг",
                                 value: bookingOpenAtInput,
                                 onDateChange: (nextDate: string) => {
+                                  setBookingOpenImmediately(false);
                                   const nextValue = setDatePart(bookingOpenAtInput, nextDate);
                                   setBookingOpenAtInput(nextValue);
                                   setBookingCloseAtInput(addHoursToDateTimeLocal(nextValue, 6));
                                 },
                                 onTimeChange: (nextHour: string, nextMinute: string) => {
+                                  setBookingOpenImmediately(false);
                                   const nextValue = setTimePart(bookingOpenAtInput, nextHour, nextMinute);
                                   setBookingOpenAtInput(nextValue);
                                   setBookingCloseAtInput(addHoursToDateTimeLocal(nextValue, 6));
@@ -5354,6 +5357,7 @@ export default function AdminDashboard() {
                                 onClick={() => {
                                   const now = formatDateTimeLocal();
                                   setBookingOpenAtInput(now);
+                                  setBookingOpenImmediately(true);
                                   setBookingCloseAtInput(addHoursToDateTimeLocal(now, 6));
                                 }}
                                 className="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-blue-200 transition-all hover:bg-blue-500/20"
@@ -5363,15 +5367,15 @@ export default function AdminDashboard() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (!bookingOpenAtInput || !bookingCloseAtInput) {
+                                  if ((!bookingOpenImmediately && !bookingOpenAtInput) || !bookingCloseAtInput) {
                                     alert("Нээгдэх болон хаагдах цагийг сонгоно уу.");
                                     return;
                                   }
-                                  if (new Date(bookingCloseAtInput).getTime() <= new Date(bookingOpenAtInput).getTime()) {
+                                  if (!bookingOpenImmediately && new Date(bookingCloseAtInput).getTime() <= new Date(bookingOpenAtInput).getTime()) {
                                     alert("Хаагдах цаг нь нээгдэх цагаас хойш байх ёстой.");
                                     return;
                                   }
-                                  setBookingAccessForSelectedWaves(true);
+                                  setBookingAccessForSelectedWaves(true, bookingOpenImmediately);
                                   setIsBookingTimeModalOpen(false);
                                 }}
                                 className="rounded-2xl bg-green-600 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white transition-all hover:bg-green-500"
@@ -5662,6 +5666,7 @@ export default function AdminDashboard() {
                       <button
                         onClick={() => {
                           setBookingOpenAtInput(formatDateTimeLocal());
+                          setBookingOpenImmediately(true);
                           setBookingCloseAtInput(addHoursToDateTimeLocal(formatDateTimeLocal(), 6));
                           setIsBookingTimeModalOpen(true);
                         }}
