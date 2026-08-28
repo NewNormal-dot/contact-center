@@ -5103,10 +5103,19 @@ export default function AdminDashboard() {
                       currentSchedule.bookingCloseAt || "",
                     );
                     let shiftTouched = false;
+                    const isRestShift =
+                      Boolean(shift.isRest) ||
+                      getShiftTimeKey(shift.time) === REST_SHIFT_LABEL;
                     const updatedWaves = waves.map((wave) => {
                       const selectionKey = getShiftWaveSelectionKey(shift, wave);
                       if (!selectedWaveKeys.includes(selectionKey)) return wave;
-                      if (Number(wave.slotLimit) <= 0) {
+                      // Амралт нь slot/capacity шаарддаггүй тул slotLimit 0
+                      // байсан ч энд ЗААВАЛ нээгдэж, bookingOpenAt-аа шинэчлэх
+                      // ёстой. Өмнө нь энэ шалгалт Амралтыг эрт `return wave`-ээр
+                      // алгасдаг байсан тул шинэ (Now) цаг хэзээ ч бичигдэлгүй,
+                      // хуучин bookingOpenAt (жишээ нь 12:10) гацаж, өдөр бүр
+                      // ижил хуучин цагтай "Товлогдсон" төлөвт эргэж ордог байв.
+                      if (!isRestShift && Number(wave.slotLimit) <= 0) {
                         zeroSlotSelected = true;
                         return wave;
                       }
