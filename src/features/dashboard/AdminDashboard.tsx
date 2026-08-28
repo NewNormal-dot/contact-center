@@ -301,6 +301,7 @@ const getShiftWaveSelectionKey = (
     normalizeShiftTime(shift?.time || ""),
     shift?.segment || "All",
     shift?.employmentType || "Full Time",
+    normalizeEmployeeLocation(shift?.location) || "Ulaanbaatar",
     getWaveKind(wave),
   ]
     .join("|")

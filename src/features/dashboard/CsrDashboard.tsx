@@ -161,6 +161,7 @@ interface Shift {
   bookedBy?: { id?: string, userId: string, userName: string, userCode?: string, bookedAt?: string, bookedByAdmin?: string, bookingWaveId?: string, bookingWaveName?: string }[];
   segment: string;
   employmentType?: string;
+  location?: string;
   bookingWaves?: BookingWave[];
 }
 
@@ -1029,6 +1030,7 @@ export default function CsrDashboard() {
         bookedBy,
         segment: slot.segment || csrProfile.lineType,
         employmentType: slot.employmentType || slot.employment_type || csrProfile.employmentType,
+        location: slotLocation,
         bookingWaves: [{
           id: 'default',
           name: 'Нийт захиалах эрх',

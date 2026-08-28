@@ -387,11 +387,12 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
 });
 
 async function findOrCreateAdjustedSlot(trx: any, baseSlot: any, targetDate: string, keepDuration: number, anchor: 'start' | 'end') {
+  const location = normalizeLocation(baseSlot.location);
   if (baseSlot.is_rest || keepDuration === 0) {
-    const existingRest = await trx('work_slots').where({ date: targetDate, is_rest: 1, segment: baseSlot.segment, employment_type: baseSlot.employment_type }).first();
+    const existingRest = await trx('work_slots').where({ date: targetDate, is_rest: 1, segment: baseSlot.segment, employment_type: baseSlot.employment_type, location }).first();
     if (existingRest) return existingRest;
     const id = uuidv4();
-    const payload = { id, date: targetDate, start_time: '00:00:00', end_time: '00:00:00', duration: 0, capacity: Math.max(1, Number(baseSlot.capacity || 1)), booking_deadline: baseSlot.booking_deadline, segment: baseSlot.segment, employment_type: baseSlot.employment_type, is_rest: 1 };
+    const payload = { id, date: targetDate, start_time: '00:00:00', end_time: '00:00:00', duration: 0, capacity: Math.max(1, Number(baseSlot.capacity || 1)), booking_deadline: baseSlot.booking_deadline, segment: baseSlot.segment, employment_type: baseSlot.employment_type, location, is_rest: 1 };
     await trx('work_slots').insert(payload);
     return payload;
   }
@@ -408,10 +409,10 @@ async function findOrCreateAdjustedSlot(trx: any, baseSlot: any, targetDate: str
   }
   const start = minutesToSqlTime(startMinutes);
   const end = minutesToSqlTime(endMinutes);
-  const existing = await trx('work_slots').where({ date: targetDate, start_time: start, end_time: end, segment: baseSlot.segment, employment_type: baseSlot.employment_type, is_rest: 0 }).first();
+  const existing = await trx('work_slots').where({ date: targetDate, start_time: start, end_time: end, segment: baseSlot.segment, employment_type: baseSlot.employment_type, location, is_rest: 0 }).first();
   if (existing) return existing;
   const id = uuidv4();
-  const payload = { id, date: targetDate, start_time: start, end_time: end, duration: keepDuration, capacity: Math.max(1, Number(baseSlot.capacity || 1)), booking_deadline: baseSlot.booking_deadline, segment: baseSlot.segment, employment_type: baseSlot.employment_type, is_rest: 0 };
+  const payload = { id, date: targetDate, start_time: start, end_time: end, duration: keepDuration, capacity: Math.max(1, Number(baseSlot.capacity || 1)), booking_deadline: baseSlot.booking_deadline, segment: baseSlot.segment, employment_type: baseSlot.employment_type, location, is_rest: 0 };
   await trx('work_slots').insert(payload);
   return payload;
 }
