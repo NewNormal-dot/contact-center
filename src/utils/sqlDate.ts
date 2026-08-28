@@ -79,28 +79,48 @@ export function toSqlDateTime(value: unknown, fallback?: Date | null): Date | nu
     if (!Number.isNaN(parsedWithTz.getTime())) return parsedWithTz;
   }
 
-  const isoLocal = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (isoLocal && !hasExplicitTimezone) {
-    // Naive "YYYY-MM-DDTHH:mm" strings (e.g. from <input type="datetime-local">
-    // in the admin's schedule/booking-window pickers) carry NO timezone
-    // info at all - they represent the admin's own local wall-clock time,
-    // which for this system is always Mongolia time (UTC+8). Previously
-    // this was passed to `new Date(y, m, d, h, min, s)`, which the JS
-    // runtime interprets using THIS PROCESS's own local timezone - fine on
-    // a machine set to Mongolia time, but Azure App Service runs in UTC,
-    // so "16:20" was silently treated as 16:20 UTC (= 00:20 the next day
-    // in Mongolia) instead of 16:20 Mongolia time (= 08:20 UTC). That 8
+  // HTML <input type="datetime-local"> (used by the admin's schedule/
+  // booking-window pickers) always produces "YYYY-MM-DDTHH:mm" - exactly
+  // this format, NEVER with seconds. That's the only case where the raw
+  // string genuinely represents a fresh, un-adjusted Mongolia wall-clock
+  // time that needs the UTC offset applied.
+  const isoLocalNoSeconds = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (isoLocalNoSeconds && !hasExplicitTimezone) {
+    // Previously this was passed to `new Date(y, m, d, h, min, s)`, which
+    // the JS runtime interprets using THIS PROCESS's own local timezone -
+    // fine on a machine set to Mongolia time, but Azure App Service runs in
+    // UTC, so "16:20" was silently treated as 16:20 UTC (= 00:20 the next
+    // day in Mongolia) instead of 16:20 Mongolia time (= 08:20 UTC). That 8
     // hour miscalculation meant scheduled booking-open times never
     // actually arrived when admins expected them to.
     const asIfUtcMillis = Date.UTC(
-      Number(isoLocal[1]),
-      Number(isoLocal[2]) - 1,
-      Number(isoLocal[3]),
-      Number(isoLocal[4]),
-      Number(isoLocal[5]),
-      Number(isoLocal[6] || 0),
+      Number(isoLocalNoSeconds[1]),
+      Number(isoLocalNoSeconds[2]) - 1,
+      Number(isoLocalNoSeconds[3]),
+      Number(isoLocalNoSeconds[4]),
+      Number(isoLocalNoSeconds[5]),
+      0,
     );
     return new Date(asIfUtcMillis - ULAANBAATAR_UTC_OFFSET_MS);
+  }
+
+  // Any other "YYYY-MM-DD[T ]HH:mm[:ss]" string with no timezone marker
+  // (typically seconds ARE present here - a DB driver returning a naive
+  // string instead of a Date object, or a value already produced by this
+  // very function elsewhere in the codebase) is NOT fresh user input, and
+  // must NOT get the Mongolia-offset treatment again - it already
+  // represents the correct instant. Force it to be read as UTC explicitly
+  // (appending 'Z') rather than handing the non-standard space-separated
+  // format to `new Date(...)`, whose interpretation of such strings is not
+  // reliably specified and varies by JS engine - previously this
+  // ambiguity meant a booking-open time could show correctly right after
+  // saving (fresh input, correctly offset) but flip to "not yet open" a
+  // few seconds later once the same value round-tripped back from the
+  // server and got reinterpreted here a second time.
+  const isoAmbiguous = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (isoAmbiguous && !hasExplicitTimezone) {
+    const asUtc = new Date(`${isoAmbiguous[1]}-${isoAmbiguous[2]}-${isoAmbiguous[3]}T${isoAmbiguous[4].padStart(2, '0')}:${isoAmbiguous[5]}:${isoAmbiguous[6] || '00'}Z`);
+    if (!Number.isNaN(asUtc.getTime())) return asUtc;
   }
 
   const us = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);

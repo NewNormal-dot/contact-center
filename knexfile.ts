@@ -43,6 +43,14 @@ const config: { [key: string]: Knex.Config } = {
       options: {
         encrypt: true,
         trustServerCertificate: false,
+        // The app always does its own explicit UTC math (see
+        // src/utils/sqlDate.ts) when converting the admin's local
+        // (Mongolia, UTC+8) wall-clock input to/from DATETIME columns,
+        // which have no timezone concept in SQL Server. Setting this
+        // explicitly removes any ambiguity in how the driver itself
+        // interprets/serializes those naive values, so a booking-open
+        // time round-trips back as the exact same instant it was saved as.
+        useUTC: true,
       },
     }),
     migrations: {
