@@ -130,22 +130,11 @@ function boolValue(value: unknown) {
 function resolveBookingWindow(day: any, shift: any) {
   const waves = Array.isArray(shift?.bookingWaves) ? shift.bookingWaves : [];
 
-  // A wave counts as "configured" (and therefore keeps the booking window
-  // open) when the admin either explicitly opened it (bookingOpen) OR
-  // scheduled a future open time (bookingOpenAt).
-  //
-  // FIX (Амралт бол slot 0 байсан ч нээгддэг болгох): previously this
-  // filtered ONLY on boolValue(wave.bookingOpen). A "Амралт" (rest) wave
-  // can legitimately arrive carrying just a scheduled bookingOpenAt
-  // timestamp without the immediate boolean flag - so it was silently
-  // dropped, openWaves ended up empty, and booking_is_open was written as
-  // 0 even though booking_open_at (e.g. 2026-08-28T12:10) WAS persisted.
-  // That left the contradictory "bookingOpen=false but bookingOpenAt set"
-  // state seen in the console. Treating a present bookingOpenAt as
-  // "configured" here fixes rest (and any 0/scheduled) waves.
-  const configuredWaves = waves.filter(
-    (wave: any) => boolValue(wave.bookingOpen) || Boolean(wave.bookingOpenAt),
-  );
+  // Only an open wave may contribute its timestamp to the shift-level
+  // booking window. Closed waves can contain stale bookingOpenAt values from
+  // an earlier schedule; treating those values as active makes a shift that
+  // was just opened immediately appear scheduled again after the next poll.
+  const configuredWaves = waves.filter((wave: any) => boolValue(wave.bookingOpen));
 
   const openAt = configuredWaves.find((wave: any) => wave.bookingOpenAt)?.bookingOpenAt
     || shift.bookingOpenAt
