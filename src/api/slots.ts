@@ -155,7 +155,9 @@ function resolveBookingWindow(day: any, shift: any) {
   // Each shift's own `bookingOpen` field / `bookingWaves` is what the admin
   // UI actually scopes to the segment + employment type being edited, so
   // that - and only that - is what should decide this shift's window.
-  const explicitlyOpen = shift?.bookingOpen === undefined ? false : boolValue(shift.bookingOpen);
+  const explicitlyOpen = waves.length === 0 && shift?.bookingOpen !== undefined
+    ? boolValue(shift.bookingOpen)
+    : false;
   const bookingOpen = explicitlyOpen || configuredWaves.length > 0 || Boolean(openAt);
 
   return {
