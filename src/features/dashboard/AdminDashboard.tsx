@@ -191,6 +191,61 @@ const addHoursToDateTimeLocal = (value: string, hours: number) => {
   return formatDateTimeLocal(base);
 };
 
+// Convert ANY booking datetime string into an unambiguous UTC ISO instant
+// (with a trailing 'Z') BEFORE it is sent to the server.
+//
+// Why this exists (the "opens then reverts to scheduled after a few seconds"
+// bug): the picker produces a naive Mongolia wall-clock string like
+// "2026-08-28T18:43" (no timezone). The backend's toSqlDateTime used a
+// fragile heuristic - "no seconds => fresh local input, subtract the 8h
+// Mongolia offset" vs "has seconds => already-UTC, leave as-is". But when a
+// saved value is read back it comes as "2026-08-28T10:43:00.000Z" (WITH
+// seconds), so every save→read→save round-trip flipped which branch ran and
+// drifted the instant by 8 hours - which is exactly why a slot opened
+// momentarily (local optimistic state) and then the 2s DB poll re-read a
+// now-future time and showed "Товлогдсон" again.
+//
+// Emitting an explicit ...Z instant here removes the guesswork entirely: the
+// backend's "has explicit timezone" path is first and always correct, and a
+// value that was just loaded from the DB re-serializes to the SAME instant,
+// so re-saving is a true no-op and the time can never drift again.
+//
+// A naive "YYYY-MM-DDTHH:mm" string is parsed by the browser in its local
+// (Mongolia) timezone, so new Date(...).toISOString() yields the correct UTC
+// instant. A value that already carries Z / ±HH:MM is passed through and
+// simply re-normalized to Z.
+const toUtcIsoInstant = (value?: string): string => {
+  if (!value) return "";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+};
+
+// Deep-clone a scoped schedules map and normalize every booking datetime it
+// contains (day-level and every wave) to a UTC ISO instant, so ONLY the
+// network payload is timezone-explicit while local React state keeps its
+// original picker-friendly strings for display.
+const normalizeScheduleBookingTimes = (
+  scoped: Record<string, any>,
+): Record<string, any> => {
+  const clone: Record<string, any> = JSON.parse(JSON.stringify(scoped || {}));
+  Object.values(clone).forEach((day: any) => {
+    if (!day || typeof day !== "object") return;
+    if (day.bookingOpenAt) day.bookingOpenAt = toUtcIsoInstant(day.bookingOpenAt);
+    if (day.bookingCloseAt) day.bookingCloseAt = toUtcIsoInstant(day.bookingCloseAt);
+    (Array.isArray(day.shifts) ? day.shifts : []).forEach((shift: any) => {
+      if (!shift || typeof shift !== "object") return;
+      if (shift.bookingOpenAt) shift.bookingOpenAt = toUtcIsoInstant(shift.bookingOpenAt);
+      if (shift.bookingCloseAt) shift.bookingCloseAt = toUtcIsoInstant(shift.bookingCloseAt);
+      (Array.isArray(shift.bookingWaves) ? shift.bookingWaves : []).forEach((wave: any) => {
+        if (!wave || typeof wave !== "object") return;
+        if (wave.bookingOpenAt) wave.bookingOpenAt = toUtcIsoInstant(wave.bookingOpenAt);
+        if (wave.bookingCloseAt) wave.bookingCloseAt = toUtcIsoInstant(wave.bookingCloseAt);
+      });
+    });
+  });
+  return clone;
+};
+
 
 const formatBookingDateDisplay = (value?: string) => {
   if (!value) return "Сонгоогүй";
@@ -929,8 +984,12 @@ export default function AdminDashboard() {
     // debounced wave-slot-count one (see waveSlotSaveTimerRef).
     pendingSaveCountRef.current += 1;
     try {
+      // Send booking datetimes as explicit UTC instants (…Z) so the server
+      // never has to guess the timezone and the value stays stable across
+      // save→read→save round-trips (fixes the "opens then reverts to
+      // Товлогдсон" 8-hour drift). Local state is left untouched.
       await apiClient.post("/slots/sync-schedules", {
-        schedules: scopedSchedules,
+        schedules: normalizeScheduleBookingTimes(scopedSchedules),
         dateKeys: uniqueDateKeys,
       });
     } catch (error: any) {
@@ -4905,13 +4964,11 @@ export default function AdminDashboard() {
                 targetDateKeys.forEach((dateKey) => {
                   const currentSchedule = newSchedules[dateKey] || { shifts: [] };
                   const currentShifts = [...(currentSchedule.shifts || [])];
-                  const isRestShift = normalizedTime === REST_SHIFT_LABEL;
                   const totalSlots = 0;
 
                   currentShifts.push({
                     id: Math.random().toString(36).substr(2, 9),
                     time: normalizedTime,
-                    isRest: isRestShift,
                     totalSlots,
                     bookedSlots: 0,
                     segment: activeSegmentView,
@@ -5049,11 +5106,7 @@ export default function AdminDashboard() {
                     const updatedWaves = waves.map((wave) => {
                       const selectionKey = getShiftWaveSelectionKey(shift, wave);
                       if (!selectedWaveKeys.includes(selectionKey)) return wave;
-                      const isRestShift =
-                        Boolean(shift.isRest) ||
-                        getShiftTimeKey(shift.time) === REST_SHIFT_LABEL;
-                      // Амралт нь slot/capacity шаарддаггүй.
-                      if (!isRestShift && Number(wave.slotLimit) <= 0) {
+                      if (Number(wave.slotLimit) <= 0) {
                         zeroSlotSelected = true;
                         return wave;
                       }
@@ -5537,12 +5590,7 @@ export default function AdminDashboard() {
                                   const isSelectedWave = selectedWaveKeys.includes(selectedKey);
                                   const booked = getWaveBookedCount(shift, wave.id);
                                   const waveOpen = isWaveCurrentlyOpen(wave);
-                                  const isRestShift =
-                                    Boolean(shift.isRest) ||
-                                    getShiftTimeKey(shift.time) === REST_SHIFT_LABEL;
-                                  const canSelectWave =
-                                    !isPastDay &&
-                                    (isRestShift || Number(wave.slotLimit) > 0);
+                                  const canSelectWave = !isPastDay && Number(wave.slotLimit) > 0;
                                   return (
                                     <div
                                       key={selectedKey}
@@ -8434,10 +8482,10 @@ export default function AdminDashboard() {
                           return;
                         }
 
-                        const isRestShift = time === REST_SHIFT_LABEL;
-                        const cleanTotalSlots = isRestShift
-                          ? 0
-                          : Math.max(1, Number(totalSlots) || 1);
+                        const cleanTotalSlots = Math.max(
+                          1,
+                          Number(totalSlots) || 1,
+                        );
                         const cleanWaves = (
                           editingShiftData.bookingWaves?.length
                             ? editingShiftData.bookingWaves
@@ -8457,9 +8505,9 @@ export default function AdminDashboard() {
                             bookingOpen: Boolean(wave.bookingOpen),
                             bookingOpenAt: wave.bookingOpenAt || "",
                           }))
-                          .filter((wave) => isRestShift || wave.slotLimit > 0);
+                          .filter((wave) => wave.slotLimit > 0);
 
-                        if (!isRestShift && cleanWaves.length === 0) {
+                        if (cleanWaves.length === 0) {
                           alert(
                             "Захиалга нээх эрхийн slot хамгийн багадаа 1 байх ёстой.",
                           );
