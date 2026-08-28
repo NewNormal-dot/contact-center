@@ -992,6 +992,11 @@ export default function AdminDashboard() {
       await apiClient.post("/slots/sync-schedules", {
         schedules: normalizeScheduleBookingTimes(scopedSchedules),
         dateKeys: uniqueDateKeys,
+        scope: {
+          location: activeLocationView,
+          segment: activeSegmentView,
+          employmentType: activeEmploymentView,
+        },
       });
     } catch (error: any) {
       console.error("Sync schedules to DB error:", error);

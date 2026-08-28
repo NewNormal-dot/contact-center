@@ -53,6 +53,12 @@ function normalizeSegmentForDisplay(value: unknown) {
   return String(value || 'All').trim() || 'All';
 }
 
+function segmentsMatch(slotSegment: unknown, userSegment: unknown) {
+  const slotValue = String(slotSegment || '').trim();
+  const userValue = String(userSegment || '').trim();
+  return slotValue === userValue || (userValue === 'VIP' && slotValue === 'Premium');
+}
+
 function normalizeTime(value: unknown) {
   const sql = toSqlTime(value as any);
   return sql || '';
@@ -521,9 +527,16 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
 });
 
 router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
-  const { schedules, dateKeys } = req.body;
+  const { schedules, dateKeys, scope } = req.body;
   if (!schedules || typeof schedules !== 'object') return res.status(400).json({ error: 'schedules шаардлагатай' });
   const keys = Array.isArray(dateKeys) && dateKeys.length ? dateKeys : Object.keys(schedules);
+  const syncScope = scope && typeof scope === 'object'
+    ? {
+        location: normalizeLocation(scope.location),
+        segment: String(scope.segment || '').trim(),
+        employmentType: normalizeEmploymentType(scope.employmentType),
+      }
+    : null;
   let synced = 0;
   let deleted = 0;
   try {
@@ -621,7 +634,13 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           }
         }
 
-        const staleRows = existingRows.filter((row: any) => !keptIds.has(String(row.id)));
+        const staleRows = existingRows.filter((row: any) => {
+          if (keptIds.has(String(row.id))) return false;
+          if (!syncScope?.segment) return true;
+          return normalizeLocation(row.location) === syncScope.location
+            && String(row.segment || '').trim() === syncScope.segment
+            && normalizeEmploymentType(row.employment_type) === syncScope.employmentType;
+        });
         if (staleRows.length > 0) {
           const staleIds = staleRows.map((row: any) => row.id);
           try {
@@ -728,7 +747,7 @@ const bookHandler = async (req: any, res: any) => {
     // units, so a CSR may only book a slot whose segment exactly matches
     // their own segment. (Previously slot.segment === 'All' let ANY CSR
     // from ANY segment book it, which is not the intended business rule.)
-    if (String(slot.segment || '').trim() !== String(user.segment || '').trim()) {
+    if (!segmentsMatch(slot.segment, user.segment)) {
       await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: segment mismatch (slot=${slot.segment}, user=${user.segment})`);
       return res.status(403).json({ error: 'Өөр segment-ийн хуваарь сонгох боломжгүй' });
     }
