@@ -5109,6 +5109,20 @@ export default function AdminDashboard() {
                       getShiftTimeKey(shift.time) === REST_SHIFT_LABEL;
                     const updatedWaves = waves.map((wave) => {
                       const selectionKey = getShiftWaveSelectionKey(shift, wave);
+                      // The database stores booking access once per shift,
+                      // not separately per morning/evening wave. Closing one
+                      // selected wave must therefore close the sibling wave
+                      // too, otherwise the slot remains open after refresh.
+                      if (!isOpen) {
+                        touchedWaves += selectedWaveKeys.includes(selectionKey) ? 1 : 0;
+                        shiftTouched = shiftTouched || selectedWaveKeys.includes(selectionKey);
+                        return {
+                          ...wave,
+                          bookingOpen: false,
+                          bookingOpenAt: "",
+                          bookingCloseAt: "",
+                        };
+                      }
                       if (!selectedWaveKeys.includes(selectionKey)) return wave;
                       // Амралт нь slot/capacity шаарддаггүй тул slotLimit 0
                       // байсан ч энд ЗААВАЛ нээгдэж, bookingOpenAt-аа шинэчлэх
