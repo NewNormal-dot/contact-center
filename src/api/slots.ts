@@ -136,9 +136,11 @@ function resolveBookingWindow(day: any, shift: any) {
   // was just opened immediately appear scheduled again after the next poll.
   const configuredWaves = waves.filter((wave: any) => boolValue(wave.bookingOpen));
 
+  // When waves are present, their state is authoritative. In particular, an
+  // open wave with no bookingOpenAt means "open now" and must not inherit a
+  // stale shift-level timestamp from an older scheduled window.
   const openAt = configuredWaves.find((wave: any) => wave.bookingOpenAt)?.bookingOpenAt
-    || shift.bookingOpenAt
-    || null;
+    || (waves.length === 0 ? shift.bookingOpenAt : null);
   const closeAt = configuredWaves.find((wave: any) => wave.bookingCloseAt)?.bookingCloseAt
     || shift.bookingCloseAt
     || shift.bookingDeadline
