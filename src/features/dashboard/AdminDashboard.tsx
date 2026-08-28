@@ -2656,25 +2656,41 @@ export default function AdminDashboard() {
     return Number.isNaN(openAtTime) || openAtTime <= Date.now();
   };
 
+  const getActiveLocationShifts = (dateKey: string) =>
+    (schedules[dateKey]?.shifts || []).filter(
+      (shift: any) =>
+        shift.segment === activeSegmentView &&
+        shift.employmentType === activeEmploymentView &&
+        (normalizeEmployeeLocation(shift.location) || "Ulaanbaatar") === activeLocationView,
+    );
+
   const isScheduleBookingOpen = (dateKey?: string | null) => {
-    const daySchedule = dateKey ? schedules[dateKey] : null;
+    const activeShifts = dateKey ? getActiveLocationShifts(dateKey) : [];
+    const openShift = activeShifts.find((shift: any) =>
+      getBookingWavesForShift(shift).some((wave) => wave.bookingOpen),
+    );
     return (
       !!dateKey &&
       !isPastScheduleDate(dateKey) &&
-      !!daySchedule?.bookingOpen &&
-      isBookingOpenAtDue(daySchedule.bookingOpenAt)
+      !!openShift &&
+      isBookingOpenAtDue(
+        getBookingWavesForShift(openShift).find((wave) => wave.bookingOpen)?.bookingOpenAt,
+      )
     );
   };
 
   const getScheduleBookingLabel = (dateKey?: string | null) => {
-    const daySchedule = dateKey ? schedules[dateKey] : null;
-    const daySlotTotal = (daySchedule?.shifts || []).reduce(
+    const activeShifts = dateKey ? getActiveLocationShifts(dateKey) : [];
+    const daySlotTotal = activeShifts.reduce(
       (sum: number, shift: any) => sum + (Number(shift.totalSlots) || 0),
       0,
     );
     if (!dateKey || daySlotTotal <= 0 || isPastScheduleDate(dateKey)) return "";
     if (isScheduleBookingOpen(dateKey)) return "Захиалга нээлттэй";
-    if (daySchedule?.bookingOpen) return `Товлогдсон ${formatBookingOpenAt(daySchedule.bookingOpenAt)}`;
+    const scheduledWave = activeShifts
+      .flatMap((shift: any) => getBookingWavesForShift(shift))
+      .find((wave) => wave.bookingOpen && wave.bookingOpenAt);
+    if (scheduledWave) return `Товлогдсон ${formatBookingOpenAt(scheduledWave.bookingOpenAt)}`;
     return "Захиалга хаалттай";
   };
 
