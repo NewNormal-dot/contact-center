@@ -661,6 +661,12 @@ export default function AdminDashboard() {
   // stomp the newer edit with a slightly-stale server snapshot, which is
   // what caused the "changes flicker / takes a while to update" feel.
   const waveSlotSaveTimerRef = useRef<number | null>(null);
+  // Counts saves currently in flight to /slots/sync-schedules (network
+  // round-trip, across EVERY save path - open/close booking, create/delete
+  // shift, wave-slot-count edits, etc). fetchDbSchedule's poll checks this
+  // to avoid overwriting local state with stale pre-save server data while
+  // a save hasn't landed yet.
+  const pendingSaveCountRef = useRef(0);
   const [filters, setFilters] = useState({
     segment: "All",
     location: "All",
@@ -874,13 +880,14 @@ export default function AdminDashboard() {
       const response = await apiClient.get("/slots");
       const dbSchedules = mapDbSlotsToSchedules(response.data || []);
       // Skip overwriting local schedules state while a debounced
-      // wave-slot-count save (see waveSlotSaveTimerRef) is still pending -
-      // otherwise this poll (which runs every 2s) can land BEFORE that
-      // save reaches the server and clobber the just-made local edit with
-      // stale data, discarding it. The pending save will land within
-      // ~600ms regardless; the next poll tick after that picks up the
-      // now-persisted result correctly.
-      if (waveSlotSaveTimerRef.current) {
+      // wave-slot-count save (waveSlotSaveTimerRef) is still pending, OR
+      // while ANY save is currently in flight to the server
+      // (pendingSaveCountRef) - otherwise this poll (which runs every 2s)
+      // can land with stale pre-save data and clobber a just-made local
+      // edit, whether it's a debounced wave-count change or an immediate
+      // one like opening/closing booking access. The next poll tick after
+      // the save lands picks up the now-persisted result correctly.
+      if (waveSlotSaveTimerRef.current || pendingSaveCountRef.current > 0) {
         return dbSchedules;
       }
       if (Object.keys(dbSchedules).length > 0) {
@@ -913,6 +920,14 @@ export default function AdminDashboard() {
       if (nextSchedules[dateKey]) scopedSchedules[dateKey] = nextSchedules[dateKey];
     });
 
+    // Tracks how many saves are currently in flight (network round-trip,
+    // not just the debounce window) - fetchDbSchedule's 2s poll checks this
+    // and skips overwriting local state while ANY save hasn't landed yet.
+    // Without this, a poll response fetched from the OLD (pre-save) server
+    // state could arrive while this POST is still in flight and clobber
+    // the just-made local edit for every save path, not only the
+    // debounced wave-slot-count one (see waveSlotSaveTimerRef).
+    pendingSaveCountRef.current += 1;
     try {
       await apiClient.post("/slots/sync-schedules", {
         schedules: scopedSchedules,
@@ -921,6 +936,8 @@ export default function AdminDashboard() {
     } catch (error: any) {
       console.error("Sync schedules to DB error:", error);
       alert(error.response?.data?.error || "Хуваарь DB-д хадгалахад алдаа гарлаа.");
+    } finally {
+      pendingSaveCountRef.current = Math.max(0, pendingSaveCountRef.current - 1);
     }
   };
 
