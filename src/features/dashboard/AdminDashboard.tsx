@@ -4905,11 +4905,13 @@ export default function AdminDashboard() {
                 targetDateKeys.forEach((dateKey) => {
                   const currentSchedule = newSchedules[dateKey] || { shifts: [] };
                   const currentShifts = [...(currentSchedule.shifts || [])];
+                  const isRestShift = normalizedTime === REST_SHIFT_LABEL;
                   const totalSlots = 0;
 
                   currentShifts.push({
                     id: Math.random().toString(36).substr(2, 9),
                     time: normalizedTime,
+                    isRest: isRestShift,
                     totalSlots,
                     bookedSlots: 0,
                     segment: activeSegmentView,
@@ -5047,7 +5049,11 @@ export default function AdminDashboard() {
                     const updatedWaves = waves.map((wave) => {
                       const selectionKey = getShiftWaveSelectionKey(shift, wave);
                       if (!selectedWaveKeys.includes(selectionKey)) return wave;
-                      if (Number(wave.slotLimit) <= 0) {
+                      const isRestShift =
+                        Boolean(shift.isRest) ||
+                        getShiftTimeKey(shift.time) === REST_SHIFT_LABEL;
+                      // Амралт нь slot/capacity шаарддаггүй.
+                      if (!isRestShift && Number(wave.slotLimit) <= 0) {
                         zeroSlotSelected = true;
                         return wave;
                       }
@@ -5531,7 +5537,12 @@ export default function AdminDashboard() {
                                   const isSelectedWave = selectedWaveKeys.includes(selectedKey);
                                   const booked = getWaveBookedCount(shift, wave.id);
                                   const waveOpen = isWaveCurrentlyOpen(wave);
-                                  const canSelectWave = !isPastDay && Number(wave.slotLimit) > 0;
+                                  const isRestShift =
+                                    Boolean(shift.isRest) ||
+                                    getShiftTimeKey(shift.time) === REST_SHIFT_LABEL;
+                                  const canSelectWave =
+                                    !isPastDay &&
+                                    (isRestShift || Number(wave.slotLimit) > 0);
                                   return (
                                     <div
                                       key={selectedKey}
@@ -8423,10 +8434,10 @@ export default function AdminDashboard() {
                           return;
                         }
 
-                        const cleanTotalSlots = Math.max(
-                          1,
-                          Number(totalSlots) || 1,
-                        );
+                        const isRestShift = time === REST_SHIFT_LABEL;
+                        const cleanTotalSlots = isRestShift
+                          ? 0
+                          : Math.max(1, Number(totalSlots) || 1);
                         const cleanWaves = (
                           editingShiftData.bookingWaves?.length
                             ? editingShiftData.bookingWaves
@@ -8446,9 +8457,9 @@ export default function AdminDashboard() {
                             bookingOpen: Boolean(wave.bookingOpen),
                             bookingOpenAt: wave.bookingOpenAt || "",
                           }))
-                          .filter((wave) => wave.slotLimit > 0);
+                          .filter((wave) => isRestShift || wave.slotLimit > 0);
 
-                        if (cleanWaves.length === 0) {
+                        if (!isRestShift && cleanWaves.length === 0) {
                           alert(
                             "Захиалга нээх эрхийн slot хамгийн багадаа 1 байх ёстой.",
                           );
