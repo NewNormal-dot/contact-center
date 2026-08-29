@@ -2112,13 +2112,14 @@ export default function CsrDashboard() {
 
   const [selectedMaterial, setSelectedMaterial] = useState<TrainingMaterial | null>(null);
 
-  const markMaterialAsRead = (id: string) => {
+  const markMaterialAsRead = async (id: string) => {
     if (!csrProfile) return;
     const material = trainingMaterials.find(m => m.id === id);
     if (material) {
       const alreadySeen = material.seenBy?.some(s => s.userId === csrProfile.id);
       if (!alreadySeen) {
         try {
+          await apiClient.post('/broadcasts/trainings/complete', { training_id: id });
           const updatedSeenBy = [...(material.seenBy || []), {
             userId: csrProfile.id,
             userName: csrProfile.name,

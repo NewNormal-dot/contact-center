@@ -176,18 +176,28 @@ const formatSelectedDateRange = (dateKeys: string[]) => {
 };
 
 const formatDateTimeLocal = (date = new Date()) => {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  const h = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
+  const mongoliaDate = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  const y = mongoliaDate.getUTCFullYear();
+  const m = String(mongoliaDate.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(mongoliaDate.getUTCDate()).padStart(2, "0");
+  const h = String(mongoliaDate.getUTCHours()).padStart(2, "0");
+  const min = String(mongoliaDate.getUTCMinutes()).padStart(2, "0");
   return `${y}-${m}-${d}T${h}:${min}`;
 };
 
 const addHoursToDateTimeLocal = (value: string, hours: number) => {
-  const base = value ? new Date(value) : new Date();
+  const localMatch = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  const base = localMatch
+    ? new Date(Date.UTC(
+        Number(localMatch[1]),
+        Number(localMatch[2]) - 1,
+        Number(localMatch[3]),
+        Number(localMatch[4]),
+        Number(localMatch[5]),
+      ) - 8 * 60 * 60 * 1000)
+    : new Date();
   if (Number.isNaN(base.getTime())) return formatDateTimeLocal(new Date(Date.now() + hours * 60 * 60 * 1000));
-  base.setHours(base.getHours() + hours);
+  base.setTime(base.getTime() + hours * 60 * 60 * 1000);
   return formatDateTimeLocal(base);
 };
 
@@ -216,7 +226,16 @@ const addHoursToDateTimeLocal = (value: string, hours: number) => {
 // simply re-normalized to Z.
 const toUtcIsoInstant = (value?: string): string => {
   if (!value) return "";
-  const parsed = new Date(value);
+  const localMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  const parsed = localMatch
+    ? new Date(Date.UTC(
+        Number(localMatch[1]),
+        Number(localMatch[2]) - 1,
+        Number(localMatch[3]),
+        Number(localMatch[4]),
+        Number(localMatch[5]),
+      ) - 8 * 60 * 60 * 1000)
+    : new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
 };
 
@@ -960,6 +979,11 @@ export default function AdminDashboard() {
   const persistSchedules = async (
     nextSchedules: Record<string, any>,
     dateKeys: string[],
+    scope: { location: EmployeeLocation; segment: string; employmentType: "Full Time" | "Part Time" } | null = {
+      location: activeLocationView,
+      segment: activeSegmentView,
+      employmentType: activeEmploymentView,
+    },
   ) => {
     const uniqueDateKeys = Array.from(new Set(dateKeys.filter(Boolean)));
     setSchedules(nextSchedules);
@@ -992,6 +1016,7 @@ export default function AdminDashboard() {
       await apiClient.post("/slots/sync-schedules", {
         schedules: normalizeScheduleBookingTimes(scopedSchedules),
         dateKeys: uniqueDateKeys,
+        ...(scope ? { scope } : {}),
       });
     } catch (error: any) {
       console.error("Sync schedules to DB error:", error);
@@ -2614,7 +2639,7 @@ export default function AdminDashboard() {
 
       persistSegments(updatedSegments);
       setCsrs(updatedUsers);
-      await persistSchedules(updatedSchedules, Object.keys(updatedSchedules));
+      await persistSchedules(updatedSchedules, Object.keys(updatedSchedules), null);
       if (activeSegmentView === oldName) setActiveSegmentView(nextName);
       if (filters.segment === oldName)
         setFilters((prev) => ({ ...prev, segment: nextName }));
