@@ -992,11 +992,6 @@ export default function AdminDashboard() {
       await apiClient.post("/slots/sync-schedules", {
         schedules: normalizeScheduleBookingTimes(scopedSchedules),
         dateKeys: uniqueDateKeys,
-        scope: {
-          location: activeLocationView,
-          segment: activeSegmentView,
-          employmentType: activeEmploymentView,
-        },
       });
     } catch (error: any) {
       console.error("Sync schedules to DB error:", error);
@@ -4566,10 +4561,19 @@ export default function AdminDashboard() {
                 const isSelected = selectedDateSchedule === dateKey;
                 const isBulkSelected = selectedBookingDateSet.has(dateKey);
                 const isBookingOpen = isScheduleBookingOpen(dateKey);
+                // Must be derived from the SAME location/segment-filtered
+                // shift data as isBookingOpen above - mixing in the old
+                // day-level daySchedule.bookingOpen flag (which covers
+                // every location/segment on that date, not just the one
+                // currently being viewed) is what caused this badge to
+                // show the wrong state for a given location/segment.
+                const scheduledWaveForActiveFilter = dayShiftsForActiveFilter
+                  .flatMap((shift: any) => getBookingWavesForShift(shift))
+                  .find((wave) => wave.bookingOpen && wave.bookingOpenAt);
                 const isBookingScheduled =
                   !isPastScheduleDate(dateKey) &&
-                  !!daySchedule?.bookingOpen &&
-                  !isBookingOpen;
+                  !isBookingOpen &&
+                  Boolean(scheduledWaveForActiveFilter);
                 const bookingBadge = !hasAnySlots || isPastScheduleDate(dateKey)
                   ? null
                   : isBookingOpen
