@@ -118,9 +118,7 @@ router.get('/leave', authenticate, async (req: any, res) => {
 
     if (role === 'csr') query = query.where({ 'leave_requests.user_id': id });
 
-    // Qualify the table: `created_at` exists on leave_requests AND on both
-    // joined copies of `users`, so an unqualified reference is ambiguous.
-    const requests = await query.orderBy('leave_requests.created_at', 'desc');
+    const requests = await query.orderBy('created_at', 'desc');
     res.json(requests.map(mapLeave));
   } catch (err) {
     console.error('Get leave requests error:', err);
@@ -350,8 +348,7 @@ router.get('/vacation', authenticate, async (req: any, res) => {
 
     if (role === 'csr') query = query.where({ 'vacation_requests.user_id': id });
 
-    // Qualify the table: `users` is joined and also has a `created_at`.
-    const requests = await query.orderBy('vacation_requests.created_at', 'desc');
+    const requests = await query.orderBy('created_at', 'desc');
     res.json(requests.map(mapVacation));
   } catch (err) {
     console.error('Get vacation requests error:', err);

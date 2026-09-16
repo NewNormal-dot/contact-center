@@ -73,8 +73,6 @@ import {
   groupTrainingMaterialsByDay,
 } from "../../utils/notificationGroups";
 import ForecastDashboard from "./ForecastDashboard";
-import { POLLING_INTERVALS } from "../../config/polling";
-import { startPolling } from "../../lib/startPolling";
 
 const ENG_MONTHS = [
   "JAN",
@@ -1240,6 +1238,8 @@ export default function AdminDashboard() {
       // never appeared here at all (this browser's local cache simply
       // didn't know about them). The database is now re-checked directly,
       // every tick, so all admins converge on the same real data.
+      fetchDbSchedule().catch(() => undefined);
+
       const hl = getLocalData("hourlyLeaveRequests", []);
 
       const currentHash = JSON.stringify({
@@ -1257,22 +1257,13 @@ export default function AdminDashboard() {
         setMonthlyQuotas(mq);
         fetchLeaveRequests().catch(() => setHourlyLeaveRequests(hl));
       }
-    }, POLLING_INTERVALS.LOCAL_DATA);
+    }, 2000);
 
-    // The schedule fetch used to be inside the 2-second localStorage poll
-    // above, so this one admin screen alone re-downloaded the entire
-    // schedule 30 times a minute. It is now its own properly-paced poller
-    // (see src/config/polling.ts), and it pauses while the tab is hidden.
-    const stopSchedulePoll = startPolling(
-      () => fetchDbSchedule().catch(() => undefined),
-      POLLING_INTERVALS.SCHEDULE,
-    );
-
-    const stopApiRefresh = startPolling(() => {
+    const apiRefreshInterval = setInterval(() => {
       fetchLeaveRequests().catch(() => undefined);
       fetchVacationRequests().catch(() => undefined);
       fetchShiftRules().catch(() => undefined);
-    }, POLLING_INTERVALS.REQUESTS);
+    }, 10000);
 
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === "notifications") {
@@ -1286,8 +1277,7 @@ export default function AdminDashboard() {
     window.addEventListener("storage", handleStorageUpdate);
     return () => {
       clearInterval(interval);
-      stopSchedulePoll();
-      stopApiRefresh();
+      clearInterval(apiRefreshInterval);
       window.removeEventListener("storage", handleStorageUpdate);
       if (waveSlotSaveTimerRef.current) {
         window.clearTimeout(waveSlotSaveTimerRef.current);

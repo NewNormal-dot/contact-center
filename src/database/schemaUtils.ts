@@ -1,19 +1,13 @@
 import type { Knex } from "knex";
 
-// Caching exists to remove a real DB round-trip from the hot path:
-// columnExists() is called on nearly every auth-related request (login,
-// register, change-password, reset-password, etc), always asking about the
-// same handful of columns.
-//
-// ONLY POSITIVE RESULTS ARE CACHED, and that asymmetry is load-bearing.
-// A table/column that exists can never stop existing while the process runs,
-// so caching `true` is always safe. Caching `false` is NOT: migrations run
-// inside this very process at startup, and each one checks for a column
-// *before* adding it. A cached `false` from that check was still being
-// returned to LATER migrations in the same run, which then wrongly believed
-// the column was missing and silently skipped their own work. That is
-// exactly how the notifications.target_user_id index was skipped at first -
-// a bug that leaves no error behind, only a missing object.
+// Table/column existence never changes while the server process is running
+// (it only changes when a migration runs, which happens at deploy/startup,
+// before requests are served). Previously tableExists()/columnExists() ran a
+// real DB round-trip on every single call - and columnExists() in particular
+// was being called on nearly every auth-related request (login, register,
+// change-password, reset-password, etc). Caching the result in memory for
+// the lifetime of the process removes that DB hit after the first check,
+// with no behavioral change.
 const existsCache = new Map<string, boolean>();
 
 function getClientName(knex: Knex) {
@@ -60,7 +54,7 @@ export async function tableExists(
     result = await knex.schema.hasTable(tableName);
   }
 
-  if (result) existsCache.set(cacheKey, result);
+  existsCache.set(cacheKey, result);
   return result;
 }
 
@@ -86,7 +80,7 @@ export async function columnExists(
     result = await knex.schema.hasColumn(tableName, columnName);
   }
 
-  if (result) existsCache.set(cacheKey, result);
+  existsCache.set(cacheKey, result);
   return result;
 }
 

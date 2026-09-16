@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { buildPasswordSetupUrl, sendPasswordSetupEmail } from '../utils/email';
 import { createLockedPasswordValue, createPasswordSetupToken } from '../utils/password';
 import db from '../database/db';
-import { authenticate, authorize, invalidateAuthUserCache } from '../middleware/auth';
+import { authenticate, authorize } from '../middleware/auth';
 import { logAction } from './audit';
 import { columnExists } from '../database/schemaUtils';
 import { captureError } from '../utils/errorLog';
@@ -372,10 +372,6 @@ router.put('/:id', authenticate, async (req: any, res) => {
     updates.updated_at = db.fn.now();
 
     await db('users').where({ id }).update(updates);
-    // The authenticate middleware caches this row for a few seconds; a role
-    // or status change must take effect on the very next request, not after
-    // the cache expires.
-    invalidateAuthUserCache(id);
     await logAction(req.user.id, 'UPDATE_USER', 'users', id, `Updated user ${updates.name || userToUpdate.name} (${updates.role || userToUpdate.role})`);
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
@@ -499,7 +495,6 @@ router.delete('/:id', authenticate, async (req: any, res) => {
         });
       await trx('users').where({ id }).delete();
     });
-    invalidateAuthUserCache(id);
     await logAction(actingUser.id, 'DELETE_USER', 'users', id, `Deleted user ${userToDelete.email || userToDelete.name}`);
     res.json({ message: 'Хэрэглэгч амжилттай устгагдлаа' });
   } catch (err) {

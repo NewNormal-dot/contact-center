@@ -4,7 +4,6 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 import cors from "cors";
 import helmet from "helmet";
-import compression from "compression";
 import { createServer as createViteServer } from "vite";
 import authRoutes from "./src/api/auth";
 import userRoutes from "./src/api/users";
@@ -114,24 +113,10 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 8080;
 
-  // Azure App Service terminates TLS and forwards the request over plain
-  // HTTP, so without this Express reports every client as the proxy itself:
-  // req.ip and req.protocol are wrong, and anything keyed on the client
-  // address (the login rate limiter) would lump every user together.
-  app.set('trust proxy', true);
-
   // Basic security and middleware
   app.use(helmet({
     contentSecurityPolicy: false,
   }));
-
-  // gzip every response above a kilobyte. The schedule payload is a large,
-  // highly repetitive JSON document - exactly the shape that compresses by
-  // roughly 10x. On a single-vCPU instance serving hundreds of polling
-  // clients, that is the difference between saturating the outbound
-  // connection and not.
-  app.use(compression({ threshold: 1024 }));
-
   app.use(cors());
   // Default express.json() limit is 100kb, which is too small for bulk
   // schedule operations - e.g. creating/editing shifts across many selected
@@ -178,21 +163,7 @@ async function startServer() {
   } else {
     // Serve static files in production
     const distPath = path.join(__dirname, "dist");
-
-    // Vite fingerprints every file it emits into dist/assets (app.4f2a1c.js),
-    // so those files can never change behind a given URL and are safe to
-    // cache in the browser forever. Without this the browser re-validated
-    // every asset on every page load - hundreds of extra requests to the
-    // server when a shift of CSRs all open the app at once.
-    app.use('/assets', express.static(path.join(distPath, 'assets'), {
-      immutable: true,
-      maxAge: '1y',
-    }));
-
-    // Everything else (index.html above all) must always be revalidated,
-    // otherwise a deploy would not reach users still holding a cached page.
-    app.use(express.static(distPath, { etag: true, maxAge: 0 }));
-
+    app.use(express.static(distPath));
     app.get("*", (req, res) => {
       // Avoid falling back to index.html for API routes
       if (req.path.startsWith('/api')) {

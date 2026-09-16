@@ -1,25 +1,12 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db, { withDbRetry } from '../database/db';
+import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlDateTime, toSqlTime, displayDate, displayTime } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
 import { logAction } from './audit';
 
 const router = express.Router();
-
-// Any successful write through this router changes the schedule or its
-// bookings, so the shared GET /api/slots cache must be dropped immediately.
-// Doing it here - once, for every non-GET route - means a future endpoint
-// can never be added and silently forget to invalidate, which would serve
-// stale data for up to the cache TTL.
-router.use((req, res, next) => {
-  if (req.method === 'GET' || req.method === 'HEAD') return next();
-  res.on('finish', () => {
-    if (res.statusCode >= 200 && res.statusCode < 400) invalidateSlotsCache();
-  });
-  next();
-});
 
 // work_slots.id is a real DB `uuid` column (uniqueidentifier on Azure SQL).
 // The frontend generates a temporary client-side id (e.g. "ez737ec2z", via
@@ -408,200 +395,63 @@ router.get('/my-bookings', authenticate, async (req: any, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /api/slots - the single hottest endpoint in the whole app.
-//
-// Every open dashboard polls it in the background, so during a booking rush
-// a few hundred clients ask for THE SAME data within the same second. It
-// used to run two full table reads per request and serialise the entire
-// schedule again for each one, on a single-vCPU App Service instance.
-//
-// Three changes keep the data just as fresh while removing almost all of
-// that cost:
-//
-//  1. One shared, short-lived cache of the enriched slot list. Concurrent
-//     misses are coalesced ("single flight") so 200 simultaneous requests
-//     arriving right after the cache expires still produce exactly ONE pair
-//     of database queries, not 200.
-//  2. The JSON body is rendered once per distinct audience (a CSR only ever
-//     sees slots matching their own segment / employment type / location)
-//     and reused, instead of being rebuilt per request.
-//  3. An ETag lets unchanged polls answer with an empty 304 instead of
-//     resending the whole schedule. The schedule only changes when an admin
-//     edits it or someone books, so the vast majority of polls are 304s.
-//
-// Any write that changes slots or bookings calls invalidateSlotsCache(), so
-// a booking is visible to everyone on their very next poll - the cache TTL
-// never delays a real change.
-// ---------------------------------------------------------------------------
-
-const SLOTS_CACHE_TTL_MS = Number(process.env.SLOTS_CACHE_TTL_MS || 5000);
-
-interface SlotsCacheState {
-  expiresAt: number;
-  version: number;
-  fingerprint: string;
-  slots: any[];
-  rendered: Map<string, string>;
-}
-
-let slotsCacheState: SlotsCacheState | null = null;
-let slotsCacheVersion = 0;
-let slotsInFlight: Promise<SlotsCacheState> | null = null;
-
-export function invalidateSlotsCache() {
-  slotsCacheState = null;
-}
-
-async function loadEnrichedSlots(): Promise<any[]> {
-  const slots = await db('work_slots').orderBy('date', 'asc').orderBy('start_time', 'asc');
-
-  // Fetch all confirmed bookings for all slots in ONE query instead of one
-  // query per slot (previously N+1: 1 query for the slot list + 1 query
-  // per individual slot). For a month view with hundreds of slots this
-  // turns hundreds of DB round-trips into just 2.
-  const slotIds = slots.map((s: any) => s.id);
-  const allBookings = slotIds.length
-    ? await db('slot_bookings')
-        .leftJoin('users', 'slot_bookings.user_id', '=', 'users.id')
-        .whereIn('slot_bookings.slot_id', slotIds)
-        .where('slot_bookings.status', 'confirmed')
-        .select(
-          'slot_bookings.id',
-          'slot_bookings.slot_id',
-          'slot_bookings.user_id',
-          'slot_bookings.booked_at',
-          // Prefer the live users table (covers name changes etc for
-          // still-active accounts), falling back to the snapshot stored
-          // on the booking itself if the user account was deleted.
-          db.raw('COALESCE(users.name, slot_bookings.user_name) as user_name'),
-          'users.email as user_email',
-          db.raw('COALESCE(users.code, slot_bookings.user_code) as user_code'),
-          'users.segment as user_segment',
-          'users.employment_type as user_employment_type',
-          'users.location as user_location',
-        )
-    : [];
-
-  const bookingsBySlotId = new Map<string, any[]>();
-  for (const b of allBookings as any[]) {
-    const key = String(b.slot_id);
-    if (!bookingsBySlotId.has(key)) bookingsBySlotId.set(key, []);
-    bookingsBySlotId.get(key)!.push({
-      id: b.id,
-      userId: b.user_id,
-      userName: b.user_name,
-      userEmail: b.user_email,
-      userCode: b.user_code,
-      bookedAt: b.booked_at,
-      segment: b.user_segment,
-      employmentType: b.user_employment_type,
-      location: b.user_location,
-    });
-  }
-
-  return slots.map((slot: any) => {
-    const bookings = bookingsBySlotId.get(String(slot.id)) || [];
-    return mapSlot(slot, bookings.length, bookings);
-  });
-}
-
-async function getSlotsCache(): Promise<SlotsCacheState> {
-  const now = Date.now();
-  if (slotsCacheState && slotsCacheState.expiresAt > now) return slotsCacheState;
-
-  // Single flight: whoever gets here first does the database work and every
-  // other concurrent request awaits that same promise.
-  if (slotsInFlight) return slotsInFlight;
-
-  slotsInFlight = (async () => {
-    try {
-      const enriched = await withDbRetry(loadEnrichedSlots, { label: 'GET /api/slots' });
-      const fingerprint = JSON.stringify(enriched);
-
-      // Only bump the version when the data actually changed. A stable
-      // version keeps the ETag stable, which is what lets a quiet poll
-      // answer 304 instead of resending the whole schedule.
-      const previous = slotsCacheState;
-      const changed = !previous || previous.fingerprint !== fingerprint;
-      if (changed) slotsCacheVersion += 1;
-
-      slotsCacheState = {
-        expiresAt: Date.now() + SLOTS_CACHE_TTL_MS,
-        version: slotsCacheVersion,
-        fingerprint,
-        slots: enriched,
-        rendered: changed ? new Map() : previous!.rendered,
-      };
-      return slotsCacheState;
-    } finally {
-      slotsInFlight = null;
-    }
-  })();
-
-  return slotsInFlight;
-}
-
-// A CSR's dashboard discards every slot that does not match their own
-// segment / employment type / location, so sending those slots is pure
-// waste - for a CSR this is typically well over 80% of the payload. Admins
-// and superadmins manage the whole schedule and still receive everything.
-function audienceKeyFor(user: any): string {
-  if (user?.role !== 'csr') return 'all';
-  const segment = String(user.segment || '').trim();
-  const employmentType = normalizeEmploymentType(user.employment_type ?? user.employmentType);
-  const location = normalizeLocation(user.location);
-  return `csr:${segment}|${employmentType}|${location}`;
-}
-
-function filterSlotsForAudience(slots: any[], user: any): any[] {
-  if (user?.role !== 'csr') return slots;
-  const employmentType = normalizeEmploymentType(user.employment_type ?? user.employmentType);
-  const location = normalizeLocation(user.location);
-  return slots.filter((slot: any) =>
-    segmentsMatch(slot.segment, user.segment) &&
-    normalizeEmploymentType(slot.employmentType) === employmentType &&
-    normalizeLocation(slot.location) === location
-  );
-}
-
-router.get('/', authenticate, async (req: any, res) => {
+router.get('/', authenticate, async (_req, res) => {
   try {
-    // A CSR's audience depends on fields the auth middleware does not carry
-    // (segment / employment type / location), so read the full row once.
-    // For admins nothing extra is needed.
-    let audienceUser = req.user;
-    if (req.user?.role === 'csr') {
-      const profile = await withDbRetry(() => getUser(req.user.id), { label: 'GET /api/slots:user' });
-      if (!profile) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
-      audienceUser = { ...req.user, ...profile, role: req.user.role };
+    const slots = await db('work_slots').orderBy('date', 'asc').orderBy('start_time', 'asc');
+
+    // Fetch all confirmed bookings for all slots in ONE query instead of one
+    // query per slot (previously N+1: 1 query for the slot list + 1 query
+    // per individual slot). For a month view with hundreds of slots this
+    // turns hundreds of DB round-trips into just 2.
+    const slotIds = slots.map((s: any) => s.id);
+    const allBookings = slotIds.length
+      ? await db('slot_bookings')
+          .leftJoin('users', 'slot_bookings.user_id', '=', 'users.id')
+          .whereIn('slot_bookings.slot_id', slotIds)
+          .where('slot_bookings.status', 'confirmed')
+          .select(
+            'slot_bookings.id',
+            'slot_bookings.slot_id',
+            'slot_bookings.user_id',
+            'slot_bookings.booked_at',
+            // Prefer the live users table (covers name changes etc for
+            // still-active accounts), falling back to the snapshot stored
+            // on the booking itself if the user account was deleted.
+            db.raw('COALESCE(users.name, slot_bookings.user_name) as user_name'),
+            'users.email as user_email',
+            db.raw('COALESCE(users.code, slot_bookings.user_code) as user_code'),
+            'users.segment as user_segment',
+            'users.employment_type as user_employment_type',
+            'users.location as user_location',
+          )
+      : [];
+
+    const bookingsBySlotId = new Map<string, any[]>();
+    for (const b of allBookings as any[]) {
+      const key = String(b.slot_id);
+      if (!bookingsBySlotId.has(key)) bookingsBySlotId.set(key, []);
+      bookingsBySlotId.get(key)!.push({
+        id: b.id,
+        userId: b.user_id,
+        userName: b.user_name,
+        userEmail: b.user_email,
+        userCode: b.user_code,
+        bookedAt: b.booked_at,
+        segment: b.user_segment,
+        employmentType: b.user_employment_type,
+        location: b.user_location,
+      });
     }
 
-    const cache = await getSlotsCache();
-    const key = audienceKeyFor(audienceUser);
-    const etag = `W/"slots-${cache.version}-${key}"`;
+    const enrichedSlots = slots.map((slot: any) => {
+      const bookings = bookingsBySlotId.get(String(slot.id)) || [];
+      return mapSlot(slot, bookings.length, bookings);
+    });
 
-    // Tell the browser to always revalidate (so a change is never missed)
-    // but to keep the body around, so an unchanged poll costs one tiny
-    // conditional request instead of a full schedule download.
-    res.setHeader('Cache-Control', 'no-cache, private');
-    res.setHeader('Vary', 'Authorization');
-    res.setHeader('ETag', etag);
-
-    if (req.headers['if-none-match'] === etag) {
-      return res.status(304).end();
-    }
-
-    let body = cache.rendered.get(key);
-    if (body === undefined) {
-      body = JSON.stringify(filterSlotsForAudience(cache.slots, audienceUser));
-      cache.rendered.set(key, body);
-    }
-
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.send(body);
+    res.json(enrichedSlots);
   } catch (err) {
     console.error('Get slots error:', err);
+    captureError('slots: Get slots error:', err);
     captureError('GET /api/slots', err);
     res.status(500).json({ error: 'Слотууд татахад алдаа гарлаа' });
   }

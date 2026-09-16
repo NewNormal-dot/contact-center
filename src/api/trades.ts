@@ -5,20 +5,8 @@ import { authenticate, authorize } from '../middleware/auth';
 import { logAction } from './audit';
 import { displayDate, displayTime } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
-import { invalidateSlotsCache } from './slots';
-import { createThrottledTask } from '../utils/throttledTask';
 
 const router = express.Router();
-
-// A trade swaps two CSRs' bookings, so a successful write here changes what
-// GET /api/slots returns just as much as a booking does.
-router.use((req, res, next) => {
-  if (req.method === 'GET' || req.method === 'HEAD') return next();
-  res.on('finish', () => {
-    if (res.statusCode >= 200 && res.statusCode < 400) invalidateSlotsCache();
-  });
-  next();
-});
 
 function normalizeEmploymentType(value: unknown) {
   return String(value || 'Full Time').trim() === 'Part Time' ? 'Part Time' : 'Full Time';
@@ -172,7 +160,7 @@ function todayDateKey() {
 // swap no longer makes sense for the earlier of the two shifts, so there's
 // nothing left to approve. Runs opportunistically whenever trades are
 // listed (both CSR and admin dashboards poll this route).
-async function autoDeclineExpiredTradesUnthrottled() {
+async function autoDeclineExpiredTrades() {
   const today = todayDateKey();
   const expired = await baseTradeQuery()
     .where('trade_requests.status', 'pending')
@@ -204,18 +192,6 @@ async function autoDeclineExpiredTradesUnthrottled() {
     );
   }
 }
-
-// Expiry is decided by a DATE boundary ("has this shift's day arrived?"), so
-// re-checking it more than a few times an hour changes nothing. It used to
-// run on every single trade fetch - a five-table JOIN executed dozens of
-// times per second once every CSR dashboard was polling it.
-const AUTO_DECLINE_MIN_INTERVAL_MS = 5 * 60 * 1000;
-
-const autoDeclineExpiredTrades = createThrottledTask(
-  autoDeclineExpiredTradesUnthrottled,
-  AUTO_DECLINE_MIN_INTERVAL_MS,
-  'autoDeclineExpiredTrades',
-);
 
 router.get('/', authenticate, async (req: any, res) => {
   try {

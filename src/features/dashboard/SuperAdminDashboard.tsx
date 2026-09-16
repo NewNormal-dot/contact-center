@@ -42,8 +42,6 @@ import apiClient from '../../lib/api-client';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
 import { validatePasswordStrength } from '../../utils/passwordValidation';
-import { POLLING_INTERVALS } from '../../config/polling';
-import { startPolling } from '../../lib/startPolling';
 
 type NewUserFormRow = Partial<CSR> & { formId: string };
 const VALID_LOCATIONS = ['Ulaanbaatar', 'Darkhan'] as const;
@@ -233,16 +231,12 @@ export default function SuperAdminDashboard() {
     fetchLogs();
     fetchNotifications();
 
-    // This ran every 2 seconds and included fetchLogs(), which reads the
-    // audit_logs table - by far the largest and most expensive query in the
-    // app. A superadmin watching the console does not need second-by-second
-    // updates, and polling now pauses entirely while the tab is hidden.
-    const stopPolling = startPolling(() => {
+    const interval = setInterval(() => {
       fetchUsers();
       fetchLogs();
       fetchNotifications();
       setTrainingMaterials(getLocalData('trainingMaterials', []));
-    }, POLLING_INTERVALS.SUPERADMIN);
+    }, 2000);
 
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'users') {
@@ -258,7 +252,7 @@ export default function SuperAdminDashboard() {
 
     window.addEventListener('storage', handleStorageUpdate);
     return () => {
-      stopPolling();
+      clearInterval(interval);
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [profile]);
