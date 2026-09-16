@@ -88,25 +88,11 @@ jobs:
           unzip -l release.zip | grep "node_modules/tsx/dist/cli.mjs"
           unzip -l release.zip | grep "src/database/migrations"
 
-      # Shipped alongside release.zip because the platform does not let the
-      # zip's node_modules reach wwwroot (see the deploy job for the full
-      # story). This copy is pushed straight into wwwroot/node_modules over
-      # Kudu's zip API. Zipped from INSIDE node_modules so its entries are
-      # package directories, which is what extracting into
-      # wwwroot/node_modules/ expects.
-      - name: Package node_modules for the direct refresh
-        run: |
-          rm -f node_modules.zip
-          (cd node_modules && zip -rq ../node_modules.zip .)
-          ls -lh node_modules.zip
-
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: |
-            release.zip
-            node_modules.zip
+          path: release.zip
 
   deploy:
     runs-on: ubuntu-latest
@@ -150,89 +136,12 @@ jobs:
           slot-name: 'Production'
           package: release.zip
 
-      # --- Root cause of the 2026-09-16 outage; see docs/DEPLOYMENT.md ---
-      #
-      # OneDeploy hands this app to Oryx, which packs node_modules into a
-      # node_modules.tar.gz and leaves wwwroot/node_modules untouched. At
-      # startup the generated script extracts that tarball to /node_modules
-      # and tries to symlink it over wwwroot/node_modules - but the move that
-      # has to happen first always fails, so the symlink misfires and Node
-      # goes on resolving packages from wwwroot/node_modules: a real
-      # directory frozen at 2026-06-07. Every deploy since June has run
-      # June's packages. It stayed invisible until a dependency was added, at
-      # which point the app died with ERR_MODULE_NOT_FOUND and served 503s.
-      #
-      # Two things were tried and did NOT work, both verified on the running
-      # instance rather than assumed:
-      #   - SCM_DO_BUILD_DURING_DEPLOYMENT=false: it was already false. That
-      #     setting governs building from source, not this packing step.
-      #   - Deleting oryx-manifest.toml and node_modules.tar.gz before the
-      #     deploy: the deploy recreates both, seconds later.
-      #
-      # So rather than fight the platform for control of node_modules, this
-      # writes the correct packages straight into the directory the app
-      # actually reads. Kudu's zip API extracts into wwwroot/node_modules,
-      # overwriting what is there.
-      #
-      # This ordering is deliberate: it runs AFTER the deploy (which is what
-      # re-freezes things) and BEFORE the health check, and the restart at
-      # the end is what makes Node pick the new packages up.
-      #
-      # It is also the safest shape available here. It only adds and
-      # overwrites files in a directory the app already uses, so the failure
-      # mode is "nothing changed" - it can never leave the app with no
-      # modules at all, which is the trap that stopped us removing
-      # wwwroot/node_modules outright (/node_modules was observed EMPTY on a
-      # running instance).
-      - name: Refresh wwwroot/node_modules with the packages we actually built
-        continue-on-error: true
-        run: |
-          set -u
-          if [ ! -s node_modules.zip ]; then
-            echo "node_modules.zip missing from the artifact; skipping."
-            exit 0
-          fi
-          ls -lh node_modules.zip
-
-          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
-          SCM=$(az webapp show --name contact-center-app --resource-group "$RG" \
-            --query "enabledHostNames[?contains(@, '.scm.')] | [0]" -o tsv)
-          if [ -z "${SCM:-}" ]; then
-            echo "Could not resolve the SCM hostname; skipping."
-            exit 0
-          fi
-          echo "SCM host: $SCM"
-
-          CREDS=$(az webapp deployment list-publishing-credentials \
-            --name contact-center-app --resource-group "$RG" -o json)
-          SCM_USER=$(echo "$CREDS" | jq -r '.publishingUserName')
-          SCM_PASS=$(echo "$CREDS" | jq -r '.publishingPassword')
-          echo "::add-mask::$SCM_PASS"
-          if [ -z "$SCM_USER" ] || [ "$SCM_USER" = "null" ]; then
-            echo "No publishing credentials returned (SCM basic auth may be off); skipping."
-            exit 0
-          fi
-
-          echo "Uploading node_modules into wwwroot/node_modules (this takes a few minutes)..."
-          CODE=$(curl -sS -o /tmp/zipput.log -w '%{http_code}' --max-time 900 \
-            -X PUT -u "$SCM_USER:$SCM_PASS" \
-            -H "Content-Type: application/zip" \
-            --data-binary @node_modules.zip \
-            "https://$SCM/api/zip/site/wwwroot/node_modules/" || true)
-          echo "PUT /api/zip/site/wwwroot/node_modules/ -> HTTP ${CODE:-000}"
-          head -c 2000 /tmp/zipput.log 2>/dev/null || true
-          echo
-
-          case "${CODE:-000}" in
-            2*)
-              echo "Upload accepted. Restarting so Node picks the packages up..."
-              az webapp restart --name contact-center-app --resource-group "$RG" --output none
-              echo "Restart requested."
-              ;;
-            *)
-              echo "::warning title=node_modules refresh failed::Kudu returned HTTP ${CODE:-000}. The app keeps running on whatever it had before - see docs/DEPLOYMENT.md."
-              ;;
-          esac
+      # NOTE: wwwroot/node_modules on this instance is frozen at 2026-06-07 and
+      # the deploy does not refresh it, so a NEWLY ADDED npm dependency is
+      # missing at runtime and the app dies on startup. Three fixes have been
+      # tried and none worked; docs/DEPLOYMENT.md records exactly what was
+      # attempted and what the remaining candidate is. Read it before adding a
+      # dependency - and before trying a fourth idea here.
 
       # "Successfully deployed" only means the files arrived. It says nothing
       # about whether the process actually started. On 2026-09-16 a deploy

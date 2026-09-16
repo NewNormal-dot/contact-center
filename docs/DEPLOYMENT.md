@@ -5,15 +5,20 @@ deployed — and **always** before adding an npm dependency.
 
 ## The short version
 
-Adding an npm dependency used to pass CI, deploy "successfully", and then take
-the site down with a 503 — because the instance ignored the `node_modules` this
-workflow ships and ran a copy frozen at 2026-06-07. That happened on
-2026-09-16; the site was down for roughly two hours.
+**This app cannot currently take on a new runtime npm dependency.** Adding one
+passes CI, deploys "successfully", and then takes the site down with a 503,
+because the instance ignores the `node_modules` this workflow ships and runs a
+copy frozen at 2026-06-07. That happened on 2026-09-16; the site was down for
+roughly two hours.
 
-[The fix](#the-fix) pushes the packages we build straight into the directory
-the app reads. Before adding a dependency, check that a deploy has gone green
-since: the workflow warns on any `dependencies` change and fails outright if
-the app does not come back up.
+Three fixes have been attempted and none worked — see
+[Three things that did NOT work](#three-things-that-did-not-work) before trying
+a fourth. [The remaining candidate](#the-remaining-candidate) needs one
+read-only SSH check first.
+
+Two guardrails are in place so this can no longer be silent: the workflow warns
+on any `dependencies` change, and fails the run if the app does not answer
+`/api/health` after a deploy.
 
 ## How the app is deployed
 
@@ -84,18 +89,21 @@ That last point matters: the obvious fix — delete `wwwroot/node_modules` so th
 symlink to `/node_modules` takes effect — would have left the app with **no
 modules at all**. Do not do it without checking `/node_modules` first.
 
-## Two things that did NOT work
+## Three things that did NOT work
 
-Recorded because they look obviously right and both cost a deploy to disprove.
-Basic tier has **no deployment slot**, so every attempt is tested in production.
+**This is still unfixed.** All three attempts are recorded because each looks
+obviously right, and each cost a production deploy to disprove — Basic tier has
+**no deployment slot**, so there is nowhere else to test. Every one was shaped
+so its worst case was "nothing changes", and that held: none of them caused an
+outage. None of them fixed anything either.
 
-**`SCM_DO_BUILD_DURING_DEPLOYMENT=false`** — it was *already* `false`. That
+**1. `SCM_DO_BUILD_DURING_DEPLOYMENT=false`** — it was *already* `false`. That
 setting governs building from source; it does not stop Oryx packing
 `node_modules` into a tarball.
 
-**Deleting `oryx-manifest.toml` and `node_modules.tar.gz` before the deploy** —
-both were deleted successfully (Kudu returned HTTP 200), and the deploy
-recreated both about three minutes later:
+**2. Deleting `oryx-manifest.toml` and `node_modules.tar.gz` before the
+deploy** — both deleted cleanly, and the deploy recreated both three minutes
+later while `node_modules` itself was never touched:
 
 ```
 08:04:14  DELETE oryx-manifest.toml   -> HTTP 200
@@ -107,53 +115,55 @@ recreated both about three minutes later:
           drwxrwxrwx         0 2026-09-16 06:30 node_modules          <- untouched
 ```
 
-Neither attempt harmed the app — both were shaped so that the worst case was
-"nothing changes" — but neither fixed it either.
+**3. Pushing `node_modules` straight into `wwwroot` over Kudu's zip API** —
+zipping the pruned `node_modules` (461 packages, 137 MB) and
+`PUT /api/zip/site/wwwroot/node_modules/`. Kudu accepted the upload for three
+minutes and then answered **HTTP 400 with an empty body**, so there is no
+reason to go on. Removed again: it added three wasted minutes and a spurious
+warning to every deploy.
 
-## The fix
+## The remaining candidate
 
-Stop fighting the platform for control of `node_modules`, and write the correct
-packages straight into the directory the app actually reads.
+Removing **`wwwroot/_del_node_modules`**.
 
-The build job zips the pruned `node_modules` separately. After the deploy, the
-deploy job pushes that zip into `wwwroot/node_modules` over Kudu's zip API
-(`PUT /api/zip/site/wwwroot/node_modules/`) and restarts the app so Node picks
-the packages up.
+The startup script's swap fails at exactly one line:
 
-The ordering matters: it runs **after** the deploy, because the deploy is what
-re-freezes things, and **before** the health check, so a mistake here still
-turns the run red.
+```
+mv: cannot move 'node_modules' to '_del_node_modules/node_modules': Permission denied
+```
 
-This shape was chosen over the alternatives because of its failure mode. It
-only adds and overwrites files in a directory the app already uses, so when it
-fails, nothing changes — the app keeps running exactly as it did. That is what
-ruled out the tempting alternative of deleting `wwwroot/node_modules` so the
-platform's own symlink could take over: `/node_modules` was observed **empty**
-on a running instance, so that path can leave the app with no modules at all.
+It fails *because `_del_node_modules` already exists* — an empty directory
+dated 2026-06-06. With a destination directory present, `mv` means "move
+into it" rather than "rename to it". Remove it and `mv` becomes a plain rename,
+which should succeed; `ln -sfn /node_modules ./node_modules` then lands
+correctly and the app picks up the freshly extracted tarball, which **is**
+current (123 MB, rewritten on every deploy).
 
-The step is `continue-on-error: true` for the same reason: it must never be why
-a deploy fails.
+### Why it has not been done
 
-### Cost
+`/node_modules` was observed **empty** on a running instance. If it is empty at
+the moment the swap succeeds, the app is left with no modules at all.
 
-The upload is ~137 MB and adds a few minutes to each deploy. A worthwhile
-future improvement: write a marker file holding a hash of `package-lock.json`
-next to `node_modules` and skip the upload when it still matches, so only
-deploys that actually change dependencies pay the cost.
+One read-only command over SSH settles it (Kudu → **SSH — Application**):
 
-### Still untried, if this ever stops being enough
+```bash
+ls /node_modules | wc -l
+```
+
+- **~460** → `/node_modules` is populated; removing `_del_node_modules` is safe:
+  `rm -rf /home/site/wwwroot/_del_node_modules`, then restart from the portal.
+- **0** → do not do it. The app would be left with nothing.
+
+Recovery if it goes wrong: `mkdir /home/site/wwwroot/_del_node_modules` over
+SSH plus a restart. Roughly two minutes.
+
+### Other untried options
 
 - **An explicit startup command**, bypassing the generated script.
 - **`az webapp deploy --clean true`**, which empties `wwwroot` before
   extracting. Safe here only because the app writes nothing to disk — no
   uploads, no logs, no SQLite in production (verified: no `multer` disk storage
   and no `writeFileSync`/`createWriteStream` anywhere in `src/`).
-- **Removing `wwwroot/_del_node_modules`.** The startup script fails at
-  `mv -f node_modules _del_node_modules` precisely because that directory
-  already exists (empty, dated 2026-06-06), so the move becomes "into" it
-  rather than a rename. Delete it and the platform's own swap would likely
-  work. Carries the `/node_modules`-is-empty risk above; recovery is
-  `mkdir /home/site/wwwroot/_del_node_modules` over SSH plus a restart.
 
 ## Verifying it worked
 
@@ -176,8 +186,7 @@ ls /home/site/wwwroot/node_modules | wc -l
 - **The workflow warns loudly when `dependencies` change**, pointing here.
 
 Neither guardrail prevents the breakage — they make it immediate and obvious.
-[The fix](#the-fix) is what removes the trap; the guardrails are what catch the
-next surprise nobody predicted.
+They are, for now, the whole of the protection: the trap itself is still there.
 
 ## Database migrations
 
