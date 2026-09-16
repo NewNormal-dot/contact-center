@@ -5,12 +5,14 @@ deployed — and **always** before adding an npm dependency.
 
 ## The short version
 
-**This app cannot currently take on a new runtime npm dependency.** Adding one
-passes CI, deploys "successfully", and then takes the site down with a 503.
-This happened on 2026-09-16 and the site was down for roughly two hours.
+Adding an npm dependency used to pass CI, deploy "successfully", and then take
+the site down with a 503 — because the instance ignored the `node_modules` this
+workflow ships and ran a copy frozen at 2026-06-07. That happened on
+2026-09-16; the site was down for roughly two hours.
 
-If you need a new package, fix the underlying problem first (see
-[Fixing it properly](#fixing-it-properly)). Do not just add it and hope.
+[The fix](#the-fix) is in place. Before adding a dependency, check that a
+deploy has gone green since — the workflow warns on any `dependencies` change
+and fails outright if the app does not come back up.
 
 ## How the app is deployed
 
@@ -81,25 +83,57 @@ That last point matters: the obvious fix — delete `wwwroot/node_modules` so th
 symlink to `/node_modules` takes effect — would have left the app with **no
 modules at all**. Do not do it without checking `/node_modules` first.
 
-## Fixing it properly
+## The fix
 
-Not yet done. Any of these could work; none has been verified, and the app runs
-on Basic tier, which has **no deployment slot**, so there is nowhere to test but
-production. Pick a quiet window and have a rollback ready.
+Applied in two deliberate stages, because Basic tier has **no deployment slot**
+— there is nowhere to test but production.
 
-1. **Turn off the Oryx build on deploy** — set `SCM_DO_BUILD_DURING_DEPLOYMENT=false`
-   so the zip's `node_modules` is used verbatim and no tarball is produced.
-   Probably the cleanest fix.
-2. **Clear the stale state** — remove `wwwroot/node_modules`,
-   `wwwroot/node_modules.tar.gz`, `wwwroot/oryx-manifest.toml` and
-   `wwwroot/_del_node_modules`, then redeploy. Verify `/node_modules` is
-   populated *before* removing `wwwroot/node_modules`.
-3. **Set an explicit startup command** so the generated script is bypassed.
+### Stage 1 — stop the platform from substituting its own node_modules
 
-Whichever you choose, prove it worked by adding one small dependency
-(`compression` is the obvious candidate — it buys roughly a 3x reduction on the
-~2 MB JS bundle and on the schedule JSON) and confirming `/api/health` still
-answers after the deploy.
+Two steps in the deploy job, before the deploy itself:
+
+1. **`SCM_DO_BUILD_DURING_DEPLOYMENT=false`.** This workflow already runs
+   `npm ci`, builds, and prunes to production dependencies, so a second
+   server-side build is pure duplication — and it is the thing that diverts
+   `node_modules` into a tarball. With it off, the zip (node_modules included)
+   is deployed as-is and no new tarball or manifest is produced.
+2. **Delete the leftovers** (`oryx-manifest.toml`, `node_modules.tar.gz`) from
+   `wwwroot` over the Kudu VFS API. While the manifest is there, the generated
+   startup script keeps taking the tar.gz path on every cold start.
+
+Stage 1 cannot break the app, which is why it went first. Every way it can fail
+lands back on today's behaviour:
+
+| If… | Then… |
+|---|---|
+| the cleanup call fails | manifest stays, startup behaves exactly as before |
+| the manifest is gone | startup uses `wwwroot/node_modules`, which the deploy now keeps current |
+| the deploy still does not refresh `node_modules` | June's packages remain — which is what is running today anyway |
+
+The cleanup step is `continue-on-error: true` for the same reason: it must
+never be why a deploy fails.
+
+### Stage 2 — prove it
+
+Re-add `compression` (a ~3x reduction on the ~2 MB JS bundle and on the
+schedule JSON) as its own small commit. If the deploy stays green and
+`/api/health` answers, the trap is gone and dependencies can be added normally
+again. If it goes red, the health gate catches it within five minutes and
+`git revert` restores the previous commit — which is exactly how the original
+outage should have been handled.
+
+### If Stage 1 turns out not to be enough
+
+Still-untried options:
+
+- **Set an explicit startup command** so the generated script is bypassed.
+- **Deploy with `az webapp deploy --clean true`**, which empties `wwwroot`
+  before extracting. Safe here only because the app writes nothing to disk —
+  no uploads, no logs, no SQLite in production (verified: no `multer` disk
+  storage and no `writeFileSync`/`createWriteStream` anywhere in `src/`).
+- **Delete `wwwroot/node_modules` outright.** Note the trap: `/node_modules`
+  was observed **empty** on the running instance, so doing this without
+  checking first would leave the app with no modules at all.
 
 ## Guardrails now in place
 
@@ -108,8 +142,9 @@ answers after the deploy.
   now a red run within minutes, not a silent outage someone reports hours later.
 - **The workflow warns loudly when `dependencies` change**, pointing here.
 
-Neither guardrail prevents the breakage — they only make it immediate and
-obvious. The fix above is what actually removes the trap.
+Neither guardrail prevents the breakage — they make it immediate and obvious.
+[The fix](#the-fix) is what removes the trap; the guardrails are what catch the
+next surprise nobody predicted.
 
 ## Database migrations
 

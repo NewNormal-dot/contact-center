@@ -129,6 +129,79 @@ jobs:
           echo "--- Always On AFTER ---"
           az webapp config show --name contact-center-app --resource-group "$RG" --query "alwaysOn" -o tsv
 
+      # --- Root cause of the 2026-09-16 outage; see docs/DEPLOYMENT.md ---
+      #
+      # This instance ran in Oryx "compressed node_modules" mode: on every
+      # start it extracted a node_modules.tar.gz into /node_modules and tried
+      # to symlink that over wwwroot/node_modules. The symlink step always
+      # failed (it could not move the existing directory aside), so the app
+      # kept resolving packages from wwwroot/node_modules - a real directory
+      # frozen at 2026-06-07 that the deployment never managed to replace.
+      # Every deploy since June therefore ran June's packages. That stayed
+      # invisible until a dependency was added, at which point the app died
+      # on startup with ERR_MODULE_NOT_FOUND and the site returned 503.
+      #
+      # This workflow already installs, builds and prunes node_modules
+      # itself, so the platform has no reason to build anything server-side.
+      # Turning that off means the zip - node_modules included - is deployed
+      # as-is, and no new tarball or manifest is produced.
+      - name: Deploy our node_modules verbatim (no server-side Oryx build)
+        run: |
+          set -u
+          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
+          CURRENT=$(az webapp config appsettings list \
+            --name contact-center-app --resource-group "$RG" \
+            --query "[?name=='SCM_DO_BUILD_DURING_DEPLOYMENT'].value" -o tsv)
+          echo "SCM_DO_BUILD_DURING_DEPLOYMENT is currently: '${CURRENT:-<unset>}'"
+          if [ "${CURRENT:-}" = "false" ]; then
+            echo "Already correct, nothing to do."
+          else
+            az webapp config appsettings set \
+              --name contact-center-app --resource-group "$RG" \
+              --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false --output none
+            echo "Set SCM_DO_BUILD_DURING_DEPLOYMENT=false"
+          fi
+
+      # Best-effort removal of the leftovers from the old build mode. While
+      # oryx-manifest.toml is present, the generated startup script keeps
+      # taking the tar.gz path: it extracts ~123 MB on every cold start and
+      # re-creates the stray symlink. Removing it makes startup use
+      # wwwroot/node_modules directly, which the step above now keeps current.
+      #
+      # continue-on-error is deliberate: if this does not work we are simply
+      # back to the behaviour we already have today, so it must never be the
+      # reason a deploy fails.
+      - name: Remove stale Oryx build artifacts from wwwroot
+        continue-on-error: true
+        run: |
+          set -u
+          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
+          SCM=$(az webapp show --name contact-center-app --resource-group "$RG" \
+            --query "enabledHostNames[?contains(@, '.scm.')] | [0]" -o tsv)
+          if [ -z "${SCM:-}" ]; then
+            echo "Could not resolve the SCM hostname; skipping cleanup."
+            exit 0
+          fi
+          echo "SCM host: $SCM"
+
+          CREDS=$(az webapp deployment list-publishing-credentials \
+            --name contact-center-app --resource-group "$RG" -o json)
+          SCM_USER=$(echo "$CREDS" | jq -r '.publishingUserName')
+          SCM_PASS=$(echo "$CREDS" | jq -r '.publishingPassword')
+          echo "::add-mask::$SCM_PASS"
+          if [ -z "$SCM_USER" ] || [ "$SCM_USER" = "null" ]; then
+            echo "No publishing credentials returned (SCM basic auth may be off); skipping cleanup."
+            exit 0
+          fi
+
+          for f in oryx-manifest.toml node_modules.tar.gz; do
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+              -u "$SCM_USER:$SCM_PASS" -H "If-Match: *" \
+              "https://$SCM/api/vfs/site/wwwroot/$f" || true)
+            # 200/204 = deleted, 404 = already gone. Both are the desired state.
+            echo "DELETE $f -> HTTP ${CODE:-000}"
+          done
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
