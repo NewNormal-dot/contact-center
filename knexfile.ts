@@ -40,6 +40,17 @@ const config: { [key: string]: Knex.Config } = {
       user: requireEnv('DB_USER'),
       password: requireEnv('DB_PASSWORD'),
       port: Number(process.env.DB_PORT || 1433),
+      // How long a single statement may run before the driver gives up.
+      // Without this the driver's default (15s) applies to every query,
+      // which is too tight for the occasional heavy admin report but far
+      // too loose for the hot per-request queries - a stuck query would
+      // otherwise hold one of the few pool connections hostage while 200
+      // users queue behind it. 30s is a deliberate middle ground.
+      requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT_MS || 30000),
+      // Establishing a brand-new TCP+TLS connection to Azure SQL is much
+      // slower than reusing one, especially when many are opened at once
+      // during a booking rush.
+      connectionTimeout: Number(process.env.DB_CONNECT_TIMEOUT_MS || 30000),
       options: {
         encrypt: true,
         trustServerCertificate: false,
@@ -60,17 +71,42 @@ const config: { [key: string]: Knex.Config } = {
       directory: seedDir,
     },
     pool: {
-      // min: 1 keeps at least one connection to Azure SQL alive at all
-      // times, established when the server starts (not on the first
-      // incoming request). Previously min: 0 meant the very first request
-      // after a deploy/restart had to pay the full cost of a fresh TCP+TLS
+      // min keeps this many connections to Azure SQL alive at all times,
+      // established when the server starts (not on the first incoming
+      // request). Previously min: 0 meant the very first request after a
+      // deploy/restart had to pay the full cost of a fresh TCP+TLS
       // handshake to Azure SQL, which could be slow enough to fail/timeout
       // while later requests (reusing the now-open connection) succeeded
       // instantly - matching the "fails once, then works after refresh"
       // symptom.
-      min: 1,
-      max: 10,
+      min: Number(process.env.DB_POOL_MIN || 2),
+      // max is the single most important concurrency knob here: it caps how
+      // many queries this instance can have in flight at once. Everything
+      // beyond it queues. 10 was too tight for a booking-rush burst (a few
+      // hundred concurrent CSRs), so the default is raised to 20 - still
+      // comfortably inside what a Standard S0 Azure SQL database allows
+      // (S0 permits ~60 concurrent workers / 600 sessions), leaving room
+      // for a second/third App Service instance during a scale-out.
+      max: Number(process.env.DB_POOL_MAX || 20),
+      // Fail fast instead of hanging. knex's default acquire timeout is 60s,
+      // which means that during a burst a request could sit waiting for a
+      // free connection for a full minute - long past the point the user
+      // gave up and hit refresh (creating yet another queued request, making
+      // the pile-up worse). 15s surfaces a real error while the pool is
+      // still recoverable.
+      acquireTimeoutMillis: Number(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS || 15000),
+      createTimeoutMillis: Number(process.env.DB_POOL_CREATE_TIMEOUT_MS || 30000),
+      // Azure SQL (and the load balancer in front of it) silently drops
+      // connections that have been idle for a few minutes. Recycling them
+      // on our side first avoids handing a dead socket to a real request.
+      idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_TIMEOUT_MS || 60000),
+      reapIntervalMillis: 10000,
+      propagateCreateError: false,
     },
+    // Azure SQL routinely returns short-lived "transient" errors during
+    // failover/throttling. Retrying the connection attempt a few times is
+    // the documented way to ride those out instead of surfacing them.
+    acquireConnectionTimeout: Number(process.env.DB_ACQUIRE_CONNECTION_TIMEOUT_MS || 20000),
   },
 };
 

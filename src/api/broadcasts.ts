@@ -5,6 +5,7 @@ import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDateTime } from '../utils/sqlDate';
 import { logAction } from './audit';
 import { captureError } from '../utils/errorLog';
+import { createThrottledTask } from '../utils/throttledTask';
 
 const router = express.Router();
 
@@ -41,10 +42,20 @@ function threeMonthsAgo() {
 
 // Notifications older than 3 months (from today, not from when they were
 // created - so the visible window rolls forward one day at a time) are
-// purged. Runs opportunistically on every fetch instead of a cron job.
-async function purgeOldNotifications() {
-  await db('notifications').where('created_at', '<', threeMonthsAgo()).del();
-}
+// purged. Runs opportunistically on fetch instead of via a cron job, but
+// THROTTLED: this is a DELETE across the whole table and it used to run on
+// literally every notification fetch, from every open dashboard. The window
+// it prunes only moves once a day, so once an hour is ample.
+const PURGE_MIN_INTERVAL_MS = 60 * 60 * 1000;
+
+const purgeOldNotifications = createThrottledTask(
+  async () => {
+    const deleted = await db('notifications').where('created_at', '<', threeMonthsAgo()).del();
+    if (deleted) console.log(`Purged ${deleted} notification(s) older than 3 months`);
+  },
+  PURGE_MIN_INTERVAL_MS,
+  'purgeOldNotifications',
+);
 
 router.get('/notifications', authenticate, async (req: any, res) => {
   const userId = req.user.id;
@@ -83,20 +94,40 @@ router.get('/notifications', authenticate, async (req: any, res) => {
         )
         .orderBy('notifications.created_at', 'desc');
 
-      // Get read receipts for each notification
-      const result = await Promise.all(
-        notifications.map(async (notif: any) => {
-          const readReceipts = await db('notification_read_receipts')
+      // Read receipts used to be fetched with one query PER notification
+      // (an N+1): an admin holding 150 notifications on screen produced 150
+      // extra round-trips to Azure SQL on every single poll. They are now
+      // fetched for all of them at once and grouped in memory, turning that
+      // into exactly one additional query regardless of how many
+      // notifications there are.
+      const notificationIds = notifications.map((n: any) => n.id);
+      const allReceipts = notificationIds.length
+        ? await db('notification_read_receipts')
             .leftJoin('users', 'notification_read_receipts.user_id', '=', 'users.id')
-            .where({ notification_id: notif.id })
-            .select('notification_read_receipts.user_id', 'notification_read_receipts.read_at', 'users.name as user_name');
-          
-          return {
-            ...mapNotification(notif),
-            notification_read_receipts: readReceipts
-          };
-        })
-      );
+            .whereIn('notification_read_receipts.notification_id', notificationIds)
+            .select(
+              'notification_read_receipts.notification_id',
+              'notification_read_receipts.user_id',
+              'notification_read_receipts.read_at',
+              'users.name as user_name',
+            )
+        : [];
+
+      const receiptsByNotificationId = new Map<string, any[]>();
+      for (const receipt of allReceipts as any[]) {
+        const key = String(receipt.notification_id);
+        if (!receiptsByNotificationId.has(key)) receiptsByNotificationId.set(key, []);
+        receiptsByNotificationId.get(key)!.push({
+          user_id: receipt.user_id,
+          read_at: receipt.read_at,
+          user_name: receipt.user_name,
+        });
+      }
+
+      const result = notifications.map((notif: any) => ({
+        ...mapNotification(notif),
+        notification_read_receipts: receiptsByNotificationId.get(String(notif.id)) || [],
+      }));
 
       res.json(result);
     } else {
