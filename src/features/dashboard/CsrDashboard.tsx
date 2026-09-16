@@ -11,6 +11,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import apiClient from '../../lib/api-client';
 import { SHOW_VACATION_FEATURE } from '../../config/features';
 import { validatePasswordStrength } from '../../utils/passwordValidation';
+import { POLLING_INTERVALS } from '../../config/polling';
+import { startPolling } from '../../lib/startPolling';
 
 const WEEKDAYS = ['Ням', 'Даваа', 'Мягмар', 'Лхагва', 'Пүрэв', 'Баасан', 'Бямба'];
 
@@ -1218,13 +1220,22 @@ export default function CsrDashboard() {
     fetchTradeRequests();
     fetchHolidays();
     fetchHourlyLeaveRequests();
-    const interval = setInterval(() => { loadData(); fetchDbSchedule(); }, 2000);
-    const notificationInterval = setInterval(fetchNotifications, 10000);
-    const vacationInterval = setInterval(fetchVacationRequests, 10000);
-    const shiftRuleInterval = setInterval(fetchShiftRules, 5000);
-    const tradeInterval = setInterval(fetchTradeRequests, 5000);
-    const holidayInterval = setInterval(fetchHolidays, 30000);
-    const hourlyLeaveInterval = setInterval(fetchHourlyLeaveRequests, 10000);
+    // Each of these used to be a bare setInterval at 2-10 second intervals,
+    // all of them running whether or not anyone was looking at the tab. See
+    // src/config/polling.ts for why those intervals could not survive a
+    // booking rush, and src/lib/startPolling.ts for what startPolling adds
+    // (pause while hidden, no overlapping runs, staggered start).
+    //
+    // loadData() is deliberately kept separate and fast: it only reads
+    // localStorage, so it costs the server nothing.
+    const stopLocalData = startPolling(loadData, POLLING_INTERVALS.LOCAL_DATA);
+    const stopSchedule = startPolling(fetchDbSchedule, POLLING_INTERVALS.SCHEDULE);
+    const stopNotifications = startPolling(fetchNotifications, POLLING_INTERVALS.NOTIFICATIONS);
+    const stopVacation = startPolling(fetchVacationRequests, POLLING_INTERVALS.REQUESTS);
+    const stopShiftRules = startPolling(fetchShiftRules, POLLING_INTERVALS.RULES);
+    const stopTrades = startPolling(fetchTradeRequests, POLLING_INTERVALS.TRADES);
+    const stopHolidays = startPolling(fetchHolidays, POLLING_INTERVALS.HOLIDAYS);
+    const stopHourlyLeave = startPolling(fetchHourlyLeaveRequests, POLLING_INTERVALS.REQUESTS);
 
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === 'notifications') {
@@ -1234,13 +1245,14 @@ export default function CsrDashboard() {
 
     window.addEventListener('storage', handleStorageUpdate);
     return () => {
-      clearInterval(interval);
-      clearInterval(notificationInterval);
-      clearInterval(vacationInterval);
-      clearInterval(shiftRuleInterval);
-      clearInterval(tradeInterval);
-      clearInterval(holidayInterval);
-      clearInterval(hourlyLeaveInterval);
+      stopLocalData();
+      stopSchedule();
+      stopNotifications();
+      stopVacation();
+      stopShiftRules();
+      stopTrades();
+      stopHolidays();
+      stopHourlyLeave();
       window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);

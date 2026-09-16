@@ -113,10 +113,27 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 8080;
 
+  // Azure App Service terminates TLS and forwards the request over plain
+  // HTTP, so without this Express reports every client as the proxy itself:
+  // req.ip and req.protocol are wrong, and anything keyed on the client
+  // address (the login rate limiter) would lump every user together.
+  app.set('trust proxy', true);
+
   // Basic security and middleware
   app.use(helmet({
     contentSecurityPolicy: false,
   }));
+
+  // NOTE: there is deliberately NO gzip middleware here, and adding one is
+  // not as simple as it looks. This App Service instance starts from a
+  // leftover Oryx `node_modules.tar.gz` in wwwroot rather than from the
+  // node_modules this repo's workflow actually ships, so a newly added npm
+  // package is present in package.json and in the deployment zip but STILL
+  // missing at runtime - the process then dies on startup with
+  // ERR_MODULE_NOT_FOUND and the site returns 503. Until that deployment
+  // quirk is fixed, this app cannot take on any new runtime dependency.
+  // (Everything else in this file uses only packages already installed.)
+
   app.use(cors());
   // Default express.json() limit is 100kb, which is too small for bulk
   // schedule operations - e.g. creating/editing shifts across many selected
@@ -163,7 +180,21 @@ async function startServer() {
   } else {
     // Serve static files in production
     const distPath = path.join(__dirname, "dist");
-    app.use(express.static(distPath));
+
+    // Vite fingerprints every file it emits into dist/assets (app.4f2a1c.js),
+    // so those files can never change behind a given URL and are safe to
+    // cache in the browser forever. Without this the browser re-validated
+    // every asset on every page load - hundreds of extra requests to the
+    // server when a shift of CSRs all open the app at once.
+    app.use('/assets', express.static(path.join(distPath, 'assets'), {
+      immutable: true,
+      maxAge: '1y',
+    }));
+
+    // Everything else (index.html above all) must always be revalidated,
+    // otherwise a deploy would not reach users still holding a cached page.
+    app.use(express.static(distPath, { etag: true, maxAge: 0 }));
+
     app.get("*", (req, res) => {
       // Avoid falling back to index.html for API routes
       if (req.path.startsWith('/api')) {

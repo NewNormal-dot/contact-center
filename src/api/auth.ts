@@ -2,7 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import db from '../database/db';
+import db, { withDbRetry } from '../database/db';
 import { authenticate } from '../middleware/auth';
 import { logAction } from './audit';
 import { getJwtSecret } from '../utils/jwtSecret';
@@ -175,7 +175,15 @@ router.post('/login', loginRateLimiter, async (req, res) => {
   }
 
   try {
-    const user = await db('users').where({ email }).first();
+    // Everyone logs in within the same couple of minutes when booking opens,
+    // which is exactly when Azure SQL is most likely to answer a connection
+    // with a transient throttling error. Without a retry that surfaces as
+    // "Дотоод алдаа гарлаа" on the login screen for something that would
+    // have worked on the next attempt.
+    const user = await withDbRetry(
+      () => db('users').where({ email }).first(),
+      { label: 'POST /api/auth/login' },
+    );
     if (!user || user.status === 'inactive') {
       return res.status(401).json({ error: 'Бүртгэлгүй эсвэл идэвхгүй хэрэглэгч' });
     }
