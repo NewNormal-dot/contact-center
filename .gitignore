@@ -8,3 +8,9 @@ coverage/
 !.env.example
 database.sqlite
 database.sqlite.corrupt-backup
+
+# Deployment packages built by the workflow (and by anyone reproducing it
+# locally). node_modules.zip in particular is ~137 MB.
+release.zip
+node_modules.zip
+release/

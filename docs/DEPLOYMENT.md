@@ -10,9 +10,10 @@ the site down with a 503 — because the instance ignored the `node_modules` thi
 workflow ships and ran a copy frozen at 2026-06-07. That happened on
 2026-09-16; the site was down for roughly two hours.
 
-[The fix](#the-fix) is in place. Before adding a dependency, check that a
-deploy has gone green since — the workflow warns on any `dependencies` change
-and fails outright if the app does not come back up.
+[The fix](#the-fix) pushes the packages we build straight into the directory
+the app reads. Before adding a dependency, check that a deploy has gone green
+since: the workflow warns on any `dependencies` change and fails outright if
+the app does not come back up.
 
 ## How the app is deployed
 
@@ -83,57 +84,89 @@ That last point matters: the obvious fix — delete `wwwroot/node_modules` so th
 symlink to `/node_modules` takes effect — would have left the app with **no
 modules at all**. Do not do it without checking `/node_modules` first.
 
+## Two things that did NOT work
+
+Recorded because they look obviously right and both cost a deploy to disprove.
+Basic tier has **no deployment slot**, so every attempt is tested in production.
+
+**`SCM_DO_BUILD_DURING_DEPLOYMENT=false`** — it was *already* `false`. That
+setting governs building from source; it does not stop Oryx packing
+`node_modules` into a tarball.
+
+**Deleting `oryx-manifest.toml` and `node_modules.tar.gz` before the deploy** —
+both were deleted successfully (Kudu returned HTTP 200), and the deploy
+recreated both about three minutes later:
+
+```
+08:04:14  DELETE oryx-manifest.toml   -> HTTP 200
+08:04:14  DELETE node_modules.tar.gz  -> HTTP 200
+08:04:14  deploy starts
+08:07:49  deploy ends
+          -rwxrwxrwx 122973394 2026-09-16 08:07 node_modules.tar.gz   <- back
+          -rwxrwxrwx        48 2026-09-16 08:07 oryx-manifest.toml    <- back
+          drwxrwxrwx         0 2026-09-16 06:30 node_modules          <- untouched
+```
+
+Neither attempt harmed the app — both were shaped so that the worst case was
+"nothing changes" — but neither fixed it either.
+
 ## The fix
 
-Applied in two deliberate stages, because Basic tier has **no deployment slot**
-— there is nowhere to test but production.
+Stop fighting the platform for control of `node_modules`, and write the correct
+packages straight into the directory the app actually reads.
 
-### Stage 1 — stop the platform from substituting its own node_modules
+The build job zips the pruned `node_modules` separately. After the deploy, the
+deploy job pushes that zip into `wwwroot/node_modules` over Kudu's zip API
+(`PUT /api/zip/site/wwwroot/node_modules/`) and restarts the app so Node picks
+the packages up.
 
-Two steps in the deploy job, before the deploy itself:
+The ordering matters: it runs **after** the deploy, because the deploy is what
+re-freezes things, and **before** the health check, so a mistake here still
+turns the run red.
 
-1. **`SCM_DO_BUILD_DURING_DEPLOYMENT=false`.** This workflow already runs
-   `npm ci`, builds, and prunes to production dependencies, so a second
-   server-side build is pure duplication — and it is the thing that diverts
-   `node_modules` into a tarball. With it off, the zip (node_modules included)
-   is deployed as-is and no new tarball or manifest is produced.
-2. **Delete the leftovers** (`oryx-manifest.toml`, `node_modules.tar.gz`) from
-   `wwwroot` over the Kudu VFS API. While the manifest is there, the generated
-   startup script keeps taking the tar.gz path on every cold start.
+This shape was chosen over the alternatives because of its failure mode. It
+only adds and overwrites files in a directory the app already uses, so when it
+fails, nothing changes — the app keeps running exactly as it did. That is what
+ruled out the tempting alternative of deleting `wwwroot/node_modules` so the
+platform's own symlink could take over: `/node_modules` was observed **empty**
+on a running instance, so that path can leave the app with no modules at all.
 
-Stage 1 cannot break the app, which is why it went first. Every way it can fail
-lands back on today's behaviour:
+The step is `continue-on-error: true` for the same reason: it must never be why
+a deploy fails.
 
-| If… | Then… |
-|---|---|
-| the cleanup call fails | manifest stays, startup behaves exactly as before |
-| the manifest is gone | startup uses `wwwroot/node_modules`, which the deploy now keeps current |
-| the deploy still does not refresh `node_modules` | June's packages remain — which is what is running today anyway |
+### Cost
 
-The cleanup step is `continue-on-error: true` for the same reason: it must
-never be why a deploy fails.
+The upload is ~137 MB and adds a few minutes to each deploy. A worthwhile
+future improvement: write a marker file holding a hash of `package-lock.json`
+next to `node_modules` and skip the upload when it still matches, so only
+deploys that actually change dependencies pay the cost.
 
-### Stage 2 — prove it
+### Still untried, if this ever stops being enough
 
-Re-add `compression` (a ~3x reduction on the ~2 MB JS bundle and on the
-schedule JSON) as its own small commit. If the deploy stays green and
-`/api/health` answers, the trap is gone and dependencies can be added normally
-again. If it goes red, the health gate catches it within five minutes and
-`git revert` restores the previous commit — which is exactly how the original
-outage should have been handled.
+- **An explicit startup command**, bypassing the generated script.
+- **`az webapp deploy --clean true`**, which empties `wwwroot` before
+  extracting. Safe here only because the app writes nothing to disk — no
+  uploads, no logs, no SQLite in production (verified: no `multer` disk storage
+  and no `writeFileSync`/`createWriteStream` anywhere in `src/`).
+- **Removing `wwwroot/_del_node_modules`.** The startup script fails at
+  `mv -f node_modules _del_node_modules` precisely because that directory
+  already exists (empty, dated 2026-06-06), so the move becomes "into" it
+  rather than a rename. Delete it and the platform's own swap would likely
+  work. Carries the `/node_modules`-is-empty risk above; recovery is
+  `mkdir /home/site/wwwroot/_del_node_modules` over SSH plus a restart.
 
-### If Stage 1 turns out not to be enough
+## Verifying it worked
 
-Still-untried options:
+Over SSH (Kudu → **SSH — Application**, not *SSH — Kudu*; the Kudu container
+shares `/home` but not `/node_modules`, which is why `/node_modules` looks
+empty there):
 
-- **Set an explicit startup command** so the generated script is bypassed.
-- **Deploy with `az webapp deploy --clean true`**, which empties `wwwroot`
-  before extracting. Safe here only because the app writes nothing to disk —
-  no uploads, no logs, no SQLite in production (verified: no `multer` disk
-  storage and no `writeFileSync`/`createWriteStream` anywhere in `src/`).
-- **Delete `wwwroot/node_modules` outright.** Note the trap: `/node_modules`
-  was observed **empty** on the running instance, so doing this without
-  checking first would leave the app with no modules at all.
+```bash
+ls -la --time-style=long-iso /home/site/wwwroot/ | grep -E 'node_modules|oryx'
+ls /home/site/wwwroot/node_modules | wc -l
+```
+
+`node_modules` should carry **today's** date, not 2026-06-07.
 
 ## Guardrails now in place
 
