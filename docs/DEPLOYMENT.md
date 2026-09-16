@@ -11,10 +11,12 @@ because the instance ignores the `node_modules` this workflow ships and runs a
 copy frozen at 2026-06-07. That happened on 2026-09-16; the site was down for
 roughly two hours.
 
-Three fixes have been attempted and none worked — see
-[Three things that did NOT work](#three-things-that-did-not-work) before trying
-a fourth. [The remaining candidate](#the-remaining-candidate) needs one
-read-only SSH check first.
+Four fixes have been attempted or evaluated and none worked. Read
+[Three things that did NOT work](#three-things-that-did-not-work) and
+[the last candidate](#4-the-last-candidate--checked-and-ruled-out) before
+spending a deploy on a fifth idea — and see
+[Where this leaves things](#where-this-leaves-things) for what would actually
+unblock it.
 
 Two guardrails are in place so this can no longer be silent: the workflow warns
 on any `dependencies` change, and fails the run if the app does not answer
@@ -122,9 +124,9 @@ minutes and then answered **HTTP 400 with an empty body**, so there is no
 reason to go on. Removed again: it added three wasted minutes and a spurious
 warning to every deploy.
 
-## The remaining candidate
+## 4. The last candidate — checked, and ruled out
 
-Removing **`wwwroot/_del_node_modules`**.
+Removing **`wwwroot/_del_node_modules`**. Do not do this.
 
 The startup script's swap fails at exactly one line:
 
@@ -139,31 +141,50 @@ which should succeed; `ln -sfn /node_modules ./node_modules` then lands
 correctly and the app picks up the freshly extracted tarball, which **is**
 current (123 MB, rewritten on every deploy).
 
-### Why it has not been done
+### Why not
 
-`/node_modules` was observed **empty** on a running instance. If it is empty at
-the moment the swap succeeds, the app is left with no modules at all.
+The whole idea depends on `/node_modules` being populated, because that is what
+the app would be pointed at once the swap works. It is not. Checked on the app
+container (Kudu → **SSH — Application**, 2026-09-16):
 
-One read-only command over SSH settles it (Kudu → **SSH — Application**):
-
-```bash
-ls /node_modules | wc -l
+```
+root@5e8289cfc534:/home# ls /node_modules | wc -l
+0
 ```
 
-- **~460** → `/node_modules` is populated; removing `_del_node_modules` is safe:
-  `rm -rf /home/site/wwwroot/_del_node_modules`, then restart from the portal.
-- **0** → do not do it. The app would be left with nothing.
+Empty. So removing `_del_node_modules` would let the swap succeed, move the
+working (if stale) `wwwroot/node_modules` out of the way, and point the app at
+nothing. The site would go down completely.
 
-Recovery if it goes wrong: `mkdir /home/site/wwwroot/_del_node_modules` over
-SSH plus a restart. Roughly two minutes.
+This also resolves the contradiction that ran through this whole
+investigation: the startup log clearly shows a 25-second extraction of the
+123 MB tarball, yet `/node_modules` is empty every time it is looked at. The
+extraction does not reach the filesystem the app process reads. Which means
+`node_modules.tar.gz` being rewritten on every deploy is irrelevant — its
+contents never get used. `wwwroot/node_modules`, frozen at 2026-06-07, is the
+only thing that has ever mattered.
 
-### Other untried options
+If you try this anyway, recovery is `mkdir /home/site/wwwroot/_del_node_modules`
+over SSH plus a restart — about two minutes.
 
-- **An explicit startup command**, bypassing the generated script.
-- **`az webapp deploy --clean true`**, which empties `wwwroot` before
-  extracting. Safe here only because the app writes nothing to disk — no
-  uploads, no logs, no SQLite in production (verified: no `multer` disk storage
-  and no `writeFileSync`/`createWriteStream` anywhere in `src/`).
+## Where this leaves things
+
+Every avenue reachable from the repo has been tried or ruled out. The two that
+remain — an explicit startup command, and `az webapp deploy --clean true`
+(which empties `wwwroot` before extracting; safe from a data standpoint, since
+the app writes nothing to disk: no `multer` disk storage, no
+`writeFileSync`/`createWriteStream` anywhere in `src/`) — share the same
+failure mode as the one above. If they do not work, the app is left with no
+modules, and there is no slot to find that out on.
+
+**The real unblock is a deployment slot.** Basic tier has none. Standard (S1,
+~$58/month against B1's ~$12) provides one: every idea here could then be tried
+on the slot, verified, and swapped into production with no downtime and no
+guessing. That is a spending decision, not a technical one — worth making only
+if new npm dependencies actually become necessary.
+
+Until then: the app runs fine, and the guardrails make sure a repeat cannot go
+unnoticed. Just do not add a dependency.
 
 ## Verifying it worked
 
