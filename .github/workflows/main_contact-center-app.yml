@@ -14,6 +14,42 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need the previous commit so the dependency check below can diff
+          # package.json against it.
+          fetch-depth: 2
+
+      - name: Warn if runtime dependencies changed
+        run: |
+          if ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+            echo "No parent commit available; skipping dependency check."
+            exit 0
+          fi
+          git show HEAD~1:package.json > /tmp/pkg-before.json 2>/dev/null || echo '{}' > /tmp/pkg-before.json
+          node -e '
+            const fs = require("fs");
+            const keys = (f) => {
+              try { return Object.keys(JSON.parse(fs.readFileSync(f, "utf8")).dependencies || {}); }
+              catch { return []; }
+            };
+            const before = keys("/tmp/pkg-before.json");
+            const after = keys("package.json");
+            const added = after.filter((d) => !before.includes(d));
+            const removed = before.filter((d) => !after.includes(d));
+            if (!added.length && !removed.length) {
+              console.log("No runtime dependency changes.");
+              process.exit(0);
+            }
+            if (added.length) console.log("Added:   " + added.join(", "));
+            if (removed.length) console.log("Removed: " + removed.join(", "));
+            if (added.length) {
+              console.log("::warning title=Runtime dependency added::" + added.join(", ") +
+                " - this App Service starts from a stale wwwroot/node_modules and IGNORES the" +
+                " node_modules this workflow ships, so a newly added package is missing at" +
+                " runtime and the app exits with ERR_MODULE_NOT_FOUND (site returns 503)." +
+                " Read docs/DEPLOYMENT.md before merging this.");
+            }
+          '
 
       - name: Set up Node.js version
         uses: actions/setup-node@v4
@@ -99,3 +135,38 @@ jobs:
           app-name: 'contact-center-app'
           slot-name: 'Production'
           package: release.zip
+
+      # "Successfully deployed" only means the files arrived. It says nothing
+      # about whether the process actually started. On 2026-09-16 a deploy
+      # reported success while the app was crash-looping on startup, and the
+      # outage was only noticed hours later. This step closes that gap: if the
+      # app does not answer /api/health, the run goes red within minutes.
+      - name: Verify the app actually came back up
+        run: |
+          set -u
+          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
+          HOST=$(az webapp show --name contact-center-app --resource-group "$RG" --query defaultHostName -o tsv)
+          URL="https://${HOST}/api/health"
+          echo "Polling ${URL} for up to 5 minutes..."
+
+          for i in $(seq 1 30); do
+            # Clear the body file first, so a failure never reports a stale
+            # body left over from an earlier attempt as if it were current.
+            rm -f /tmp/health.json
+            # curl already prints 000 to stdout when it cannot connect, so use
+            # `|| true` rather than appending another 000 to it.
+            CODE=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$URL" 2>/dev/null || true)
+            CODE=${CODE:-000}
+            if [ "$CODE" = "200" ]; then
+              echo "App is healthy after ~$((i * 10))s:"
+              cat /tmp/health.json; echo
+              exit 0
+            fi
+            echo "[$i/30] HTTP ${CODE} - not healthy yet, retrying in 10s"
+            sleep 10
+          done
+
+          echo "Last response body (if any):"
+          if [ -s /tmp/health.json ]; then cat /tmp/health.json; echo; else echo "(no response body - the app did not answer at all)"; fi
+          echo "::error title=Deploy did not come up::The package deployed but ${URL} never returned 200 within 5 minutes. The app is very likely crash-looping - check Log stream (Azure Portal -> contact-center-app -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
+          exit 1
