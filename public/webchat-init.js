@@ -28,7 +28,7 @@
       w.WebChat.init({
         url: 'https://chat.agents.mn/o/OeXh0hjz4uxU4moJ',
         base_url: 'https://chat.agents.mn',
-        channel_id: 392
+        channel_id: 224
       });
     }
   };
