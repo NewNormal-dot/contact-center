@@ -370,6 +370,14 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     const receiverBooking = await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' }).first();
     if (!senderBooking || !receiverBooking) throw new Error('Bookings are no longer available');
 
+    // slot_bookings carries UNIQUE(slot_id, user_id) and cancelling is a soft
+    // delete, so either CSR may still own a leftover cancelled row for the
+    // slot we are about to move them onto. Without clearing it first the
+    // swap below fails the constraint and the whole trade 500s. See the same
+    // fix in bookHandler (src/api/slots.ts).
+    await clearLeftoverBooking(trx, senderNewSlot.id, trade.sender_id, senderBooking.id);
+    await clearLeftoverBooking(trx, receiverNewSlot.id, trade.receiver_id, receiverBooking.id);
+
     await trx('slot_bookings').where({ id: senderBooking.id }).update({ slot_id: senderNewSlot.id, booked_at: trx.fn.now() });
     await trx('slot_bookings').where({ id: receiverBooking.id }).update({ slot_id: receiverNewSlot.id, booked_at: trx.fn.now() });
 
@@ -409,6 +417,19 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     res.status(500).json({ error: 'Trade хүсэлтэд хариу өгөхөд алдаа гарлаа' });
   }
 });
+
+/**
+ * Removes a non-confirmed (cancelled) slot_bookings row that would collide
+ * with UNIQUE(slot_id, user_id) when `keepBookingId` is moved onto `slotId`.
+ */
+async function clearLeftoverBooking(trx: any, slotId: string, userId: string | null, keepBookingId: string) {
+  if (!userId) return;
+  await trx('slot_bookings')
+    .where({ slot_id: slotId, user_id: userId })
+    .whereNot({ id: keepBookingId })
+    .whereNot({ status: 'confirmed' })
+    .delete();
+}
 
 async function findOrCreateAdjustedSlot(trx: any, baseSlot: any, targetDate: string, keepDuration: number, anchor: 'start' | 'end') {
   const location = normalizeLocation(baseSlot.location);

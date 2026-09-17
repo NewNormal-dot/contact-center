@@ -963,9 +963,48 @@ const bookHandler = async (req: any, res: any) => {
         return { status: 400, error: 'Орон тоо дүүрсэн байна' };
       }
 
+      // slot_bookings carries UNIQUE(slot_id, user_id), and cancelling is a
+      // SOFT delete (the row stays behind with status='cancelled', see
+      // cancelHandler). So a user who cancels a shift still owns a row for
+      // that (slot, user) pair. Inserting a fresh row - or moving another
+      // booking onto that slot - therefore violated the unique constraint
+      // and surfaced as a bare 500 "Захиалга хийхэд алдаа гарлаа": a CSR
+      // could never retake a shift they had cancelled.
+      //
+      // The fix is to treat that leftover row as what it is - this user's
+      // booking record for this slot - and revive it instead of creating a
+      // second one.
+      const leftoverForTargetSlot = await trx('slot_bookings')
+        .where({ slot_id, user_id: userId })
+        .whereNot({ status: 'confirmed' })
+        .first();
+
       if (currentBooking) {
-        await trx('slot_bookings').where({ id: currentBooking.id }).update({ slot_id, booked_at: db.fn.now(), status: 'confirmed' });
+        // Moving an existing booking onto this slot. Any leftover cancelled
+        // row for the target slot would collide with the update below, and
+        // is pure history we are about to supersede.
+        if (leftoverForTargetSlot && leftoverForTargetSlot.id !== currentBooking.id) {
+          await trx('slot_bookings').where({ id: leftoverForTargetSlot.id }).delete();
+        }
+        await trx('slot_bookings').where({ id: currentBooking.id }).update({
+          slot_id,
+          booked_at: db.fn.now(),
+          status: 'confirmed',
+          // Refresh the snapshot so a renamed user stays correct on the row.
+          user_name: user.name,
+          user_code: user.code,
+        });
         return { id: currentBooking.id, edited: true };
+      }
+
+      if (leftoverForTargetSlot) {
+        await trx('slot_bookings').where({ id: leftoverForTargetSlot.id }).update({
+          booked_at: db.fn.now(),
+          status: 'confirmed',
+          user_name: user.name,
+          user_code: user.code,
+        });
+        return { id: leftoverForTargetSlot.id, created: true };
       }
 
       const id = uuidv4();
