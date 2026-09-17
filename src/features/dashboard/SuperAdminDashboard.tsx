@@ -186,9 +186,7 @@ export default function SuperAdminDashboard() {
   const fetchNotifications = async () => {
     try {
       const response = await apiClient.get('/broadcasts/notifications');
-      const localNotifications: Notification[] = getLocalData('notifications', []);
       const notificationsData: Notification[] = response.data.map((n: any) => {
-        const localMatch = localNotifications.find(local => String(local.id) === String(n.id));
         return {
         id: n.id,
         title: n.title,
@@ -199,17 +197,24 @@ export default function SuperAdminDashboard() {
         authorId: n.author_id || n.authorId,
         authorName: n.author_name || n.authorName || 'Unknown',
         type: n.type || 'general',
-        seenBy: localMatch?.seenBy?.length ? localMatch.seenBy : n.notification_read_receipts ? n.notification_read_receipts.map((r: any) => ({
-          userId: r.user_id,
-          userName: r.user_name || 'Unknown',
-          seenAt: r.read_at
-        })) : (n.readAt ? [{ userId: profile?.id, userName: profile?.name, seenAt: n.readAt }] : [])
+        // The server's notification_read_receipts is the ONLY authoritative
+        // record of who opened a notification. This used to prefer a
+        // localStorage copy, which markNotificationAsRead had stuffed with a
+        // single synthetic entry whose userId was the literal string
+        // 'superadmin' - so the moment a superadmin opened a notification the
+        // "who has seen it" report collapsed to that one fake row.
+        seenBy: Array.isArray(n.notification_read_receipts)
+          ? n.notification_read_receipts.map((r: any) => ({
+              userId: r.user_id,
+              userName: r.user_name || 'Unknown',
+              seenAt: r.read_at
+            }))
+          : (n.readAt ? [{ userId: profile?.id, userName: profile?.name, seenAt: n.readAt }] : [])
       };
       });
-      const localOnly = localNotifications.filter(local => (
-        !notificationsData.some(remote => String(remote.id) === String(local.id))
-      ));
-      setNotifications([...notificationsData, ...localOnly]);
+      // Everything the superadmin sends now goes through the API, so there
+      // are no "local only" notifications left to merge in.
+      setNotifications(notificationsData);
     } catch (error) {
       console.error('Error fetching notifications:', error);
       setNotifications(getLocalData('notifications', []));
@@ -289,7 +294,7 @@ export default function SuperAdminDashboard() {
   const [isAddingNotification, setIsAddingNotification] = useState(false);
   const [isUploadingBulk, setIsUploadingBulk] = useState(false);
 
-  const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => s.userId === 'superadmin')).length;
+  const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => String(s.userId) === String(profile?.id))).length;
   const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === 'superadmin')).length;
 
   const markMaterialAsRead = (materialId: string) => {
@@ -322,20 +327,22 @@ export default function SuperAdminDashboard() {
   };
 
   const markNotificationAsRead = async (notifId: string) => {
+    if (!profile?.id) return;
     try {
       await apiClient.post('/broadcasts/notifications/read', {
         notification_id: notifId,
       });
       const notification = notifications.find(n => n.id === notifId);
       if (notification) {
-        const seenBy = notification.seenBy?.some(seen => String(seen.userId) === 'superadmin')
+        // Record the REAL user id so it matches the server-side receipt the
+        // next fetch brings back.
+        const seenBy = notification.seenBy?.some(seen => String(seen.userId) === String(profile.id))
           ? notification.seenBy
           : [...(notification.seenBy || []), {
-              userId: 'superadmin',
-              userName: profile?.name || 'Super Admin',
+              userId: profile.id,
+              userName: profile.name || 'Super Admin',
               seenAt: new Date().toISOString()
             }];
-        updateLocalItem('notifications', notifId, { seenBy });
         setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, seenBy } : n));
         setShowSeenDetails(prev => (
           prev?.id === notifId ? { ...prev, seenBy } as any : prev
@@ -870,7 +877,6 @@ export default function SuperAdminDashboard() {
         type: newNotification.type || 'general',
         seenBy: []
       };
-      addLocalItem('notifications', notification);
       setShowSeenDetails(notification);
       logAction('Notification Sent', `Sent ${newNotification.type} notification: ${newNotification.title}`);
       setIsAddingNotification(false);

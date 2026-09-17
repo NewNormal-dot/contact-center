@@ -1116,7 +1116,18 @@ export default function AdminDashboard() {
     tradeRequestId: raw.relatedEntityType === 'trade_requests' || raw.related_entity_type === 'trade_requests'
       ? (raw.relatedEntityId || raw.related_entity_id)
       : raw.tradeRequestId,
-    seenBy: [],
+    // GET /broadcasts/notifications returns the real read receipts for
+    // admins (notification_read_receipts, one row per user who opened it).
+    // This used to be hardcoded to [], which threw them away - so the
+    // "who has seen this" report marked EVERY employee as Үзээгүй and the
+    // unseen export returned the entire roster.
+    seenBy: Array.isArray(raw.notification_read_receipts)
+      ? raw.notification_read_receipts.map((receipt: any) => ({
+          userId: receipt.user_id || receipt.userId,
+          userName: receipt.user_name || receipt.userName || 'Unknown',
+          seenAt: receipt.read_at || receipt.readAt,
+        }))
+      : [],
   } as Notification);
 
   const fetchNotificationsFromDb = async () => {
@@ -1308,6 +1319,28 @@ export default function AdminDashboard() {
       fetchShiftRules().catch(() => undefined);
     }, POLLING_INTERVALS.REQUESTS);
 
+    // Notifications had NO timed refresh at all: they were only re-read on
+    // mount, on a cross-tab `storage` event, or when this browser's own
+    // localStorage happened to change. A new leave-request alert therefore
+    // reached an admin only after a manual page reload - "the page doesn't
+    // update / it only works after refresh".
+    const stopNotificationPoll = startPolling(
+      () => fetchNotificationsFromDb().catch(() => undefined),
+      POLLING_INTERVALS.NOTIFICATIONS,
+    );
+
+    // Employee roster, segments and holidays were likewise fetched once at
+    // mount, so another admin's changes never appeared.
+    const stopReferenceDataPoll = startPolling(() => {
+      fetchCsrUsers().catch(() => undefined);
+      fetchSegmentsFromDb().catch(() => undefined);
+    }, POLLING_INTERVALS.SUPERADMIN);
+
+    const stopHolidayPoll = startPolling(
+      () => fetchHolidaysFromDb().catch(() => undefined),
+      POLLING_INTERVALS.HOLIDAYS,
+    );
+
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === "notifications") {
         fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
@@ -1322,6 +1355,9 @@ export default function AdminDashboard() {
       clearInterval(interval);
       stopSchedulePoll();
       stopApiRefresh();
+      stopNotificationPoll();
+      stopReferenceDataPoll();
+      stopHolidayPoll();
       window.removeEventListener("storage", handleStorageUpdate);
       if (waveSlotSaveTimerRef.current) {
         window.clearTimeout(waveSlotSaveTimerRef.current);
@@ -1873,32 +1909,45 @@ export default function AdminDashboard() {
     logAction("Material Deleted", `Deleted material with ID: ${id}`);
   };
 
-  const handleSendNotification = (e: React.FormEvent) => {
+  const handleSendNotification = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newNotification.title && newNotification.content) {
-      const notification: Notification = {
-        id: Math.random().toString(36).substr(2, 9),
+    if (!newNotification.title || !newNotification.content) return;
+
+    // This used to write ONLY to localStorage. No CSR ever received the
+    // notification, and the 5-second local-data poll below refetched from
+    // the database and wiped it off the admin's own screen a moment later -
+    // the "I sent it and it disappeared" report. The endpoint has always
+    // existed; SuperAdminDashboard already used it.
+    try {
+      await apiClient.post("/broadcasts/notifications", {
         title: newNotification.title,
         content: newNotification.content,
-        type: newNotification.type as any,
         deadline: newNotification.deadline || "",
-        createdAt: new Date().toISOString(),
-        authorId: "admin",
-        authorName: "Admin",
-        seenBy: [],
-      };
-      const updatedNotifications = addLocalItem("notifications", notification);
-      setNotifications(updatedNotifications);
-      setShowSeenDetails(notification);
+        type: newNotification.type || "general",
+      });
+
+      const refreshed = await fetchNotificationsFromDb();
+      const created = refreshed.find(
+        (item: Notification) =>
+          item.title === newNotification.title &&
+          item.content === newNotification.content,
+      );
+      if (created) setShowSeenDetails(created);
+
       logAction(
         "Notification Sent",
-        `Sent notification: ${notification.title}`,
+        `Sent notification: ${newNotification.title}`,
       );
       setNewNotification({
         type: "general",
         deadline: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
       });
       setNotifSubTab("inbox");
+    } catch (error: any) {
+      console.error("Error sending notification:", error);
+      alert(
+        error.response?.data?.error || "Мэдэгдэл илгээхэд алдаа гарлаа.",
+      );
     }
   };
 
@@ -1923,31 +1972,49 @@ export default function AdminDashboard() {
     }
   };
 
-  const markNotificationAsRead = (id: string) => {
+  const markNotificationAsRead = async (id: string) => {
+    if (!profile?.id) return;
     const n = notifications.find((notif) => notif.id === id);
-    if (n && !n.seenBy?.some((s) => s.userId === "admin")) {
+    if (!n || n.seenBy?.some((s) => s.userId === profile.id)) return;
+
+    // Read state belongs in notification_read_receipts, not localStorage -
+    // the previous version recorded the literal string "admin" as the user
+    // id in a per-browser copy, so it never matched a real receipt.
+    try {
+      await apiClient.post("/broadcasts/notifications/read", {
+        notification_id: id,
+      });
       const seenBy = [
         ...(n.seenBy || []),
         {
-          userId: "admin",
-          userName: "Admin",
+          userId: profile.id,
+          userName: profile.name || "Admin",
           seenAt: new Date().toISOString(),
         },
       ];
-      const updatedNotifications = updateLocalItem("notifications", id, {
-        seenBy,
-      });
-      setNotifications(updatedNotifications);
+      setNotifications((prev) =>
+        prev.map((notif) => (notif.id === id ? { ...notif, seenBy } : notif)),
+      );
       setShowSeenDetails((prev) =>
         prev?.id === id ? ({ ...prev, seenBy } as any) : prev,
       );
+    } catch (error) {
+      console.error("Error marking notification as read:", error);
     }
   };
 
-  const handleDeleteNotification = (id: string) => {
-    const updatedNotifications = deleteLocalItem("notifications", id);
-    setNotifications(updatedNotifications);
-    logAction("Notification Deleted", `Deleted notification: ${id}`);
+  const handleDeleteNotification = async (id: string) => {
+    // Was localStorage-only, so the notification came straight back on the
+    // next fetch and was never removed for anybody else.
+    try {
+      await apiClient.delete(`/broadcasts/notifications/${id}`);
+      setNotifications((prev) => prev.filter((notif) => notif.id !== id));
+      setShowSeenDetails((prev) => (prev?.id === id ? null : prev));
+      logAction("Notification Deleted", `Deleted notification: ${id}`);
+    } catch (error: any) {
+      console.error("Error deleting notification:", error);
+      alert(error.response?.data?.error || "Мэдэгдэл устгахад алдаа гарлаа.");
+    }
   };
 
   const handleDeleteUser = async (id: string) => {
