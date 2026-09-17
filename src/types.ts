@@ -211,7 +211,10 @@ export interface TrainingMaterial {
 }
 
 export interface VacationQuota {
-  month: string;
+  /** Month of the year, 1-12. Was previously a "YYYY-MM" string, but the
+   *  admin UI that sets the quota offers twelve months and no year picker,
+   *  so a year in this field was never populated by anything. */
+  month: number;
   limit: number;
 }
 

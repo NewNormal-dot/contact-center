@@ -976,6 +976,38 @@ export default function CsrDashboard() {
     };
   };
 
+  // The per-month vacation cap, set by an admin. Read-only here.
+  const fetchVacationQuotas = async () => {
+    try {
+      const response = await apiClient.get('/settings/vacation-quotas');
+      const rows = Array.isArray(response.data) ? response.data : [];
+      setVacationQuotas(
+        rows
+          .map((row: any) => ({ month: Number(row?.month), limit: Number(row?.limit) }))
+          .filter(
+            (q: VacationQuota) =>
+              Number.isInteger(q.month) && q.month >= 1 && q.month <= 12 && Number.isFinite(q.limit),
+          ),
+      );
+    } catch (error) {
+      console.error('Error fetching vacation quotas:', error);
+      // Leave whatever is already loaded in place; getVacationLimit falls
+      // back to the default for any month with no quota.
+    }
+  };
+
+  // A month with no configured quota falls back to the same default the
+  // admin UI shows for an untouched month, so the two sides agree.
+  const DEFAULT_VACATION_LIMIT = 5;
+  const getVacationLimit = React.useCallback(
+    (monthKey: string) => {
+      const month = Number(String(monthKey).slice(5, 7));
+      const found = vacationQuotas.find((q) => q.month === month);
+      return found ? found.limit : DEFAULT_VACATION_LIMIT;
+    },
+    [vacationQuotas],
+  );
+
   const fetchVacationRequests = async () => {
     if (!csrProfile) return [];
 
@@ -1233,18 +1265,27 @@ export default function CsrDashboard() {
     // (with empty/stale local cache) would show stale or empty data even
     // though the database itself was correct and identical for everyone.
     //
-    // vacationQuotas, csrRestDays and csrSubmittedMonths don't have a DB
-    // table/endpoint yet, so they remain local-only for now (a known
-    // limitation, not something this fix silently papers over).
+    // The vacation quota now comes from the database (fetchVacationQuotas
+    // below). It used to be read here from the localStorage key
+    // 'vacationQuotas' - which NOTHING in the codebase ever wrote, so it was
+    // always [] and every CSR silently fell back to a hardcoded limit of 5
+    // while the admin's own quota control wrote a different key entirely.
+    //
+    // 'csrRestDays' was read here too and used only inside the hash below -
+    // never stored in state, never rendered, and likewise never written. It
+    // has been removed rather than carried forward.
+    //
+    // 'csrSubmittedMonths' remains local-only. Unlike the other two it is
+    // genuinely consumed (it locks a month against further booking), but
+    // nothing anywhere writes it either, so the lock never engages. Giving it
+    // a table would mean designing who may submit a month and whether it can
+    // be reopened - a product decision, not a persistence fix, so it is left
+    // visible here rather than quietly invented.
     const loadData = () => {
-      const allQuotas = getLocalData('vacationQuotas', []);
-      const allRestDays = getLocalData('csrRestDays', {});
       const allSubmitted = getLocalData('csrSubmittedMonths', {});
 
       // Create a hash of the data to prevent unnecessary re-renders
       const dataHash = JSON.stringify({
-        allQuotas,
-        allRestDays,
         allSubmitted,
         profileId: csrProfile.id
       });
@@ -1252,12 +1293,12 @@ export default function CsrDashboard() {
       if (dataHash === lastDataRef.current) return;
       lastDataRef.current = dataHash;
 
-      setVacationQuotas(allQuotas);
       setSubmittedMonths(allSubmitted[csrProfile.id] || []);
     };
 
     loadData();
     fetchNotifications();
+    fetchVacationQuotas();
     fetchVacationRequests();
     fetchShiftRules();
     fetchDbSchedule();
@@ -1283,6 +1324,7 @@ export default function CsrDashboard() {
     const stopShiftRules = startPolling(fetchShiftRules, POLLING_INTERVALS.RULES);
     const stopTrades = startPolling(fetchTradeRequests, POLLING_INTERVALS.TRADES);
     const stopHolidays = startPolling(fetchHolidays, POLLING_INTERVALS.HOLIDAYS);
+    const stopVacationQuotas = startPolling(fetchVacationQuotas, POLLING_INTERVALS.SHARED_SETTINGS);
     const stopHourlyLeave = startPolling(fetchHourlyLeaveRequests, POLLING_INTERVALS.REQUESTS);
 
     const handleStorageUpdate = (event: StorageEvent) => {
@@ -1300,6 +1342,7 @@ export default function CsrDashboard() {
       stopShiftRules();
       stopTrades();
       stopHolidays();
+      stopVacationQuotas();
       stopHourlyLeave();
       window.removeEventListener('storage', handleStorageUpdate);
     };
@@ -2034,11 +2077,11 @@ export default function CsrDashboard() {
     e.preventDefault();
     if (!csrProfile) return;
     
-    const quota = vacationQuotas.find(q => q.month === vacationForm.month);
+    const limit = getVacationLimit(vacationForm.month);
     const currentRequests = vacationRequests.filter(r => r.month === vacationForm.month && r.status === 'approved').length;
 
-    if (quota && currentRequests >= quota.limit) {
-      alert(`${vacationForm.month} сард амралт авах хүний тоо хэтэрсэн байна. (Квот: ${quota.limit})`);
+    if (currentRequests >= limit) {
+      alert(`${vacationForm.month} сард амралт авах хүний тоо хэтэрсэн байна. (Квот: ${limit})`);
       return;
     }
 
@@ -2354,7 +2397,7 @@ export default function CsrDashboard() {
           {months.map(m => {
             const monthStr = `${vacationYear}-${String(m).padStart(2, '0')}`;
             const isPast = vacationYear < currentYear || (vacationYear === currentYear && m < currentMonth);
-            const quota = vacationQuotas.find(q => q.month === monthStr) || { month: monthStr, limit: 5 };
+            const quota = { month: m, limit: getVacationLimit(monthStr) };
             const approved = vacationRequests.filter(r => r.month === monthStr && r.status === 'approved').length;
             const pending = vacationRequests.filter(r => r.month === monthStr && r.status === 'pending').length;
             const totalRequested = approved + pending;
