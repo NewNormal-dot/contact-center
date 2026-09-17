@@ -134,11 +134,15 @@ function mapTrade(row: any) {
 }
 
 function baseTradeQuery(trx: any = db) {
+  // LEFT joins throughout. users.sender_id/receiver_id are set to NULL when
+  // an account is deleted, so inner joins made the whole trade vanish from
+  // every list AND from the /respond lookup - the request simply disappeared
+  // rather than being declined or shown as stale.
   return trx('trade_requests')
-    .join('users as sender', 'trade_requests.sender_id', '=', 'sender.id')
-    .join('users as receiver', 'trade_requests.receiver_id', '=', 'receiver.id')
-    .join('work_slots as sender_slot', 'trade_requests.sender_slot_id', '=', 'sender_slot.id')
-    .join('work_slots as receiver_slot', 'trade_requests.receiver_slot_id', '=', 'receiver_slot.id')
+    .leftJoin('users as sender', 'trade_requests.sender_id', '=', 'sender.id')
+    .leftJoin('users as receiver', 'trade_requests.receiver_id', '=', 'receiver.id')
+    .leftJoin('work_slots as sender_slot', 'trade_requests.sender_slot_id', '=', 'sender_slot.id')
+    .leftJoin('work_slots as receiver_slot', 'trade_requests.receiver_slot_id', '=', 'receiver_slot.id')
     .select(
       'trade_requests.*',
       'sender.name as sender_name',
@@ -162,9 +166,13 @@ function baseTradeQuery(trx: any = db) {
     );
 }
 
+// Mongolia is UTC+8 with no DST; Azure App Service runs in UTC. Deriving
+// "today" from the server's own calendar made it a day BEHIND the user
+// between 00:00 and 08:00 local, so the pending-trade expiry sweep lagged by
+// a day and the client and server disagreed about which dates were past.
+const ULAANBAATAR_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
 function todayDateKey() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return new Date(Date.now() + ULAANBAATAR_UTC_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 // A pending trade that never got a response is auto-declined once either
@@ -274,6 +282,36 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     const receiverSlot = await db('work_slots').where({ id: receiverSlotIdFinal }).first();
     if (!senderSlot || !receiverSlot) return res.status(404).json({ error: 'Солих ээлж олдсонгүй' });
 
+    // The UI only ever offers a same-day swap, but the API accepted any two
+    // slot ids. A hand-crafted request could therefore swap across dates and
+    // leave a CSR holding TWO confirmed bookings on one day, defeating the
+    // one-booking-per-day rule the booking endpoint enforces so carefully.
+    const senderDate = displayDate(senderSlot.date);
+    const receiverDate = displayDate(receiverSlot.date);
+    if (senderDate !== receiverDate) {
+      return res.status(400).json({ error: 'Зөвхөн нэг өдрийн ээлжийг хооронд нь солих боломжтой' });
+    }
+
+    // Swapping a shift that has already started is meaningless.
+    if (senderDate < todayDateKey()) {
+      return res.status(400).json({ error: 'Өнгөрсөн өдрийн ээлж солих боломжгүй' });
+    }
+
+    // Repeatedly pressing send used to create unlimited identical pending
+    // trades, each one notifying the receiver again.
+    const duplicate = await db('trade_requests')
+      .where({
+        sender_id: senderId,
+        receiver_id: receiverIdFinal,
+        sender_slot_id: senderSlotIdFinal,
+        receiver_slot_id: receiverSlotIdFinal,
+        status: 'pending',
+      })
+      .first();
+    if (duplicate) {
+      return res.status(409).json({ error: 'Энэ хүсэлтийг аль хэдийн илгээсэн байна.' });
+    }
+
     const id = uuidv4();
     await db('trade_requests').insert({
       id,
@@ -283,6 +321,14 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
       receiver_slot_id: receiverSlotIdFinal,
       status: 'pending',
     });
+
+    await logAction(
+      senderId,
+      'TRADE_REQUESTED',
+      'trade_requests',
+      id,
+      `${sender.name} -> ${receiver.name} | ${displayDate(senderSlot.date)} ${slotTimeLabel(senderSlot)} <-> ${slotTimeLabel(receiverSlot)}`,
+    );
 
     await createNotification({
       title: 'Ээлж солих хүсэлт ирлээ',
@@ -334,6 +380,13 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
         'Ээлж солих хүсэлт',
         `Хүсэлт илгээгч ${trade.sender_name} ${tradeShiftDesc({ date: trade.sender_date, is_rest: trade.sender_is_rest, start_time: trade.sender_start, end_time: trade.sender_end })} ээлжээрээ ажиллах хэвээр, хүсэлт хүлээн авагч ${trade.receiver_name} ${tradeShiftDesc({ date: trade.receiver_date, is_rest: trade.receiver_is_rest, start_time: trade.receiver_start, end_time: trade.receiver_end })}-тай хуваартайгаа үлдлээ.`,
       );
+      await logAction(
+        req.user.id,
+        'TRADE_DECLINED',
+        'trade_requests',
+        id,
+        `${trade.receiver_name} declined ${trade.sender_name}'s trade`,
+      );
       return res.json({ message: 'Амжилттай хариу илгээлээ' });
     } catch (err) {
       console.error('Respond trade error:', err);
@@ -369,6 +422,16 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     const senderBooking = await trx('slot_bookings').where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id, status: 'confirmed' }).first();
     const receiverBooking = await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' }).first();
     if (!senderBooking || !receiverBooking) throw new Error('Bookings are no longer available');
+
+    // Capacity was never re-checked here, so accepting a trade could push a
+    // shift past its quota - the one invariant the booking endpoint takes a
+    // row lock to protect. Re-check both destinations before moving anyone.
+    const capacityError = await assertCapacityAvailable(trx, senderNewSlot, [senderBooking.id, receiverBooking.id])
+      || await assertCapacityAvailable(trx, receiverNewSlot, [senderBooking.id, receiverBooking.id]);
+    if (capacityError) {
+      await trx.rollback();
+      return res.status(409).json({ error: capacityError });
+    }
 
     // slot_bookings carries UNIQUE(slot_id, user_id) and cancelling is a soft
     // delete, so either CSR may still own a leftover cancelled row for the
@@ -417,6 +480,21 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     res.status(500).json({ error: 'Trade хүсэлтэд хариу өгөхөд алдаа гарлаа' });
   }
 });
+
+/**
+ * Returns an error message when `slot` cannot take one more confirmed
+ * booking, ignoring the rows being moved as part of this swap.
+ */
+async function assertCapacityAvailable(trx: any, slot: any, movingBookingIds: string[]) {
+  const [{ count }] = await trx('slot_bookings')
+    .where({ slot_id: slot.id, status: 'confirmed' })
+    .whereNotIn('id', movingBookingIds)
+    .count('id as count');
+  if (Number(count) + 1 > Number(slot.capacity || 0)) {
+    return `"${displayDate(slot.date)} ${slotTimeLabel(slot)}" ээлжийн орон тоо дүүрсэн тул солих боломжгүй.`;
+  }
+  return null;
+}
 
 /**
  * Removes a non-confirmed (cancelled) slot_bookings row that would collide

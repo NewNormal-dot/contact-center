@@ -33,11 +33,32 @@ export async function sendEmail(payload: EmailPayload): Promise<boolean> {
     headers.Authorization = `Bearer ${process.env.EMAIL_WEBHOOK_SECRET}`;
   }
 
-  const response = await fetch(webhookUrl, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
+  // The webhook is a third-party HTTP call made INSIDE a user-facing write
+  // (POST /api/users creates the account, then awaits this). With no timeout
+  // a slow or hanging webhook outlived the client's 30s axios timeout, so
+  // the admin saw "Хэрэглэгч нэмэхэд алдаа гарлаа" for an employee that had
+  // in fact been created - and retrying then reported "имэйл бүртгэлтэй".
+  // Bulk imports aborted mid-loop for the same reason.
+  const timeoutMs = Number(process.env.EMAIL_WEBHOOK_TIMEOUT_MS || 8000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Email webhook timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
