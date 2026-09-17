@@ -67,6 +67,7 @@ import {
 } from "../../utils/localStorage";
 import apiClient from "../../lib/api-client";
 import { sanitizeRows, sanitizeAoa } from "../../utils/excel";
+import { downscaleImageToDataUrl, validateImageFile } from "../../utils/image";
 import { SHOW_VACATION_FEATURE } from "../../config/features";
 import { validatePasswordStrength } from "../../utils/passwordValidation";
 import {
@@ -611,7 +612,7 @@ type BulkUploadUser = Partial<CSR> & {
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
-  const { logout, profile } = useAuth();
+  const { logout, profile, setProfilePhoto } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const trainingFileRef = useRef<HTMLInputElement>(null);
   const bulkUploadInputRef = useRef<HTMLInputElement>(null);
@@ -1523,19 +1524,26 @@ export default function AdminDashboard() {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // Was a localStorage write to a key nothing reads, so it silently did
+  // nothing. See the same fix in Sidebar.tsx.
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file && profile) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result as string;
-        try {
-          updateLocalItem("users", profile.id, { photoUrl: base64 });
-        } catch (error) {
-          console.error("Error updating admin photo:", error);
-        }
-      };
-      reader.readAsDataURL(file);
+    event.target.value = "";
+    if (!file || !profile) return;
+
+    const invalid = validateImageFile(file);
+    if (invalid) {
+      alert(invalid);
+      return;
+    }
+
+    try {
+      const dataUrl = await downscaleImageToDataUrl(file);
+      const response = await apiClient.post("/users/me/photo", { photo: dataUrl });
+      setProfilePhoto(response.data?.photoUrl || dataUrl);
+    } catch (error: any) {
+      console.error("Error updating admin photo:", error);
+      alert(error.response?.data?.error || "Зураг хадгалахад алдаа гарлаа.");
     }
   };
 

@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../contexts/AuthContext';
 import { SHOW_VACATION_FEATURE } from '../config/features';
-import { updateLocalItem } from '../utils/localStorage';
+import apiClient from '../lib/api-client';
+import { downscaleImageToDataUrl, validateImageFile } from '../utils/image';
 
 interface SidebarProps {
   activeTab?: string;
@@ -28,7 +29,8 @@ export default function Sidebar({
   role = 'csr'
 }: SidebarProps) {
   const navigate = useNavigate();
-  const { profile: authProfile, logout } = useAuth();
+  const { profile: authProfile, logout, setProfilePhoto } = useAuth();
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const profile = authProfile || {
@@ -45,19 +47,31 @@ export default function Sidebar({
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // This used to write the picked file into localStorage under the key
+  // `users` - which AuthContext does not read for photoUrl and which is
+  // empty for a CSR - so choosing a photo did nothing whatsoever, with no
+  // error. It now downscales and uploads it.
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file && authProfile) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result as string;
-        try {
-          updateLocalItem('users', authProfile.id, { photoUrl: base64 });
-        } catch (error) {
-          console.error('Error updating photo:', error);
-        }
-      };
-      reader.readAsDataURL(file);
+    event.target.value = '';
+    if (!file || !authProfile) return;
+
+    const invalid = validateImageFile(file);
+    if (invalid) {
+      alert(invalid);
+      return;
+    }
+
+    setIsUploadingPhoto(true);
+    try {
+      const dataUrl = await downscaleImageToDataUrl(file);
+      const response = await apiClient.post('/users/me/photo', { photo: dataUrl });
+      setProfilePhoto(response.data?.photoUrl || dataUrl);
+    } catch (error: any) {
+      console.error('Error updating photo:', error);
+      alert(error.response?.data?.error || 'Зураг хадгалахад алдаа гарлаа.');
+    } finally {
+      setIsUploadingPhoto(false);
     }
   };
   
@@ -81,7 +95,10 @@ export default function Sidebar({
 
       {/* Profile Section */}
       <div className={`p-6 border-b border-gray-800 flex items-center gap-4 bg-black/20 ${isCollapsed ? 'justify-center' : ''}`}>
-        <div className="relative group cursor-pointer" onClick={handlePhotoClick}>
+        <div
+          className={`relative group ${isUploadingPhoto ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}
+          onClick={isUploadingPhoto ? undefined : handlePhotoClick}
+        >
           <div className={`relative overflow-hidden rounded-full border-2 border-blue-500/50 shadow-lg transition-transform group-hover:scale-105 ${isCollapsed ? 'w-10 h-10' : 'w-14 h-14'}`}>
             <img 
               src={profile.photoUrl} 

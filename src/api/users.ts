@@ -95,6 +95,89 @@ function userSelectColumns(includeLocation: boolean, includeSupervisorName: bool
   ];
 }
 
+async function hasPhotoDataColumn() {
+  return columnExists(db, 'users', 'photo_data');
+}
+
+// A user's own profile, including their avatar. Deliberately separate from
+// the list endpoints: photo_data holds a base64 image and must never be
+// multiplied across a roster response.
+router.get('/me', authenticate, async (req: any, res) => {
+  try {
+    const includePhoto = await hasPhotoDataColumn();
+    const user = await db('users').where({ id: req.user.id }).first();
+    if (!user) return res.status(404).json({ error: 'Хэрэглэгч олдсонгүй' });
+
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      status: user.status,
+      code: user.code,
+      segment: user.segment,
+      lineType: user.segment || DEFAULT_SEGMENTS_BY_ROLE[user.role] || '',
+      employmentType: user.employment_type,
+      location: user.location || '',
+      supervisorName: user.supervisor_name || '',
+      photoUrl: (includePhoto ? user.photo_data : null) || user.photo_url || '',
+    });
+  } catch (err) {
+    console.error('Get own profile error:', err);
+    captureError('users: GET /api/users/me', err);
+    res.status(500).json({ error: 'Алдаа гарлаа' });
+  }
+});
+
+// ~250KB of base64 - comfortably more than the 256px JPEG the client sends,
+// and small enough that it can never become a payload problem.
+const MAX_PHOTO_CHARS = 250_000;
+
+router.post('/me/photo', authenticate, async (req: any, res) => {
+  const photo = String(req.body?.photo ?? '').trim();
+
+  if (!photo) return res.status(400).json({ error: 'Зураг шаардлагатай' });
+  if (!/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(photo)) {
+    return res.status(400).json({ error: 'Зөвхөн зургийн файл (png, jpg, webp, gif) оруулна уу' });
+  }
+  if (photo.length > MAX_PHOTO_CHARS) {
+    return res.status(400).json({ error: 'Зураг хэт том байна. Багасгаад дахин оролдоно уу.' });
+  }
+  if (!(await hasPhotoDataColumn())) {
+    return res.status(503).json({
+      error: 'Зураг хадгалах боломж идэвхжээгүй байна (photo_data migration хийгдээгүй).',
+    });
+  }
+
+  try {
+    await db('users').where({ id: req.user.id }).update({
+      photo_data: photo,
+      updated_at: db.fn.now(),
+    });
+    invalidateAuthUserCache(req.user.id);
+    await logAction(req.user.id, 'UPDATE_PROFILE_PHOTO', 'users', req.user.id, 'Profile photo updated');
+    res.json({ photoUrl: photo });
+  } catch (err) {
+    console.error('Update profile photo error:', err);
+    captureError('users: POST /api/users/me/photo', err);
+    res.status(500).json({ error: 'Зураг хадгалахад алдаа гарлаа' });
+  }
+});
+
+router.delete('/me/photo', authenticate, async (req: any, res) => {
+  try {
+    if (await hasPhotoDataColumn()) {
+      await db('users').where({ id: req.user.id }).update({ photo_data: null, updated_at: db.fn.now() });
+      invalidateAuthUserCache(req.user.id);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete profile photo error:', err);
+    captureError('users: DELETE /api/users/me/photo', err);
+    res.status(500).json({ error: 'Алдаа гарлаа' });
+  }
+});
+
 // Get all users (Superadmin only)
 router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
   try {

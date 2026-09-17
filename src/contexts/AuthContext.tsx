@@ -9,6 +9,8 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
+  /** Applies a freshly uploaded avatar everywhere it is displayed. */
+  setProfilePhoto: (photoUrl: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -17,6 +19,7 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   login: async () => {},
   logout: () => {},
+  setProfilePhoto: () => {},
 });
 
 function normalizeUser(raw: any): User {
@@ -104,6 +107,18 @@ async function hydrateLocalDataForUi(role: string) {
     }
     if (trainingsRes.status === 'fulfilled') {
       localStorage.setItem('trainingMaterials', JSON.stringify((trainingsRes.value.data || []).map(mapTrainingForUi)));
+    }
+
+    // The user's own avatar lives in users.photo_data and is returned only
+    // by /users/me, never by the roster endpoints.
+    try {
+      const meRes = await apiClient.get('/users/me');
+      if (meRes.data?.photoUrl) {
+        const stored = JSON.parse(localStorage.getItem('user') || '{}');
+        localStorage.setItem('user', JSON.stringify({ ...stored, photoUrl: meRes.data.photoUrl }));
+      }
+    } catch {
+      // Non-fatal: the UI falls back to the generated avatar.
     }
 
     if (role === 'superadmin') {
@@ -254,7 +269,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('test_profile');
   };
 
-  const value = useMemo(() => ({ user, profile: user, loading, login, logout }), [user, loading]);
+  const setProfilePhoto = (photoUrl: string) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, photoUrl };
+      try {
+        localStorage.setItem('user', JSON.stringify(next));
+        localStorage.setItem('test_profile', JSON.stringify(next));
+        localStorage.setItem(`${next.role}_profile`, JSON.stringify(next));
+      } catch {
+        // Storage can be unavailable (private mode, blocked site data); the
+        // in-memory update is what matters for the current session.
+      }
+      return next;
+    });
+  };
+
+  const value = useMemo(
+    () => ({ user, profile: user, loading, login, logout, setProfilePhoto }),
+    [user, loading],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
