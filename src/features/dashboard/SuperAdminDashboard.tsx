@@ -39,6 +39,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { CSR, ActivityLog, Notification, TrainingMaterial } from '../../types';
 import { logAction } from '../../utils/logger';
 import apiClient from '../../lib/api-client';
+import { sanitizeRows, sanitizeAoa } from '../../utils/excel';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
 import { validatePasswordStrength } from '../../utils/passwordValidation';
@@ -944,7 +945,7 @@ export default function SuperAdminDashboard() {
       'Цагийн төрөл': getDisplayTimeType(u)
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data, {
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(data), {
       header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Байршил', 'Ахлах', 'Сегмент', 'Цагийн төрөл']
     });
     const wb = XLSX.utils.book_new();
@@ -967,7 +968,7 @@ export default function SuperAdminDashboard() {
       }
     ];
 
-    const ws = XLSX.utils.json_to_sheet(templateRows, {
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(templateRows), {
       header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Байршил', 'Ахлах', 'Сегмент', 'Цагийн төрөл']
     });
     const wb = XLSX.utils.book_new();
@@ -985,7 +986,7 @@ export default function SuperAdminDashboard() {
       'Дэлгэрэнгүй': l.details
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(data));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Activity Logs");
     XLSX.writeFile(wb, "activity_logs.xlsx");
@@ -1048,7 +1049,7 @@ export default function SuperAdminDashboard() {
       'Хугацаа/Огноо'
     ];
 
-    const ws = XLSX.utils.json_to_sheet(rows, { header: headers });
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(rows), { header: headers });
     ws['!cols'] = [
       { wch: 14 },
       { wch: 24 },

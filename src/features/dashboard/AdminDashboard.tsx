@@ -66,6 +66,7 @@ import {
   deleteLocalItem,
 } from "../../utils/localStorage";
 import apiClient from "../../lib/api-client";
+import { sanitizeRows, sanitizeAoa } from "../../utils/excel";
 import { SHOW_VACATION_FEATURE } from "../../config/features";
 import { validatePasswordStrength } from "../../utils/passwordValidation";
 import {
@@ -975,10 +976,12 @@ export default function AdminDashboard() {
       if (waveSlotSaveTimerRef.current || pendingSaveCountRef.current > 0) {
         return dbSchedules;
       }
-      if (Object.keys(dbSchedules).length > 0) {
-        setSchedules(dbSchedules);
-        setLocalData("schedules", dbSchedules);
-      }
+      // Zero rows means "there is no schedule", not "the request failed" -
+      // conflating the two left deleted shifts on screen indefinitely and
+      // let admins act on a schedule the server no longer had. A transport
+      // failure still keeps the previous data, because it throws to catch.
+      setSchedules(dbSchedules);
+      setLocalData("schedules", dbSchedules);
       return dbSchedules;
     } catch (error) {
       console.error("Error fetching DB schedule:", error);
@@ -1700,7 +1703,7 @@ export default function AdminDashboard() {
     });
 
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(rows));
     XLSX.utils.book_append_sheet(wb, ws, "Амралтын хүсэлтүүд");
     XLSX.writeFile(
       wb,
@@ -1772,7 +1775,7 @@ export default function AdminDashboard() {
     }));
 
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(rows));
     XLSX.utils.book_append_sheet(wb, ws, "Ажилтнууд");
     XLSX.writeFile(
       wb,
@@ -1798,7 +1801,7 @@ export default function AdminDashboard() {
       },
     ];
     const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const worksheet = XLSX.utils.json_to_sheet(sanitizeRows(rows));
     XLSX.utils.book_append_sheet(workbook, worksheet, "Employees");
     XLSX.writeFile(workbook, "employee_bulk_upload_template.xlsx");
     logAction(
@@ -2151,7 +2154,7 @@ export default function AdminDashboard() {
       };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(data);
+    const worksheet = XLSX.utils.json_to_sheet(sanitizeRows(data));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Seen Status");
     XLSX.writeFile(workbook, `Notification_Report_${notif.id}.xlsx`);
@@ -2174,7 +2177,7 @@ export default function AdminDashboard() {
       };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(data);
+    const worksheet = XLSX.utils.json_to_sheet(sanitizeRows(data));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Unseen Users");
     XLSX.writeFile(workbook, `Notification_Unseen_${notif.id}.xlsx`);
@@ -4533,7 +4536,7 @@ export default function AdminDashboard() {
         aoa.push(row);
       });
 
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const ws = XLSX.utils.aoa_to_sheet(sanitizeAoa(aoa));
 
       cellComments.forEach((commentText, key) => {
         const [r, c] = key.split(",").map(Number);

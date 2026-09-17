@@ -1083,10 +1083,12 @@ export default function CsrDashboard() {
     try {
       const response = await apiClient.get('/slots');
       const dbSchedule = mapSlotsToSchedule(response.data || []);
-      if (Object.keys(dbSchedule).length > 0) {
-        setSchedule(dbSchedule);
-        return dbSchedule;
-      }
+      // An empty result is a real answer: it means nothing matches this
+      // CSR's segment/employment type/location, which is exactly what
+      // happens after a segment is renamed or deleted. Suppressing it left
+      // stale shifts on screen and hid the problem.
+      setSchedule(dbSchedule);
+      return dbSchedule;
     } catch (error) {
       console.error('Error fetching DB schedule:', error);
     }

@@ -11,6 +11,7 @@ import AdminDashboard from './features/dashboard/AdminDashboard';
 import CsrDashboard from './features/dashboard/CsrDashboard';
 import SuperAdminDashboard from './features/dashboard/SuperAdminDashboard';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: string }) {
   const { user, loading, logout } = useAuth();
@@ -37,16 +38,22 @@ export default function App() {
   }, []);
 
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Login />} />
-          <Route path="/setup-password" element={<SetupPassword />} />
-          <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
-          <Route path="/csr" element={<ProtectedRoute role="csr"><CsrDashboard /></ProtectedRoute>} />
-          <Route path="/superadmin" element={<ProtectedRoute role="superadmin"><SuperAdminDashboard /></ProtectedRoute>} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Login />} />
+            <Route path="/setup-password" element={<SetupPassword />} />
+            <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/csr" element={<ProtectedRoute role="csr"><CsrDashboard /></ProtectedRoute>} />
+            <Route path="/superadmin" element={<ProtectedRoute role="superadmin"><SuperAdminDashboard /></ProtectedRoute>} />
+            {/* There was no catch-all, so any unmatched path - a typo, an old
+                bookmark - rendered an EMPTY <Routes> and the user got a blank
+                white page rather than a redirect or a 404. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
