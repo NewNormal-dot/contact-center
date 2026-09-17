@@ -30,7 +30,7 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000).unref();
 
-function getClientKey(req: Request): string {
+export function getClientKey(req: Request): string {
   // X-Forwarded-For is a CLIENT-CONTROLLED header that the proxy APPENDS to.
   // Taking the FIRST entry therefore took whatever the caller put there,
   // which made the limiter trivially bypassable: send a different

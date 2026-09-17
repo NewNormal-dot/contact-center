@@ -63,6 +63,13 @@ jobs:
       - name: Validate TypeScript
         run: npm run lint
 
+      # Regression tests. These pin behaviour that has broken in production
+      # before - a CSR being unable to re-book a shift they cancelled, and
+      # schedule saves deleting other people's shifts and their confirmed
+      # bookings. A red run here must block the deploy.
+      - name: Run tests
+        run: npm test
+
       - name: Build app
         run: npm run build --if-present
 

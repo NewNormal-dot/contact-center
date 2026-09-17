@@ -3,6 +3,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { getRecentErrors } from '../utils/errorLog';
 import { captureError } from '../utils/errorLog';
+import { tableExists } from '../database/schemaUtils';
 
 const router = express.Router();
 
@@ -57,8 +58,40 @@ router.post('/run-migrations', authenticate, authorize(['superadmin']), async (r
 // and stack traces, so a superadmin can self-diagnose production issues
 // (e.g. "Дотоод алдаа гарлаа" reports) without needing Azure Portal / Log
 // Stream access. Held in memory only - resets on every deploy/restart.
-router.get('/recent-errors', authenticate, authorize(['superadmin']), async (_req, res) => {
-  res.json(getRecentErrors());
+router.get('/recent-errors', authenticate, authorize(['superadmin']), async (req, res) => {
+  // In-memory first (always available, survives a database outage), then the
+  // durable table if the migration has been applied. Before this, the ONLY
+  // record of a server-side error was 30 entries in process memory, cleared
+  // on every restart and deploy - so a complaint from last week could not be
+  // investigated at all.
+  const memory = getRecentErrors();
+
+  try {
+    if (!(await tableExists(db, 'server_errors'))) {
+      return res.json({ source: 'memory', persisted: false, errors: memory });
+    }
+
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+    const stored = await db('server_errors')
+      .orderBy('created_at', 'desc')
+      .limit(limit)
+      .select('id', 'context', 'message', 'stack', 'created_at');
+
+    res.json({
+      source: 'database',
+      persisted: true,
+      errors: stored.map((row: any) => ({
+        timestamp: row.created_at,
+        context: row.context,
+        message: row.message,
+        stack: row.stack,
+      })),
+      recentInMemory: memory,
+    });
+  } catch (err) {
+    console.error('Recent errors lookup failed:', err);
+    res.json({ source: 'memory', persisted: false, errors: memory });
+  }
 });
 
 export default router;
