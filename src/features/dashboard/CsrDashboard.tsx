@@ -1032,6 +1032,7 @@ export default function CsrDashboard() {
         userName: b.userName || b.user_name || 'CSR',
         userCode: b.userCode || b.user_code,
         bookedAt: b.bookedAt || b.booked_at,
+        bookingWaveId: b.bookingWaveId || b.booking_wave_id || null,
       }));
       const shift: Shift = {
         id: String(slot.id),
@@ -1043,14 +1044,26 @@ export default function CsrDashboard() {
         segment: slot.segment || csrProfile.lineType,
         employmentType: slot.employmentType || slot.employment_type || csrProfile.employmentType,
         location: slotLocation,
-        bookingWaves: [{
-          id: 'default',
-          name: 'Нийт захиалах эрх',
-          slotLimit: Number(slot.capacity || 1),
-          bookingOpen,
-          bookingOpenAt,
-          bookingCloseAt,
-        }],
+        // Use the split the admin actually configured, when there is one.
+        // Previously this always collapsed to a single synthetic pool, so a
+        // morning/evening quota could never be shown or respected.
+        bookingWaves: Array.isArray(slot.bookingWaves) && slot.bookingWaves.length > 0
+          ? slot.bookingWaves.map((wave: any, index: number) => ({
+              id: String(wave.id || `wave-${index + 1}`),
+              name: String(wave.name || `Эрх ${index + 1}`),
+              slotLimit: Math.max(0, Number(wave.slotLimit) || 0),
+              bookingOpen: wave.bookingOpen === undefined ? bookingOpen : Boolean(wave.bookingOpen),
+              bookingOpenAt: wave.bookingOpenAt || bookingOpenAt,
+              bookingCloseAt: wave.bookingCloseAt || bookingCloseAt,
+            }))
+          : [{
+              id: 'default',
+              name: 'Нийт захиалах эрх',
+              slotLimit: Number(slot.capacity || 1),
+              bookingOpen,
+              bookingOpenAt,
+              bookingCloseAt,
+            }],
       };
       next[dateKey] = {
         ...(next[dateKey] || { shifts: [] }),

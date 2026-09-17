@@ -553,6 +553,7 @@ const mapDbSlotsToSchedules = (slots: any[] = []) => {
       userName: booking.userName || booking.user_name || 'CSR',
       userCode: booking.userCode || booking.user_code,
       bookedAt: booking.bookedAt || booking.booked_at,
+      bookingWaveId: booking.bookingWaveId || booking.booking_wave_id || null,
     }));
 
     const day = next[dateKey] || {
@@ -591,12 +592,26 @@ const mapDbSlotsToSchedules = (slots: any[] = []) => {
           segment: slot.segment || 'All',
           employmentType: slot.employmentType || slot.employment_type || 'Full Time',
           location: slot.location || 'Ulaanbaatar',
-          bookingWaves: createDefaultBookingWaves(
-            Number(slot.capacity || slot.totalSlots || 1),
-            bookingOpen,
-            bookingOpenAt,
-            bookingCloseAt,
-          ),
+          // The server now persists the admin's split on
+          // work_slots.booking_waves. Regenerating it here on every poll is
+          // precisely what discarded the configuration a few seconds after
+          // it was set. Fall back to the default pair only when nothing has
+          // been configured yet.
+          bookingWaves: Array.isArray(slot.bookingWaves) && slot.bookingWaves.length > 0
+            ? slot.bookingWaves.map((wave: any, index: number) => ({
+                id: String(wave.id || `wave-${index + 1}`),
+                name: String(wave.name || `Эрх ${index + 1}`),
+                slotLimit: Math.max(0, Number(wave.slotLimit) || 0),
+                bookingOpen: Boolean(wave.bookingOpen),
+                bookingOpenAt: wave.bookingOpenAt || '',
+                bookingCloseAt: wave.bookingCloseAt || '',
+              }))
+            : createDefaultBookingWaves(
+                Number(slot.capacity || slot.totalSlots || 1),
+                bookingOpen,
+                bookingOpenAt,
+                bookingCloseAt,
+              ),
         },
       ],
     };
