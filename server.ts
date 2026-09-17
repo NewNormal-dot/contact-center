@@ -19,6 +19,7 @@ import adminRoutes from "./src/api/admin";
 import settingsRoutes from "./src/api/settings";
 import db from "./src/database/db";
 import { captureError } from "./src/utils/errorLog";
+import { getPendingMigrationCount } from "./src/utils/migrationStatus";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -50,22 +51,15 @@ const BUILD_COMMIT = readBuildCommit();
 
 let migrationStatus: "skipped" | "running" | "complete" | "failed" = "skipped";
 let migrationError: string | null = null;
-let pendingMigrationCount: number | null = null;
 
-async function refreshPendingMigrationCount() {
-  try {
-    const [, pending] = await db.migrate.list();
-    pendingMigrationCount = (pending as any[]).length;
-    if (pendingMigrationCount > 0) {
-      console.warn(
-        `WARNING: ${pendingMigrationCount} database migration(s) are NOT applied. ` +
-        `Features depending on them will fail with a generic error. ` +
-        `Apply with POST /api/admin/run-migrations as a superadmin.`,
-      );
-    }
-  } catch (err: any) {
-    pendingMigrationCount = null;
-    console.error('Could not determine pending migrations:', err?.message || err);
+async function warnAboutPendingMigrations() {
+  const pending = await getPendingMigrationCount();
+  if (pending && pending > 0) {
+    console.warn(
+      `WARNING: ${pending} database migration(s) are NOT applied. ` +
+      `Features depending on them will fail with a generic error. ` +
+      `Apply with POST /api/admin/run-migrations as a superadmin.`,
+    );
   }
 }
 
@@ -255,7 +249,11 @@ async function startServer() {
   app.use("/api/settings", settingsRoutes);
 
   // API Health Check
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", async (req, res) => {
+    // Read live (behind a short TTL) rather than from a value frozen at
+    // startup: an operator who has just applied the migrations needs to see
+    // that reflected, not be told they are still pending.
+    const pending = await getPendingMigrationCount();
     res.json({
       status: "ok",
       timestamp: new Date().toISOString(),
@@ -272,7 +270,7 @@ async function startServer() {
         // needed the missing column. Surfacing the pending count here means
         // the drift is visible from the health check instead of being
         // discovered by a user.
-        pending: pendingMigrationCount,
+        pending,
         error: process.env.NODE_ENV === "production" ? undefined : migrationError,
       },
     });
@@ -338,7 +336,7 @@ async function startServer() {
   }
 
   await warmUpDatabaseConnection();
-  await refreshPendingMigrationCount();
+  await warnAboutPendingMigrations();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
