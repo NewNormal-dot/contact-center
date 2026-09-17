@@ -1,4 +1,5 @@
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
@@ -18,28 +19,47 @@ import adminRoutes from "./src/api/admin";
 import settingsRoutes from "./src/api/settings";
 import db from "./src/database/db";
 import { captureError } from "./src/utils/errorLog";
+import { getPendingMigrationCount } from "./src/utils/migrationStatus";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Which build is actually running.
+//
+// The post-deploy health check polls /api/health and passes as soon as it
+// gets a 200 - but App Service needs time to restart into the newly uploaded
+// package, so for the first ~30-60s after a deploy that 200 comes from the
+// PREVIOUS process. Observed on 2026-09-17: the check passed six seconds
+// after upload, against the old build. A deploy that uploads fine and then
+// fails to start is exactly what this guardrail exists to catch, and it
+// would slip straight through unless the app can say which build answered.
+//
+// build-info.json is written into the deployment package by the workflow.
+// Absent (local development, a hand-made deploy) simply means "unknown".
+function readBuildCommit(): string | null {
+  if (process.env.BUILD_SHA) return process.env.BUILD_SHA;
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.commit === "string" && parsed.commit ? parsed.commit : null;
+  } catch {
+    return null;
+  }
+}
+
+const BUILD_COMMIT = readBuildCommit();
+
 let migrationStatus: "skipped" | "running" | "complete" | "failed" = "skipped";
 let migrationError: string | null = null;
-let pendingMigrationCount: number | null = null;
 
-async function refreshPendingMigrationCount() {
-  try {
-    const [, pending] = await db.migrate.list();
-    pendingMigrationCount = (pending as any[]).length;
-    if (pendingMigrationCount > 0) {
-      console.warn(
-        `WARNING: ${pendingMigrationCount} database migration(s) are NOT applied. ` +
-        `Features depending on them will fail with a generic error. ` +
-        `Apply with POST /api/admin/run-migrations as a superadmin.`,
-      );
-    }
-  } catch (err: any) {
-    pendingMigrationCount = null;
-    console.error('Could not determine pending migrations:', err?.message || err);
+async function warnAboutPendingMigrations() {
+  const pending = await getPendingMigrationCount();
+  if (pending && pending > 0) {
+    console.warn(
+      `WARNING: ${pending} database migration(s) are NOT applied. ` +
+      `Features depending on them will fail with a generic error. ` +
+      `Apply with POST /api/admin/run-migrations as a superadmin.`,
+    );
   }
 }
 
@@ -155,9 +175,15 @@ async function startServer() {
         // loader were moved out of index.html into public/*.js precisely so
         // this can stay free of 'unsafe-inline'.
         scriptSrc: ["'self'", 'https://chat.agents.mn'],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        // chat.agents.mn belongs here too. It was allowed for scripts,
+        // images, fonts, connections and frames but NOT stylesheets, so the
+        // widget's own https://chat.agents.mn/css/webchat-styles.css was
+        // blocked in production and it failed to render ("Failed to load
+        // CSS from ... / Error: CSS loading failed").
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://chat.agents.mn'],
         imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://api.dicebear.com', 'https://chat.agents.mn'],
-        mediaSrc: ["'self'", 'data:', 'blob:'],
+        // Same origin, same reason - notification sounds would be blocked.
+        mediaSrc: ["'self'", 'data:', 'blob:', 'https://chat.agents.mn'],
         fontSrc: ["'self'", 'data:', 'https://chat.agents.mn'],
         connectSrc: ["'self'", 'https://chat.agents.mn', 'wss://chat.agents.mn'],
         frameSrc: ["'self'", 'https://chat.agents.mn'],
@@ -223,11 +249,19 @@ async function startServer() {
   app.use("/api/settings", settingsRoutes);
 
   // API Health Check
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", async (req, res) => {
+    // Read live (behind a short TTL) rather than from a value frozen at
+    // startup: an operator who has just applied the migrations needs to see
+    // that reflected, not be told they are still pending.
+    const pending = await getPendingMigrationCount();
     res.json({
       status: "ok",
       timestamp: new Date().toISOString(),
       env: process.env.NODE_ENV,
+      // The deploy workflow polls until this matches the commit it just
+      // shipped, which is what proves the restart actually happened rather
+      // than the old process still answering.
+      commit: BUILD_COMMIT,
       migrations: {
         status: migrationStatus,
         // Production runs with SKIP_DB_MIGRATIONS=true and applies
@@ -236,7 +270,7 @@ async function startServer() {
         // needed the missing column. Surfacing the pending count here means
         // the drift is visible from the health check instead of being
         // discovered by a user.
-        pending: pendingMigrationCount,
+        pending,
         error: process.env.NODE_ENV === "production" ? undefined : migrationError,
       },
     });
@@ -302,11 +336,12 @@ async function startServer() {
   }
 
   await warmUpDatabaseConnection();
-  await refreshPendingMigrationCount();
+  await warnAboutPendingMigrations();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Build: ${BUILD_COMMIT || '(unknown - no build-info.json)'}`);
   });
 }
 

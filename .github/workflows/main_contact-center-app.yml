@@ -95,6 +95,12 @@ jobs:
           mkdir -p release
           cp package.json package-lock.json server.ts knexfile.ts release/
           cp -r dist src node_modules release/
+          # Stamps the package with the commit it was built from. server.ts
+          # reports this at /api/health, and the verify step below polls until
+          # the running app reports THIS sha - which is what proves the app
+          # actually restarted into the new build.
+          printf '{"commit":"%s","builtAt":"%s"}\n' \
+            "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > release/build-info.json
           [ -f tsconfig.json ] && cp tsconfig.json release/
           cd release
           zip -rq ../release.zip .
@@ -102,6 +108,8 @@ jobs:
       - name: Verify deployment package
         if: github.event_name != 'pull_request'
         run: |
+          test -f release/build-info.json
+          grep -q "$GITHUB_SHA" release/build-info.json
           test -f release/node_modules/express/package.json
           test -f release/node_modules/tsx/dist/cli.mjs
           test -d release/src/database/migrations
@@ -181,7 +189,9 @@ jobs:
           RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
           HOST=$(az webapp show --name contact-center-app --resource-group "$RG" --query defaultHostName -o tsv)
           URL="https://${HOST}/api/health"
-          echo "Polling ${URL} for up to 5 minutes..."
+          echo "Polling ${URL} for up to 5 minutes, waiting for commit ${GITHUB_SHA}..."
+
+          SAW_OLD_BUILD=0
 
           for i in $(seq 1 30); do
             # Clear the body file first, so a failure never reports a stale
@@ -191,16 +201,39 @@ jobs:
             # `|| true` rather than appending another 000 to it.
             CODE=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$URL" 2>/dev/null || true)
             CODE=${CODE:-000}
+
             if [ "$CODE" = "200" ]; then
-              echo "App is healthy after ~$((i * 10))s:"
-              cat /tmp/health.json; echo
-              exit 0
+              # A 200 is NOT enough on its own. App Service takes 30-60s to
+              # restart into the uploaded package, so for that window the old
+              # process is still answering - on 2026-09-17 this check passed
+              # six seconds after upload, against the previous build. Wait
+              # until the app reports the commit we just shipped.
+              RUNNING=$(jq -r '.commit // empty' /tmp/health.json 2>/dev/null || true)
+
+              if [ "$RUNNING" = "$GITHUB_SHA" ]; then
+                echo "App is healthy AND running this build after ~$((i * 10))s:"
+                cat /tmp/health.json; echo
+                exit 0
+              fi
+
+              SAW_OLD_BUILD=1
+              if [ -z "$RUNNING" ]; then
+                echo "[$i/30] HTTP 200 but no commit reported - still the pre-build-stamp process, waiting for restart"
+              else
+                echo "[$i/30] HTTP 200 but running ${RUNNING} - waiting for restart into ${GITHUB_SHA}"
+              fi
+            else
+              echo "[$i/30] HTTP ${CODE} - not healthy yet, retrying in 10s"
             fi
-            echo "[$i/30] HTTP ${CODE} - not healthy yet, retrying in 10s"
             sleep 10
           done
 
           echo "Last response body (if any):"
           if [ -s /tmp/health.json ]; then cat /tmp/health.json; echo; else echo "(no response body - the app did not answer at all)"; fi
-          echo "::error title=Deploy did not come up::The package deployed but ${URL} never returned 200 within 5 minutes. The app is very likely crash-looping - check Log stream (Azure Portal -> contact-center-app -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
+
+          if [ "$SAW_OLD_BUILD" = "1" ]; then
+            echo "::error title=Deploy did not take effect::${URL} answers, but never reported commit ${GITHUB_SHA} within 5 minutes. The package uploaded but the app did not restart into it - it is still serving the previous build, or the new one is crash-looping and App Service kept the old process. Check Log stream (Azure Portal -> contact-center-app -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
+          else
+            echo "::error title=Deploy did not come up::The package deployed but ${URL} never returned 200 within 5 minutes. The app is very likely crash-looping - check Log stream (Azure Portal -> contact-center-app -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
+          fi
           exit 1

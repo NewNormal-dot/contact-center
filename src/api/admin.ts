@@ -4,6 +4,7 @@ import { authenticate, authorize } from '../middleware/auth';
 import { getRecentErrors } from '../utils/errorLog';
 import { captureError } from '../utils/errorLog';
 import { tableExists } from '../database/schemaUtils';
+import { invalidatePendingMigrationCount } from '../utils/migrationStatus';
 
 const router = express.Router();
 
@@ -37,6 +38,10 @@ router.get('/migration-status', authenticate, authorize(['superadmin']), async (
 router.post('/run-migrations', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
     const [batchNo, migrationsRun] = await db.migrate.latest();
+    // /api/health caches the pending count; drop it so the operator who just
+    // ran this sees the result immediately instead of being told the
+    // migrations are still outstanding.
+    invalidatePendingMigrationCount();
     console.log(`Manual migration trigger: batch ${batchNo}, ran: ${migrationsRun.join(', ') || '(none - already up to date)'}`);
     res.json({
       success: true,

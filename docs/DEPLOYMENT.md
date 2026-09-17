@@ -201,9 +201,20 @@ ls /home/site/wwwroot/node_modules | wc -l
 
 ## Guardrails now in place
 
-- **The workflow fails if the app does not come back up.** After deploying it
-  polls `/api/health` for up to five minutes. A deploy that kills the process is
-  now a red run within minutes, not a silent outage someone reports hours later.
+- **The workflow fails if the app does not come back up _in the new build_.**
+  After deploying it polls `/api/health` for up to five minutes and waits for
+  the app to report the commit that was just shipped.
+
+  Checking only for HTTP 200 was not enough. App Service needs 30-60s to
+  restart into the uploaded package, so for that window the PREVIOUS process
+  is still answering - on 2026-09-17 the check passed six seconds after
+  upload, against the old build, and said nothing about whether the new one
+  could start. Every deployment package now carries a `build-info.json`
+  stamped with `$GITHUB_SHA`, `server.ts` reports it at `/api/health`, and the
+  verify step waits for a match. The two failure modes are now distinguished
+  in the error message: the app never answered (crash-loop) versus the app
+  answers but never became the new build (the upload landed and the restart
+  did not take).
 - **The workflow warns loudly when `dependencies` change**, pointing here.
 
 Neither guardrail prevents the breakage — they make it immediate and obvious.
