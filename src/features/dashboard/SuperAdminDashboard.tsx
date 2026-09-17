@@ -461,10 +461,13 @@ export default function SuperAdminDashboard() {
     }
 
     try {
-      await apiClient.post('/auth/change-password', {
+      const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: myPasswordForm.old,
         newPassword: myPasswordForm.new,
       });
+      if (passwordResponse.data?.token) {
+        localStorage.setItem('token', passwordResponse.data.token);
+      }
       logAction('Password Changed', `Changed password for ${profile?.name || 'current user'}`);
       alert('Нууц үг амжилттай солигдлоо!');
       setIsChangingMyPassword(false);
@@ -837,10 +840,13 @@ export default function SuperAdminDashboard() {
       return;
     }
     try {
-      await apiClient.post('/auth/change-password', {
+      const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: myPasswordForm.old,
         newPassword: myPasswordForm.new,
       });
+      if (passwordResponse.data?.token) {
+        localStorage.setItem('token', passwordResponse.data.token);
+      }
       logAction('Admin Password Change', 'Super Admin changed their own password');
       setIsChangingMyPassword(false);
       setMyPasswordForm({ old: '', new: '', confirm: '' });

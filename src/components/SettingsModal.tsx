@@ -45,10 +45,13 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       return;
     }
     try {
-      await apiClient.post('/auth/change-password', {
+      const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: passwords.old,
         newPassword: passwords.new
       });
+      if (passwordResponse.data?.token) {
+        localStorage.setItem('token', passwordResponse.data.token);
+      }
       setToast({ message: 'Нууц үг амжилттай солигдлоо', type: 'success' });
       setPasswords({ old: '', new: '', confirm: '' });
       setTimeout(onClose, 2000);

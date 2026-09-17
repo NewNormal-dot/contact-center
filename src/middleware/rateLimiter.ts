@@ -31,10 +31,20 @@ setInterval(() => {
 }, 15 * 60 * 1000).unref();
 
 function getClientKey(req: Request): string {
-  // Prefer a proxy-forwarded IP (Azure App Service sits behind a proxy),
-  // fall back to the raw socket address.
+  // X-Forwarded-For is a CLIENT-CONTROLLED header that the proxy APPENDS to.
+  // Taking the FIRST entry therefore took whatever the caller put there,
+  // which made the limiter trivially bypassable: send a different
+  // X-Forwarded-For on every attempt and each one lands in its own bucket.
+  //
+  // The last entry is the hop closest to us - the one Azure App Service's
+  // front end added - and is the only part a caller cannot forge.
   const forwarded = req.headers['x-forwarded-for'];
-  const ip = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0].trim();
+  const chain = Array.isArray(forwarded) ? forwarded.join(',') : forwarded || '';
+  const hops = chain.split(',').map((hop) => hop.trim()).filter(Boolean);
+  const nearest = hops.length > 0 ? hops[hops.length - 1] : '';
+  // Azure includes a source port ("1.2.3.4:56789"); strip it so every attempt
+  // from one address shares a bucket instead of getting a fresh one.
+  const ip = nearest.replace(/:\d+$/, '');
   return ip || req.socket.remoteAddress || 'unknown';
 }
 
@@ -101,4 +111,25 @@ export const forgotPasswordRateLimiter = rateLimiter({
   max: 5,
   keyPrefix: 'forgot-password',
   message: 'Хэт олон удаа хүсэлт илгээлээ. 15 минутын дараа дахин оролдоно уу.',
+});
+
+// Redeeming a password-setup link had NO limiter, so the 32-byte token could
+// be guessed at unlimited speed. The token space makes that impractical, but
+// an unlimited endpoint that hands out account access should not be the only
+// thing standing in the way.
+export const setupPasswordRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  keyPrefix: 'setup-password',
+  message: 'Хэт олон удаа оролдлоо. 15 минутын дараа дахин оролдоно уу.',
+});
+
+// /auth/confirm-password verifies the CURRENT password of an already
+// authenticated session - i.e. it is a password oracle. It had no limiter at
+// all, so a stolen token could be used to brute-force the password behind it.
+export const confirmPasswordRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyPrefix: 'confirm-password',
+  message: 'Хэт олон удаа оролдлоо. 15 минутын дараа дахин оролдоно уу.',
 });

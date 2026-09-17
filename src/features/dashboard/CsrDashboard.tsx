@@ -1329,10 +1329,13 @@ export default function CsrDashboard() {
     }
 
     try {
-      await apiClient.post('/auth/change-password', {
+      const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: passwordForm.old,
         newPassword: passwordForm.new,
       });
+      if (passwordResponse.data?.token) {
+        localStorage.setItem('token', passwordResponse.data.token);
+      }
 
       logAction('Password Changed', `Changed password for ${csrProfile.name}`);
       alert('Нууц үг амжилттай солигдлоо!');

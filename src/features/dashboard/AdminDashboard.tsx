@@ -1823,10 +1823,15 @@ export default function AdminDashboard() {
     }
 
     try {
-      await apiClient.post("/auth/change-password", {
+      const passwordResponse = await apiClient.post("/auth/change-password", {
         oldPassword: passwordForm.old,
         newPassword: passwordForm.new,
       });
+      // The server revokes every session opened before the change and hands
+      // back a token issued after that cutoff, so THIS session survives.
+      if (passwordResponse.data?.token) {
+        localStorage.setItem("token", passwordResponse.data.token);
+      }
 
       logAction("Password Changed", `Changed password for ${profile.name}`);
       alert("Нууц үг амжилттай солигдлоо!");

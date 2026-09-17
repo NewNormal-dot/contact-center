@@ -241,6 +241,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    // Tell the server first. There is no jti, so this cannot revoke THIS
+    // token on its own - but it records the event in the audit log, and the
+    // endpoint can revoke every session for the account when asked. Fire and
+    // forget: signing out must never fail because the network is down.
+    apiClient.post('/auth/logout', {}).catch(() => undefined);
+
     setUser(null);
     localStorage.removeItem('token');
     localStorage.removeItem('user');

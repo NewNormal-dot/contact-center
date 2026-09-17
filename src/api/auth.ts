@@ -10,12 +10,30 @@ import { buildPasswordSetupUrl, sendPasswordSetupEmail } from '../utils/email';
 import { createPasswordSetupToken, hashPasswordSetupToken, validateNewPassword } from '../utils/password';
 import { captureError } from '../utils/errorLog';
 import { columnExists } from '../database/schemaUtils';
-import { loginRateLimiter, forgotPasswordRateLimiter } from '../middleware/rateLimiter';
+import { loginRateLimiter, forgotPasswordRateLimiter, setupPasswordRateLimiter, confirmPasswordRateLimiter } from '../middleware/rateLimiter';
+import { invalidateAuthUserCache } from '../middleware/auth';
 
 const router = express.Router();
 
+// A real bcrypt hash of a value nobody can supply. Compared against when the
+// email is unknown, so the unknown-account and wrong-password paths cost the
+// same time and are indistinguishable from outside.
+const DUMMY_BCRYPT_HASH = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
+
 async function hasPasswordSetupColumns() {
   return columnExists(db, 'users', 'password_setup_token_hash');
+}
+
+async function hasSessionCutoffColumn() {
+  return columnExists(db, 'users', 'sessions_valid_from');
+}
+
+function issueToken(user: any) {
+  return jwt.sign(
+    { id: user.id, email: user.email, role: user.role, name: user.name },
+    getJwtSecret(),
+    { expiresIn: '24h' }
+  );
 }
 
 function formatUserForClient(user: any) {
@@ -63,11 +81,21 @@ router.post('/change-password', authenticate, async (req: any, res) => {
       updates.password_setup_expires_at = null;
       updates.password_changed_at = db.fn.now();
     }
+    // Every session opened before now is dead. Without this, changing your
+    // password left every other device - including an attacker's - signed in
+    // for up to 24 hours.
+    if (await hasSessionCutoffColumn()) {
+      updates.sessions_valid_from = new Date();
+    }
 
     await db('users').where({ id: userId }).update(updates);
+    invalidateAuthUserCache(userId);
 
     await logAction(userId, 'CHANGE_PASSWORD', 'users', userId, 'User changed their password');
-    res.json({ message: 'Нууц үг амжилттай солигдлоо' });
+    // Hand the caller a token issued AFTER the cutoff so the session they are
+    // sitting in survives while all the others are revoked.
+    const refreshed = await db('users').where({ id: userId }).first();
+    res.json({ message: 'Нууц үг амжилттай солигдлоо', token: issueToken(refreshed) });
   } catch (err) {
     console.error(err);
     captureError('auth: change-password', err);
@@ -75,7 +103,7 @@ router.post('/change-password', authenticate, async (req: any, res) => {
   }
 });
 
-router.post('/setup-password', async (req, res) => {
+router.post('/setup-password', setupPasswordRateLimiter, async (req, res) => {
   const { token, newPassword } = req.body;
 
   if (!token) {
@@ -107,14 +135,19 @@ router.post('/setup-password', async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(String(newPassword), 10);
-    await db('users').where({ id: user.id }).update({
+    const setupUpdates: any = {
       password_hash: hashedPassword,
       password_setup_token_hash: null,
       password_setup_expires_at: null,
       password_changed_at: db.fn.now(),
       status: 'active',
       updated_at: db.fn.now(),
-    });
+    };
+    // An admin-initiated reset must eject whoever is already in the account.
+    if (await hasSessionCutoffColumn()) setupUpdates.sessions_valid_from = new Date();
+
+    await db('users').where({ id: user.id }).update(setupUpdates);
+    invalidateAuthUserCache(user.id);
 
     await logAction(user.id, 'SETUP_PASSWORD', 'users', user.id, `User set password via email setup link: ${user.email}`);
     res.json({ message: 'Нууц үг амжилттай тохирлоо. Одоо шинэ нууц үгээрээ нэвтэрнэ үү.' });
@@ -184,20 +217,21 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       () => db('users').where({ email }).first(),
       { label: 'POST /api/auth/login' },
     );
-    if (!user || user.status === 'inactive') {
-      return res.status(401).json({ error: 'Бүртгэлгүй эсвэл идэвхгүй хэрэглэгч' });
+    // One message for every failure, and bcrypt runs either way.
+    //
+    // Distinct messages ("Бүртгэлгүй эсвэл идэвхгүй хэрэглэгч" vs "Нууц үг
+    // буруу байна") let anyone enumerate which corporate emails have
+    // accounts, and skipping bcrypt entirely for an unknown address made the
+    // two cases distinguishable by response time as well.
+    const INVALID_CREDENTIALS = 'И-мэйл эсвэл нууц үг буруу байна';
+    const passwordHash = user?.password_hash || DUMMY_BCRYPT_HASH;
+    const isMatch = await bcrypt.compare(password, passwordHash);
+
+    if (!user || user.status === 'inactive' || !isMatch) {
+      return res.status(401).json({ error: INVALID_CREDENTIALS });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Нууц үг буруу байна' });
-    }
-
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, name: user.name },
-      getJwtSecret(),
-      { expiresIn: '24h' }
-    );
+    const token = issueToken(user);
 
     // Fire-and-forget: audit logging must never delay or break the login
     // response itself. logAction already catches its own errors internally,
@@ -278,7 +312,7 @@ router.post('/register-initial', async (req, res) => {
 });
 
 // Confirm current authenticated user's password (used for sensitive actions)
-router.post('/confirm-password', authenticate, async (req: any, res) => {
+router.post('/confirm-password', authenticate, confirmPasswordRateLimiter, async (req: any, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ error: 'Password is required' });
 
@@ -294,6 +328,30 @@ router.post('/confirm-password', authenticate, async (req: any, res) => {
     console.error('Confirm password error:', err);
     captureError('auth: Confirm password error:', err);
     res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// There was no logout endpoint at all - signing out only cleared
+// localStorage, leaving a fully valid token behind for up to 24 hours.
+// This records the event, and on request revokes every session for the
+// account (there is no per-token id, so "this device only" is not
+// expressible; the client keeps doing its local clear for that case).
+router.post('/logout', authenticate, async (req: any, res) => {
+  const allDevices = req.body?.allDevices === true;
+  try {
+    if (allDevices && (await hasSessionCutoffColumn())) {
+      await db('users').where({ id: req.user.id }).update({
+        sessions_valid_from: new Date(),
+        updated_at: db.fn.now(),
+      });
+      invalidateAuthUserCache(req.user.id);
+    }
+    await logAction(req.user.id, 'LOGOUT', 'users', req.user.id, allDevices ? 'Signed out of all devices' : 'Signed out');
+    res.json({ ok: true, allDevices });
+  } catch (err) {
+    console.error('Logout error:', err);
+    captureError('auth: logout', err);
+    res.status(500).json({ error: 'Дотоод алдаа гарлаа' });
   }
 });
 

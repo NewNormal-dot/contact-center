@@ -419,6 +419,12 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
     }
 
     await db('users').where({ id }).update(updatePayload);
+    // Resetting a compromised account's password has to eject whoever is
+    // already inside it; the JWT alone would stay valid for up to 24h.
+    // sessions_valid_from is bumped when the new password is actually set
+    // (POST /auth/setup-password), so the user is not locked out of a reset
+    // they never asked for.
+    invalidateAuthUserCache(id);
 
     let invitationSent = false;
     try {
