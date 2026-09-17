@@ -397,7 +397,31 @@ router.get('/my-bookings', authenticate, async (req: any, res) => {
     const bookings = await db('slot_bookings')
       .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
       .where({ 'slot_bookings.user_id': req.user.id, 'slot_bookings.status': 'confirmed' })
-      .select('slot_bookings.*', 'work_slots.*')
+      // NOT select('slot_bookings.*','work_slots.*'): both tables have `id`,
+      // `created_at` and `updated_at`, so work_slots.id overwrote
+      // slot_bookings.id and mapBooking() returned the SLOT id as the
+      // booking id.
+      .select(
+        'slot_bookings.id as id',
+        'slot_bookings.slot_id',
+        'slot_bookings.user_id',
+        'slot_bookings.booked_at',
+        'slot_bookings.status',
+        'slot_bookings.user_name',
+        'slot_bookings.user_code',
+        'work_slots.date',
+        'work_slots.start_time',
+        'work_slots.end_time',
+        'work_slots.duration',
+        'work_slots.capacity',
+        'work_slots.booking_open_at',
+        'work_slots.booking_is_open',
+        'work_slots.booking_deadline',
+        'work_slots.segment',
+        'work_slots.employment_type',
+        'work_slots.location',
+        'work_slots.is_rest',
+      )
       .orderBy('work_slots.date', 'asc')
       .orderBy('work_slots.start_time', 'asc');
     res.json(bookings.map(mapBooking));
@@ -558,11 +582,22 @@ function filterSlotsForAudience(slots: any[], user: any): any[] {
   if (user?.role !== 'csr') return slots;
   const employmentType = normalizeEmploymentType(user.employment_type ?? user.employmentType);
   const location = normalizeLocation(user.location);
-  return slots.filter((slot: any) =>
-    segmentsMatch(slot.segment, user.segment) &&
-    normalizeEmploymentType(slot.employmentType) === employmentType &&
-    normalizeLocation(slot.location) === location
-  );
+  return slots
+    .filter((slot: any) =>
+      segmentsMatch(slot.segment, user.segment) &&
+      normalizeEmploymentType(slot.employmentType) === employmentType &&
+      normalizeLocation(slot.location) === location
+    )
+    // A CSR needs to see WHO is on a shift with them - the roster view shows
+    // colleagues' names. It does not need their email addresses, which were
+    // being handed to every CSR for every booking in their segment.
+    .map((slot: any) => ({
+      ...slot,
+      bookings: (slot.bookings || []).map((booking: any) => {
+        const { userEmail, ...rest } = booking;
+        return rest;
+      }),
+    }));
 }
 
 router.get('/', authenticate, async (req: any, res) => {

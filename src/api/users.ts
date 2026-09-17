@@ -113,6 +113,8 @@ router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
     }));
     res.json(formattedUsers);
   } catch (err) {
+    console.error('Get users error:', err);
+    captureError('users: GET /api/users', err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
   }
 });
@@ -139,6 +141,8 @@ router.get('/csr', authenticate, authorize(['superadmin', 'admin']), async (req,
     }));
     res.json(formattedUsers);
   } catch (err) {
+    console.error('Get CSR users error:', err);
+    captureError('users: GET /api/users/csr', err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
   }
 });
@@ -379,6 +383,11 @@ router.put('/:id', authenticate, async (req: any, res) => {
     await logAction(req.user.id, 'UPDATE_USER', 'users', id, `Updated user ${updates.name || userToUpdate.name} (${updates.role || userToUpdate.role})`);
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
+    // This is a WRITE and it used to swallow the error completely - no
+    // console.error, no captureError - so a failed user update left no trace
+    // anywhere and was impossible to diagnose.
+    console.error('Update user error:', err);
+    captureError('users: PUT /api/users/:id', err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
   }
 });

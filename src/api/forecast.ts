@@ -80,7 +80,10 @@ function mapForecastRow(row: any) {
   };
 }
 
-router.get('/', authenticate, async (_req, res) => {
+// Contact-volume and headcount planning for the whole company. This was
+// authenticate-only, so any CSR with a token could read it even though the
+// UI never shows it to them.
+router.get('/', authenticate, authorize(['admin', 'superadmin']), async (_req, res) => {
   try {
     await ensureForecastTable();
     const rows = await db('forecast_data')
