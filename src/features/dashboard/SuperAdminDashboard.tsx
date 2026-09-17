@@ -86,6 +86,7 @@ export default function SuperAdminDashboard() {
   // States
   const [csrs, setCsrs] = useState<CSR[]>([]);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [logsError, setLogsError] = useState('');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [segments, setSegments] = useState<string[]>([]);
   const [trainingMaterials, setTrainingMaterials] = useState<TrainingMaterial[]>([]);
@@ -178,10 +179,16 @@ export default function SuperAdminDashboard() {
       }));
       setLogs(backendLogs);
     } catch (error) {
+      // Do NOT fall back to localStorage 'activity_logs'. That store is
+      // per-browser, is written by a helper that guesses the actor from the
+      // URL path, and silently turned the shared audit trail into this one
+      // machine's fiction whenever a fetch hiccuped. An empty list with an
+      // error is honest; a fabricated one is not.
       console.error('Error fetching audit logs:', error);
-      const fallbackLogs = getLocalData('activity_logs', []);
-      setLogs(fallbackLogs);
+      setLogsError('Үйл ажиллагааны логийг татахад алдаа гарлаа. Дахин оролдоно уу.');
+      return;
     }
+    setLogsError('');
   };
 
   const mapTrainingForUi = (raw: any): TrainingMaterial => ({
@@ -1153,6 +1160,11 @@ export default function SuperAdminDashboard() {
 
     return (
       <div className="space-y-6">
+        {logsError && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 text-sm">
+            {logsError}
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <h2 className="text-xl sm:text-2xl font-black text-white">Үйлдэлүүдийн бүртгэл</h2>

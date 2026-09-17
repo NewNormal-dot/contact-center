@@ -12,6 +12,7 @@ import CsrDashboard from './features/dashboard/CsrDashboard';
 import SuperAdminDashboard from './features/dashboard/SuperAdminDashboard';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ErrorBoundary from './components/ErrorBoundary';
+import { purgeLegacyActivityLog } from './utils/logger';
 
 function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: string }) {
   const { user, loading, logout } = useAuth();
@@ -29,6 +30,10 @@ function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: 
 
 export default function App() {
   React.useEffect(() => {
+    // Drop the per-browser "activity log" the old client-side logger wrote,
+    // so it can never be mistaken for the real audit trail again.
+    purgeLegacyActivityLog();
+
     const theme = localStorage.getItem('theme') || 'dark';
     if (theme === 'dark') {
       document.documentElement.classList.add('dark');
