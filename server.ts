@@ -24,6 +24,24 @@ const __dirname = dirname(__filename);
 
 let migrationStatus: "skipped" | "running" | "complete" | "failed" = "skipped";
 let migrationError: string | null = null;
+let pendingMigrationCount: number | null = null;
+
+async function refreshPendingMigrationCount() {
+  try {
+    const [, pending] = await db.migrate.list();
+    pendingMigrationCount = (pending as any[]).length;
+    if (pendingMigrationCount > 0) {
+      console.warn(
+        `WARNING: ${pendingMigrationCount} database migration(s) are NOT applied. ` +
+        `Features depending on them will fail with a generic error. ` +
+        `Apply with POST /api/admin/run-migrations as a superadmin.`,
+      );
+    }
+  } catch (err: any) {
+    pendingMigrationCount = null;
+    console.error('Could not determine pending migrations:', err?.message || err);
+  }
+}
 
 function validateProductionDbEnv() {
   const required = [
@@ -119,9 +137,43 @@ async function startServer() {
   // address (the login rate limiter) would lump every user together.
   app.set('trust proxy', true);
 
-  // Basic security and middleware
+  // Basic security and middleware.
+  //
+  // CSP was disabled outright. With the JWT living in localStorage and no
+  // token revocation, any script injection was a 24-hour account takeover,
+  // and there was no defence in depth behind React's escaping. The policy
+  // below is deliberately permissive about the things this app genuinely
+  // does - inline styles (Tailwind + motion write them), data: URLs (file
+  // previews are base64) and two avatar CDNs - while still blocking
+  // third-party script execution, which is the part that matters.
   app.use(helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'self'"],
+        // No inline scripts: the theme bootstrap and the Agents.mn webchat
+        // loader were moved out of index.html into public/*.js precisely so
+        // this can stay free of 'unsafe-inline'.
+        scriptSrc: ["'self'", 'https://chat.agents.mn'],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://api.dicebear.com', 'https://chat.agents.mn'],
+        mediaSrc: ["'self'", 'data:', 'blob:'],
+        fontSrc: ["'self'", 'data:', 'https://chat.agents.mn'],
+        connectSrc: ["'self'", 'https://chat.agents.mn', 'wss://chat.agents.mn'],
+        frameSrc: ["'self'", 'https://chat.agents.mn'],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'self'"],
+        // Helmet enables this by default. It is right in production (the app
+        // is served over HTTPS behind App Service) but would rewrite plain
+        // http subresource URLs during local development, so it is only
+        // applied where it makes sense.
+        ...(process.env.NODE_ENV === 'production' ? {} : { upgradeInsecureRequests: null }),
+      },
+    },
+    // Keep cross-origin isolation off: base64 media in <img>/<video> and the
+    // avatar CDNs above are loaded without CORS headers.
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
 
   // NOTE: there is deliberately NO gzip middleware here, and adding one is
@@ -134,7 +186,20 @@ async function startServer() {
   // quirk is fixed, this app cannot take on any new runtime dependency.
   // (Everything else in this file uses only packages already installed.)
 
-  app.use(cors());
+  // The API and the SPA are served by this same process, so cross-origin
+  // access is never needed. `cors()` with no options answered every request
+  // with Access-Control-Allow-Origin: *, letting any site on the internet
+  // call the API on behalf of anyone whose token it could get hold of. An
+  // explicit allow-list keeps the escape hatch for a separately hosted
+  // frontend without leaving it open by default.
+  const allowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  app.use(cors({
+    origin: allowedOrigins.length > 0 ? allowedOrigins : false,
+    credentials: false,
+  }));
   // Default express.json() limit is 100kb, which is too small for bulk
   // schedule operations - e.g. creating/editing shifts across many selected
   // days at once (each day's shifts + booking waves add up) easily exceeds
@@ -165,6 +230,13 @@ async function startServer() {
       env: process.env.NODE_ENV,
       migrations: {
         status: migrationStatus,
+        // Production runs with SKIP_DB_MIGRATIONS=true and applies
+        // migrations by hand, so the schema can silently drift behind the
+        // code - and the symptom is a generic 500 on whichever feature
+        // needed the missing column. Surfacing the pending count here means
+        // the drift is visible from the health check instead of being
+        // discovered by a user.
+        pending: pendingMigrationCount,
         error: process.env.NODE_ENV === "production" ? undefined : migrationError,
       },
     });
@@ -230,6 +302,7 @@ async function startServer() {
   }
 
   await warmUpDatabaseConnection();
+  await refreshPendingMigrationCount();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);

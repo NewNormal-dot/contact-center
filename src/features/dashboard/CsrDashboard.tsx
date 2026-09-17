@@ -1032,6 +1032,7 @@ export default function CsrDashboard() {
         userName: b.userName || b.user_name || 'CSR',
         userCode: b.userCode || b.user_code,
         bookedAt: b.bookedAt || b.booked_at,
+        bookingWaveId: b.bookingWaveId || b.booking_wave_id || null,
       }));
       const shift: Shift = {
         id: String(slot.id),
@@ -1043,14 +1044,26 @@ export default function CsrDashboard() {
         segment: slot.segment || csrProfile.lineType,
         employmentType: slot.employmentType || slot.employment_type || csrProfile.employmentType,
         location: slotLocation,
-        bookingWaves: [{
-          id: 'default',
-          name: 'Нийт захиалах эрх',
-          slotLimit: Number(slot.capacity || 1),
-          bookingOpen,
-          bookingOpenAt,
-          bookingCloseAt,
-        }],
+        // Use the split the admin actually configured, when there is one.
+        // Previously this always collapsed to a single synthetic pool, so a
+        // morning/evening quota could never be shown or respected.
+        bookingWaves: Array.isArray(slot.bookingWaves) && slot.bookingWaves.length > 0
+          ? slot.bookingWaves.map((wave: any, index: number) => ({
+              id: String(wave.id || `wave-${index + 1}`),
+              name: String(wave.name || `Эрх ${index + 1}`),
+              slotLimit: Math.max(0, Number(wave.slotLimit) || 0),
+              bookingOpen: wave.bookingOpen === undefined ? bookingOpen : Boolean(wave.bookingOpen),
+              bookingOpenAt: wave.bookingOpenAt || bookingOpenAt,
+              bookingCloseAt: wave.bookingCloseAt || bookingCloseAt,
+            }))
+          : [{
+              id: 'default',
+              name: 'Нийт захиалах эрх',
+              slotLimit: Number(slot.capacity || 1),
+              bookingOpen,
+              bookingOpenAt,
+              bookingCloseAt,
+            }],
       };
       next[dateKey] = {
         ...(next[dateKey] || { shifts: [] }),
@@ -1083,10 +1096,12 @@ export default function CsrDashboard() {
     try {
       const response = await apiClient.get('/slots');
       const dbSchedule = mapSlotsToSchedule(response.data || []);
-      if (Object.keys(dbSchedule).length > 0) {
-        setSchedule(dbSchedule);
-        return dbSchedule;
-      }
+      // An empty result is a real answer: it means nothing matches this
+      // CSR's segment/employment type/location, which is exactly what
+      // happens after a segment is renamed or deleted. Suppressing it left
+      // stale shifts on screen and hid the problem.
+      setSchedule(dbSchedule);
+      return dbSchedule;
     } catch (error) {
       console.error('Error fetching DB schedule:', error);
     }
@@ -1158,6 +1173,38 @@ export default function CsrDashboard() {
     approvedByName: raw.approvedByName || raw.approver_name || undefined,
   });
 
+  const mapTrainingForUi = (raw: any): TrainingMaterial => ({
+    id: String(raw.id),
+    title: raw.title || '',
+    description: raw.description || '',
+    url: raw.attachmentUrl || raw.attachment_url || '',
+    type: raw.type || (raw.attachmentName || raw.attachment_name ? 'File' : 'Link'),
+    date: raw.createdAt || raw.created_at || new Date().toISOString(),
+    deadline: raw.deadline || '',
+    fileName: raw.attachmentName || raw.attachment_name || '',
+    hasStoredAttachment: Boolean(raw.hasStoredAttachment),
+    seenBy: (raw.completedAt || raw.completed_at) && csrProfile
+      ? [{ userId: csrProfile.id, userName: csrProfile.name, seenAt: raw.completedAt || raw.completed_at }]
+      : [],
+  } as TrainingMaterial);
+
+  // Training materials used to be read from localStorage, which is
+  // per-browser and was only ever seeded at login - and nothing wrote
+  // materials to the server in the first place, so the list was always
+  // empty. It now comes from the database like everything else.
+  const fetchTrainingMaterials = async () => {
+    if (!csrProfile) return [];
+    try {
+      const response = await apiClient.get('/broadcasts/trainings');
+      const data = (response.data || []).map(mapTrainingForUi);
+      setTrainingMaterials(data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching training materials:', error);
+      return [];
+    }
+  };
+
   const fetchHourlyLeaveRequests = async () => {
     if (!csrProfile) return [];
     try {
@@ -1191,14 +1238,12 @@ export default function CsrDashboard() {
     // limitation, not something this fix silently papers over).
     const loadData = () => {
       const allQuotas = getLocalData('vacationQuotas', []);
-      const allTraining = getLocalData('trainingMaterials', []);
       const allRestDays = getLocalData('csrRestDays', {});
       const allSubmitted = getLocalData('csrSubmittedMonths', {});
 
       // Create a hash of the data to prevent unnecessary re-renders
       const dataHash = JSON.stringify({
         allQuotas,
-        allTraining,
         allRestDays,
         allSubmitted,
         profileId: csrProfile.id
@@ -1208,7 +1253,6 @@ export default function CsrDashboard() {
       lastDataRef.current = dataHash;
 
       setVacationQuotas(allQuotas);
-      setTrainingMaterials(allTraining);
       setSubmittedMonths(allSubmitted[csrProfile.id] || []);
     };
 
@@ -1220,6 +1264,7 @@ export default function CsrDashboard() {
     fetchTradeRequests();
     fetchHolidays();
     fetchHourlyLeaveRequests();
+    fetchTrainingMaterials();
     // Each of these used to be a bare setInterval at 2-10 second intervals,
     // all of them running whether or not anyone was looking at the tab. See
     // src/config/polling.ts for why those intervals could not survive a
@@ -1230,7 +1275,10 @@ export default function CsrDashboard() {
     // localStorage, so it costs the server nothing.
     const stopLocalData = startPolling(loadData, POLLING_INTERVALS.LOCAL_DATA);
     const stopSchedule = startPolling(fetchDbSchedule, POLLING_INTERVALS.SCHEDULE);
-    const stopNotifications = startPolling(fetchNotifications, POLLING_INTERVALS.NOTIFICATIONS);
+    const stopNotifications = startPolling(() => {
+      fetchNotifications();
+      fetchTrainingMaterials();
+    }, POLLING_INTERVALS.NOTIFICATIONS);
     const stopVacation = startPolling(fetchVacationRequests, POLLING_INTERVALS.REQUESTS);
     const stopShiftRules = startPolling(fetchShiftRules, POLLING_INTERVALS.RULES);
     const stopTrades = startPolling(fetchTradeRequests, POLLING_INTERVALS.TRADES);
@@ -1296,10 +1344,13 @@ export default function CsrDashboard() {
     }
 
     try {
-      await apiClient.post('/auth/change-password', {
+      const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: passwordForm.old,
         newPassword: passwordForm.new,
       });
+      if (passwordResponse.data?.token) {
+        localStorage.setItem('token', passwordResponse.data.token);
+      }
 
       logAction('Password Changed', `Changed password for ${csrProfile.name}`);
       alert('Нууц үг амжилттай солигдлоо!');
@@ -2124,6 +2175,23 @@ export default function CsrDashboard() {
 
   const [selectedMaterial, setSelectedMaterial] = useState<TrainingMaterial | null>(null);
 
+  // The list endpoint deliberately omits attachment payloads (a base64 file
+  // per row would make the polled list enormous), so pull the body only when
+  // the material is actually opened.
+  const openMaterial = async (material: TrainingMaterial) => {
+    setSelectedMaterial(material);
+    if (material.url || !material.hasStoredAttachment) return;
+    try {
+      const response = await apiClient.get(`/broadcasts/trainings/${material.id}/attachment`);
+      const url = response.data?.attachmentUrl || '';
+      if (!url) return;
+      setSelectedMaterial(prev => (prev && prev.id === material.id ? { ...prev, url } : prev));
+      setTrainingMaterials(prev => prev.map(m => (m.id === material.id ? { ...m, url } : m)));
+    } catch (error) {
+      console.error('Error loading training attachment:', error);
+    }
+  };
+
   const markMaterialAsRead = async (id: string) => {
     if (!csrProfile) return;
     const material = trainingMaterials.find(m => m.id === id);
@@ -2138,9 +2206,8 @@ export default function CsrDashboard() {
             seenAt: new Date().toISOString()
           }];
           
-          updateLocalItem('trainingMaterials', id, { seenBy: updatedSeenBy });
-          
-          // Update local state immediately
+          // Update local state immediately; training_completions on the
+          // server is the record of truth and the next poll confirms it.
           setTrainingMaterials(prev => prev.map(m => m.id === id ? { ...m, seenBy: updatedSeenBy } : m));
           
           logAction('Training Material Viewed', `Viewed training material: ${material.title}`);
@@ -2171,7 +2238,7 @@ export default function CsrDashboard() {
               className="bg-gray-900/40 border border-gray-800 p-6 rounded-3xl space-y-4 hover:border-blue-500/30 transition-all group relative"
             >
               <div 
-                onClick={() => setSelectedMaterial(material)}
+                onClick={() => void openMaterial(material)}
                 className="aspect-video bg-gray-800 rounded-2xl overflow-hidden relative cursor-pointer"
               >
                 {material.thumbnailUrl ? (

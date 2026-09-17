@@ -5,6 +5,7 @@ import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlDateTime, toSqlTime, displayDate, displayTime } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
 import { logAction } from './audit';
+import { columnExists } from '../database/schemaUtils';
 
 const router = express.Router();
 
@@ -142,6 +143,50 @@ function resolveSlotDurationHours(slot: any) {
   return computed;
 }
 
+// Booking waves are persisted as JSON on work_slots.booking_waves, and each
+// booking records which wave it used. Both columns arrive with a migration
+// that production applies by hand, so everything below degrades to "one
+// undivided pool" - today's behaviour - when they are absent.
+async function hasBookingWaveColumns() {
+  return (await columnExists(db, 'work_slots', 'booking_waves'))
+    && (await columnExists(db, 'slot_bookings', 'booking_wave_id'));
+}
+
+interface StoredWave {
+  id: string;
+  name: string;
+  slotLimit: number;
+  bookingOpen: boolean;
+  bookingOpenAt: string | null;
+  bookingCloseAt: string | null;
+}
+
+function normalizeWavesForStorage(waves: any): StoredWave[] {
+  if (!Array.isArray(waves)) return [];
+  return waves
+    .map((wave: any, index: number) => ({
+      id: String(wave?.id || `wave-${index + 1}`).slice(0, 64),
+      name: String(wave?.name || `Эрх ${index + 1}`).slice(0, 100),
+      slotLimit: Math.max(0, Math.min(9999, Number(wave?.slotLimit ?? wave?.slots ?? wave?.capacity ?? 0) || 0)),
+      bookingOpen: boolValue(wave?.bookingOpen),
+      bookingOpenAt: wave?.bookingOpenAt ? String(wave.bookingOpenAt) : null,
+      bookingCloseAt: wave?.bookingCloseAt ? String(wave.bookingCloseAt) : null,
+    }))
+    // A wave with no quota is not a wave; keeping them would let an empty
+    // "Оройн slot" block every booking.
+    .filter((wave: StoredWave) => wave.slotLimit > 0);
+}
+
+function parseStoredWaves(value: unknown): StoredWave[] {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function boolValue(value: unknown) {
   return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
 }
@@ -217,6 +262,9 @@ function mapSlot(slot: any, currentBookings = 0, bookings: any[] = []) {
     employmentType: normalizeEmploymentType(slot.employment_type),
     location: normalizeLocation(slot.location),
     isRest,
+    // [] means "no split configured" - i.e. one undivided pool of `capacity`,
+    // which is how every slot behaved before waves were persisted.
+    bookingWaves: parseStoredWaves(slot.booking_waves),
     createdAt: slot.created_at,
     updatedAt: slot.updated_at,
     current_bookings: currentBookings,
@@ -397,7 +445,31 @@ router.get('/my-bookings', authenticate, async (req: any, res) => {
     const bookings = await db('slot_bookings')
       .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
       .where({ 'slot_bookings.user_id': req.user.id, 'slot_bookings.status': 'confirmed' })
-      .select('slot_bookings.*', 'work_slots.*')
+      // NOT select('slot_bookings.*','work_slots.*'): both tables have `id`,
+      // `created_at` and `updated_at`, so work_slots.id overwrote
+      // slot_bookings.id and mapBooking() returned the SLOT id as the
+      // booking id.
+      .select(
+        'slot_bookings.id as id',
+        'slot_bookings.slot_id',
+        'slot_bookings.user_id',
+        'slot_bookings.booked_at',
+        'slot_bookings.status',
+        'slot_bookings.user_name',
+        'slot_bookings.user_code',
+        'work_slots.date',
+        'work_slots.start_time',
+        'work_slots.end_time',
+        'work_slots.duration',
+        'work_slots.capacity',
+        'work_slots.booking_open_at',
+        'work_slots.booking_is_open',
+        'work_slots.booking_deadline',
+        'work_slots.segment',
+        'work_slots.employment_type',
+        'work_slots.location',
+        'work_slots.is_rest',
+      )
       .orderBy('work_slots.date', 'asc')
       .orderBy('work_slots.start_time', 'asc');
     res.json(bookings.map(mapBooking));
@@ -454,6 +526,7 @@ export function invalidateSlotsCache() {
 }
 
 async function loadEnrichedSlots(): Promise<any[]> {
+  const wavesEnabled = await hasBookingWaveColumns();
   const slots = await db('work_slots').orderBy('date', 'asc').orderBy('start_time', 'asc');
 
   // Fetch all confirmed bookings for all slots in ONE query instead of one
@@ -480,6 +553,7 @@ async function loadEnrichedSlots(): Promise<any[]> {
           'users.segment as user_segment',
           'users.employment_type as user_employment_type',
           'users.location as user_location',
+          ...(wavesEnabled ? ['slot_bookings.booking_wave_id'] : []),
         )
     : [];
 
@@ -494,6 +568,7 @@ async function loadEnrichedSlots(): Promise<any[]> {
       userEmail: b.user_email,
       userCode: b.user_code,
       bookedAt: b.booked_at,
+      bookingWaveId: b.booking_wave_id || null,
       segment: b.user_segment,
       employmentType: b.user_employment_type,
       location: b.user_location,
@@ -558,11 +633,22 @@ function filterSlotsForAudience(slots: any[], user: any): any[] {
   if (user?.role !== 'csr') return slots;
   const employmentType = normalizeEmploymentType(user.employment_type ?? user.employmentType);
   const location = normalizeLocation(user.location);
-  return slots.filter((slot: any) =>
-    segmentsMatch(slot.segment, user.segment) &&
-    normalizeEmploymentType(slot.employmentType) === employmentType &&
-    normalizeLocation(slot.location) === location
-  );
+  return slots
+    .filter((slot: any) =>
+      segmentsMatch(slot.segment, user.segment) &&
+      normalizeEmploymentType(slot.employmentType) === employmentType &&
+      normalizeLocation(slot.location) === location
+    )
+    // A CSR needs to see WHO is on a shift with them - the roster view shows
+    // colleagues' names. It does not need their email addresses, which were
+    // being handed to every CSR for every booking in their segment.
+    .map((slot: any) => ({
+      ...slot,
+      bookings: (slot.bookings || []).map((booking: any) => {
+        const { userEmail, ...rest } = booking;
+        return rest;
+      }),
+    }));
 }
 
 router.get('/', authenticate, async (req: any, res) => {
@@ -679,6 +765,7 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
 router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { schedules, dateKeys, scope } = req.body;
   if (!schedules || typeof schedules !== 'object') return res.status(400).json({ error: 'schedules шаардлагатай' });
+  const wavesEnabled = await hasBookingWaveColumns();
   const keys = Array.isArray(dateKeys) && dateKeys.length ? dateKeys : Object.keys(schedules);
   const syncScope = scope && typeof scope === 'object'
     ? {
@@ -689,6 +776,13 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
     : null;
   let synced = 0;
   let deleted = 0;
+  // Shifts the payload contained but which could not be stored (unparseable
+  // time, missing segment). These used to be dropped with only a
+  // console.warn, so the admin saw "saved" for a save that lost rows.
+  const skipped: string[] = [];
+  const deletedDescriptions: string[] = [];
+  const keptBookedSlots: string[] = [];
+  let skippedUnscoped = 0;
   try {
     await db.transaction(async (trx) => {
       for (const rawDateKey of keys) {
@@ -713,6 +807,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
               endTime = String(shift.endTime || shift.end_time).trim();
             } else {
               console.warn('Skipping invalid work slot time during sync:', { dateKey, rawShiftTime, shift });
+              skipped.push(`${dateKey}: цагийн формат буруу (${rawShiftTime || 'хоосон'})`);
               continue;
             }
           }
@@ -724,6 +819,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           const segment = String(shift.segment || '').trim();
           if (!segment) {
             console.warn('Skipping work slot with missing segment during sync:', { dateKey, shift });
+            skipped.push(`${dateKey}: segment сонгогдоогүй (${rawShiftTime || 'Амралт'})`);
             continue;
           }
           const employmentType = normalizeEmploymentType(shift.employmentType || shift.employment_type);
@@ -732,9 +828,11 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           const sqlEnd = rest ? '00:00:00' : normalizeTime(endTime);
           if (!rest && (!sqlStart || !sqlEnd)) {
             console.warn('Skipping work slot with invalid normalized time during sync:', { dateKey, startTime, endTime, shift });
+            skipped.push(`${dateKey}: цаг танигдсангүй (${startTime}-${endTime})`);
             continue;
           }
           const bookingWindow = resolveBookingWindow(day, shift);
+          const storedWaves = normalizeWavesForStorage(shift.bookingWaves);
           // Capacity: Амралт-ын хувьд admin хэдэн хүн авахыг тоогоор
           // тохируулдаг тул тэр тоог (totalSlots/capacity) шууд хэрэглэнэ.
           // Хэрэв тохируулаагүй бол хамгийн багадаа 1 (ажлын shift-тэй адил).
@@ -753,6 +851,9 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
             employment_type: employmentType,
             location,
             is_rest: rest ? 1 : 0,
+            // The admin's morning/evening split used to be thrown away on
+            // every save and regenerated on every read.
+            ...(wavesEnabled ? { booking_waves: storedWaves.length > 0 ? JSON.stringify(storedWaves) : null } : {}),
             updated_at: trx.fn.now(),
           });
         }
@@ -784,35 +885,112 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           }
         }
 
+        // ------------------------------------------------------------------
+        // Reconciliation deletes. This is the most destructive code in the
+        // application and it has two hard rules.
+        //
+        // RULE 1: no scope, no deletion.
+        // A sync request carries every shift for a date across ALL segments,
+        // employment types and locations. `scope` says which slice of that
+        // the admin was actually editing. Without it we cannot tell "the
+        // admin removed this shift" from "this shift belongs to a slice the
+        // admin never loaded", so treating everything unmatched as stale
+        // deleted other segments' entire schedules. That fired whenever
+        // `activeSegmentView` had not been populated yet (the segments fetch
+        // is async) and unconditionally on a segment rename, which passes no
+        // scope at all. Deleting nothing is always the safe answer here.
+        //
+        // RULE 2: never silently delete a shift somebody has booked.
+        // Identity matching is date|start|end|segment|type|location|is_rest,
+        // so merely editing a shift's TIME made the old row unmatched - and
+        // deleting it took every confirmed booking on it with no audit row,
+        // no notification and no way to find out who lost their shift.
+        // Booked shifts are now kept and reported back to the admin instead.
+        // ------------------------------------------------------------------
+        if (!syncScope?.segment) {
+          if (existingRows.some((row: any) => !keptIds.has(String(row.id)))) {
+            skippedUnscoped += 1;
+          }
+          continue;
+        }
+
         const staleRows = existingRows.filter((row: any) => {
           if (keptIds.has(String(row.id))) return false;
-          if (!syncScope?.segment) return true;
           return normalizeLocation(row.location) === syncScope.location
             && String(row.segment || '').trim() === syncScope.segment
             && normalizeEmploymentType(row.employment_type) === syncScope.employmentType;
         });
-        if (staleRows.length > 0) {
-          const staleIds = staleRows.map((row: any) => row.id);
-          try {
-            await trx('trade_requests')
-              .whereIn('sender_slot_id', staleIds)
-              .orWhereIn('receiver_slot_id', staleIds)
-              .delete();
-            await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
-            await trx('work_slots').whereIn('id', staleIds).delete();
-            deleted += staleRows.length;
-          } catch (staleErr: any) {
-            console.error('Stale rows deletion failed:', {
-              date: dateKey,
-              staleIds,
-              error: staleErr.message
-            });
-            throw staleErr;
-          }
+        if (staleRows.length === 0) continue;
+
+        const staleIds = staleRows.map((row: any) => String(row.id));
+        const bookedRows = await trx('slot_bookings')
+          .whereIn('slot_id', staleIds)
+          .where({ status: 'confirmed' })
+          .select('slot_id');
+        const bookedSlotIds = new Set(bookedRows.map((row: any) => String(row.slot_id)));
+
+        const deletableRows = staleRows.filter((row: any) => !bookedSlotIds.has(String(row.id)));
+        for (const row of staleRows) {
+          if (!bookedSlotIds.has(String(row.id))) continue;
+          keptBookedSlots.push(
+            `${dateKey} ${displayTime(row.start_time)}-${displayTime(row.end_time)}`,
+          );
+        }
+
+        if (deletableRows.length === 0) continue;
+        const deletableIds = deletableRows.map((row: any) => row.id);
+        try {
+          await trx('trade_requests')
+            .whereIn('sender_slot_id', deletableIds)
+            .orWhereIn('receiver_slot_id', deletableIds)
+            .delete();
+          // Only cancelled/auto-assigned rows can remain here - confirmed
+          // ones were excluded above - but they still have to go before the
+          // slot itself can be removed.
+          await trx('slot_bookings').whereIn('slot_id', deletableIds).delete();
+          await trx('work_slots').whereIn('id', deletableIds).delete();
+          deleted += deletableRows.length;
+          deletedDescriptions.push(
+            ...deletableRows.map((row: any) =>
+              `${dateKey} ${displayTime(row.start_time)}-${displayTime(row.end_time)}`,
+            ),
+          );
+        } catch (staleErr: any) {
+          console.error('Stale rows deletion failed:', {
+            date: dateKey,
+            staleIds: deletableIds,
+            error: staleErr.message
+          });
+          throw staleErr;
         }
       }
     });
-    res.json({ synced, deleted });
+
+    if (deleted > 0) {
+      await logAction(
+        req.user.id,
+        'SYNC_SCHEDULE_DELETED_SLOTS',
+        'work_slots',
+        null,
+        `Removed ${deleted} unbooked shift(s) in scope ` +
+        `${syncScope?.location}/${syncScope?.segment}/${syncScope?.employmentType}: ` +
+        `${deletedDescriptions.slice(0, 40).join(', ')}` +
+        `${deletedDescriptions.length > 40 ? ` (+${deletedDescriptions.length - 40} more)` : ''}`,
+      );
+    }
+
+    res.json({
+      synced,
+      deleted,
+      skipped,
+      // Shifts the admin's payload no longer contained but which somebody has
+      // already booked. They were deliberately kept; the client surfaces this
+      // so the admin can remove the person first if the removal was intended.
+      keptBookedSlots,
+      // Dates where nothing could be reconciled because the request carried
+      // no editing scope.
+      skippedUnscopedDates: skippedUnscoped,
+    });
   } catch (err: any) {
     console.error('Sync schedules FATAL error:', err);
     captureError('slots: Sync schedules FATAL error:', err);
@@ -866,7 +1044,10 @@ const bookHandler = async (req: any, res: any) => {
   const slot_id = req.params.slotId || req.body.slot_id || req.body.slotId;
   const userId = req.user.id;
   const editBookingId = req.body.editBookingId || req.body.booking_id || req.body.bookingId;
+  const requestedWaveId = req.body.bookingWaveId ? String(req.body.bookingWaveId).slice(0, 64) : null;
   if (!slot_id) return res.status(400).json({ error: 'Слот ID шаардлагатай' });
+
+  const wavesEnabled = await hasBookingWaveColumns();
 
   try {
     const slot = await db('work_slots').where({ id: slot_id }).first();
@@ -963,9 +1144,93 @@ const bookHandler = async (req: any, res: any) => {
         return { status: 400, error: 'Орон тоо дүүрсэн байна' };
       }
 
+      // Wave quotas. `bookingWaveId` was sent by the client and silently
+      // ignored, so the admin's morning/evening split enforced nothing. A
+      // slot with no recorded waves is still one undivided pool, which is
+      // how everything behaved before - so this only starts applying once an
+      // admin actually saves a split.
+      let resolvedWaveId: string | null = null;
+      if (wavesEnabled) {
+        const waves = parseStoredWaves(slot.booking_waves);
+        if (waves.length > 0) {
+          const wave = requestedWaveId
+            ? waves.find((w) => w.id === requestedWaveId)
+            : waves[0];
+          if (!wave) {
+            return { status: 400, error: 'Сонгосон захиалах эрх олдсонгүй' };
+          }
+
+          const now = Date.now();
+          const waveOpenAt = wave.bookingOpenAt ? new Date(wave.bookingOpenAt).getTime() : NaN;
+          const waveCloseAt = wave.bookingCloseAt ? new Date(wave.bookingCloseAt).getTime() : NaN;
+          if (!wave.bookingOpen) {
+            return { status: 400, error: `"${wave.name}" захиалга хаалттай байна` };
+          }
+          if (Number.isFinite(waveOpenAt) && now < waveOpenAt) {
+            return { status: 400, error: `"${wave.name}" захиалга эхлэх хугацаа болоогүй байна` };
+          }
+          if (Number.isFinite(waveCloseAt) && now > waveCloseAt) {
+            return { status: 400, error: `"${wave.name}" захиалгын хугацаа дууссан байна` };
+          }
+
+          const [{ count: waveCount }] = await trx('slot_bookings')
+            .where({ slot_id, status: 'confirmed', booking_wave_id: wave.id })
+            .count('id as count');
+          const alreadyInThisWave = currentBooking
+            && currentBooking.slot_id === slot_id
+            && currentBooking.booking_wave_id === wave.id;
+          if (!alreadyInThisWave && Number(waveCount) >= wave.slotLimit) {
+            return { status: 400, error: `"${wave.name}" эрхийн орон тоо дүүрсэн байна` };
+          }
+          resolvedWaveId = wave.id;
+        }
+      }
+      const waveFields = wavesEnabled ? { booking_wave_id: resolvedWaveId } : {};
+
+      // slot_bookings carries UNIQUE(slot_id, user_id), and cancelling is a
+      // SOFT delete (the row stays behind with status='cancelled', see
+      // cancelHandler). So a user who cancels a shift still owns a row for
+      // that (slot, user) pair. Inserting a fresh row - or moving another
+      // booking onto that slot - therefore violated the unique constraint
+      // and surfaced as a bare 500 "Захиалга хийхэд алдаа гарлаа": a CSR
+      // could never retake a shift they had cancelled.
+      //
+      // The fix is to treat that leftover row as what it is - this user's
+      // booking record for this slot - and revive it instead of creating a
+      // second one.
+      const leftoverForTargetSlot = await trx('slot_bookings')
+        .where({ slot_id, user_id: userId })
+        .whereNot({ status: 'confirmed' })
+        .first();
+
       if (currentBooking) {
-        await trx('slot_bookings').where({ id: currentBooking.id }).update({ slot_id, booked_at: db.fn.now(), status: 'confirmed' });
+        // Moving an existing booking onto this slot. Any leftover cancelled
+        // row for the target slot would collide with the update below, and
+        // is pure history we are about to supersede.
+        if (leftoverForTargetSlot && leftoverForTargetSlot.id !== currentBooking.id) {
+          await trx('slot_bookings').where({ id: leftoverForTargetSlot.id }).delete();
+        }
+        await trx('slot_bookings').where({ id: currentBooking.id }).update({
+          slot_id,
+          booked_at: db.fn.now(),
+          status: 'confirmed',
+          // Refresh the snapshot so a renamed user stays correct on the row.
+          user_name: user.name,
+          user_code: user.code,
+          ...waveFields,
+        });
         return { id: currentBooking.id, edited: true };
+      }
+
+      if (leftoverForTargetSlot) {
+        await trx('slot_bookings').where({ id: leftoverForTargetSlot.id }).update({
+          booked_at: db.fn.now(),
+          status: 'confirmed',
+          user_name: user.name,
+          user_code: user.code,
+          ...waveFields,
+        });
+        return { id: leftoverForTargetSlot.id, created: true };
       }
 
       const id = uuidv4();
@@ -980,6 +1245,7 @@ const bookHandler = async (req: any, res: any) => {
         // schedule reports stay meaningful.
         user_name: user.name,
         user_code: user.code,
+        ...waveFields,
       });
       return { id, created: true };
     });

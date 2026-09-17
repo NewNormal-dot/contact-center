@@ -15,18 +15,54 @@ interface CapturedError {
 const MAX_ERRORS = 30;
 const recentErrors: CapturedError[] = [];
 
+// Persisting is best-effort and deliberately decoupled: recording an error
+// must never throw a second one, and must never delay the response. The
+// in-memory ring stays as the zero-dependency fast path.
+let persistEnabled: boolean | null = null;
+
+async function persistError(entry: CapturedError) {
+  try {
+    const [{ default: db }, { tableExists }, { v4: uuidv4 }] = await Promise.all([
+      import('../database/db'),
+      import('../database/schemaUtils'),
+      import('uuid'),
+    ]);
+
+    if (persistEnabled === null) {
+      persistEnabled = await tableExists(db, 'server_errors');
+    }
+    if (!persistEnabled) return;
+
+    await db('server_errors').insert({
+      id: uuidv4(),
+      context: entry.context.slice(0, 200),
+      message: entry.message.slice(0, 4000),
+      stack: entry.stack ? entry.stack.slice(0, 8000) : null,
+      created_at: entry.timestamp,
+    });
+  } catch {
+    // Swallowed on purpose - see above.
+  }
+}
+
 export function captureError(context: string, err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   const stack = err instanceof Error ? err.stack : undefined;
-  recentErrors.unshift({
+  const entry: CapturedError = {
     timestamp: new Date().toISOString(),
     context,
     message,
     stack,
-  });
+  };
+
+  recentErrors.unshift(entry);
   if (recentErrors.length > MAX_ERRORS) {
     recentErrors.length = MAX_ERRORS;
   }
+
+  // Fire and forget. The in-memory copy is already recorded, so a database
+  // problem here costs nothing.
+  void persistError(entry);
 }
 
 export function getRecentErrors() {

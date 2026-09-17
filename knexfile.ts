@@ -21,7 +21,9 @@ const config: { [key: string]: Knex.Config } = {
   development: {
     client: 'better-sqlite3',
     connection: {
-      filename: path.join(process.cwd(), 'database.sqlite'),
+      // SQLITE_FILE lets the test suite point at a throwaway database
+      // instead of the developer's working one.
+      filename: process.env.SQLITE_FILE || path.join(process.cwd(), 'database.sqlite'),
     },
     useNullAsDefault: true,
     migrations: {

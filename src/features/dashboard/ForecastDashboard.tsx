@@ -53,16 +53,31 @@ const parseExcelDate = (value: unknown) => {
   const raw = String(value || '').trim();
   if (!raw) return null;
 
+  // An ISO instant from the API ("2026-09-01T01:00:00.000Z") is unambiguous
+  // and must be parsed as-is. The previous code ran `.replace(/\./g, '-')`
+  // over EVERY value first, which mangled the milliseconds separator into
+  // "…00-000Z"; the standard parser then failed and the regex fallback below
+  // re-read the UTC instant as a LOCAL wall clock. That shifted every
+  // forecast timestamp by the UTC offset on each save/reload cycle, pushing
+  // the data outside the 09:00-22:00 window the charts draw - so the upload
+  // looked correct and the charts emptied after a refresh.
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+    const iso = new Date(raw);
+    if (!Number.isNaN(iso.getTime())) return iso;
+  }
+
+  // Only now treat it as a human-typed (spreadsheet) value, where dots are a
+  // date separator: "2026.09.01 09:00".
   const normalized = raw.replace(/\./g, '-').replace('T', ' ');
-  const direct = new Date(normalized);
-  if (!Number.isNaN(direct.getTime())) return direct;
-
   const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})(?::(\d{1,2}))?)?/);
-  if (!match) return null;
+  if (match) {
+    const [, y, m, d, h = '0', min = '0'] = match;
+    const fallback = new Date(Number(y), Number(m) - 1, Number(d), Number(h), Number(min));
+    if (!Number.isNaN(fallback.getTime())) return fallback;
+  }
 
-  const [, y, m, d, h = '0', min = '0'] = match;
-  const fallback = new Date(Number(y), Number(m) - 1, Number(d), Number(h), Number(min));
-  return Number.isNaN(fallback.getTime()) ? null : fallback;
+  const direct = new Date(normalized);
+  return Number.isNaN(direct.getTime()) ? null : direct;
 };
 
 const formatMonthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -540,12 +555,36 @@ export default function ForecastDashboard() {
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
 
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false });
+    // Parsing had no error handling at all: a non-spreadsheet file made
+    // XLSX.read throw out of an async handler with nothing to catch it, so
+    // the user saw absolutely nothing happen.
+    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(file.name)) {
+      setStorageStatus('Зөвхөн Excel (.xlsx, .xls, .csv) файл оруулна уу');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setStorageStatus('Файл хэт том байна (20MB-аас бага байх ёстой)');
+      return;
+    }
+
+    let jsonRows: Record<string, unknown>[];
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      if (!sheet) {
+        setStorageStatus('Excel файлд хуудас олдсонгүй');
+        return;
+      }
+      jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false });
+    } catch (error) {
+      console.error('Forecast file parse failed:', error);
+      setStorageStatus('Excel файл уншихад алдаа гарлаа. Файлын форматаа шалгана уу.');
+      return;
+    }
 
     const parsedRows = jsonRows.map(row => {
       const date = parseExcelDate(getCell(row, ['Date', 'Огноо', 'Өдөр']));
@@ -561,7 +600,6 @@ export default function ForecastDashboard() {
 
     if (!parsedRows.length) {
       setStorageStatus('Excel файлд forecast дата олдсонгүй');
-      event.target.value = '';
       return;
     }
 
@@ -596,8 +634,6 @@ export default function ForecastDashboard() {
       writeForecastBackup(mergedRows);
       setStorageStatus('DB хадгалахад алдаа гарлаа. Local дээр хадгалсан.');
     }
-
-    event.target.value = '';
   };
 
   return (

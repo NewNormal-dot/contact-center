@@ -4,8 +4,18 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlTime, toSqlDateTime, displayDate, displayTime } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
+import { logAction } from './audit';
 
 const router = express.Router();
+
+// Mongolia is UTC+8 and does not observe DST. Azure App Service runs in UTC,
+// so `new Date().getFullYear()` &c on the server are a calendar day BEHIND
+// the user between 00:00 and 08:00 local - which is exactly when a night
+// shift files a request. Always derive "today" from the Mongolian wall clock.
+const ULAANBAATAR_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
+export function todayInMongolia() {
+  return new Date(Date.now() + ULAANBAATAR_UTC_OFFSET_MS).toISOString().slice(0, 10);
+}
 
 async function createNotificationForUser(params: {
   userId: string;
@@ -15,8 +25,8 @@ async function createNotificationForUser(params: {
   relatedEntityType?: string;
   relatedEntityId?: string;
   authorId?: string;
-}) {
-  await db('notifications').insert({
+}, trx: any = db) {
+  await trx('notifications').insert({
     id: uuidv4(),
     title: params.title,
     content: params.content,
@@ -35,14 +45,18 @@ async function createNotificationForAdmins(params: {
   relatedEntityType?: string;
   relatedEntityId?: string;
   authorId?: string;
-}) {
-  const admins = await db('users')
-    .where({ role: 'admin', status: 'active' })
+}, trx: any = db) {
+  // Superadmins were excluded here while the resolution step below deletes
+  // notifications for BOTH roles - so a superadmin never saw a leave request
+  // arrive but their (never-created) copy was dutifully cleaned up.
+  const admins = await trx('users')
+    .whereIn('role', ['admin', 'superadmin'])
+    .where({ status: 'active' })
     .select('id');
 
   if (admins.length === 0) return;
 
-  await db('notifications').insert(
+  await trx('notifications').insert(
     admins.map((admin: any) => ({
       id: uuidv4(),
       title: params.title,
@@ -207,6 +221,14 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
         authorId: userId,
       });
 
+      await logAction(
+        userId,
+        'CREATE_SHIFT_LEAVE_REQUEST',
+        'leave_requests',
+        id,
+        `Urgent leave requested for ${displayDate(booking.slot_date)} ${displayTime(booking.slot_start_time)}-${displayTime(booking.slot_end_time)}`,
+      );
+
       return res.status(201).json({ id });
     } catch (err) {
       console.error('Create shift leave request error:', err);
@@ -225,9 +247,48 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
     return res.status(400).json({ error: 'Огноо, цаг болон шалтгааныг зөв оруулна уу' });
   }
 
+  if (String(reason).trim().length > 1000) {
+    return res.status(400).json({ error: 'Шалтгаан хэт урт байна (1000 тэмдэгт)' });
+  }
+
+  // Everything below was previously unchecked: only the FORMAT of the date
+  // and times was validated, so a CSR could file leave for last year, with
+  // an end time before the start time, an end date before the start date,
+  // and as many identical overlapping requests as they liked.
+  if (finalEndDate && finalEndDate < finalDate) {
+    return res.status(400).json({ error: 'Дуусах огноо эхлэх огнооноос өмнө байж болохгүй' });
+  }
+
+  if (finalDate < todayInMongolia()) {
+    return res.status(400).json({ error: 'Өнгөрсөн өдрийн чөлөө хүсэх боломжгүй' });
+  }
+
+  if (leaveType === 'hourly' && finalEndTime <= finalStartTime) {
+    return res.status(400).json({ error: 'Дуусах цаг эхлэх цагаас хойш байх ёстой' });
+  }
+
   try {
     const id = uuidv4();
     const requestingUser = await db('users').where({ id: userId }).first();
+
+    // Reject a request that overlaps one this CSR already has open or
+    // approved for the same dates.
+    const overlapping = await db('leave_requests')
+      .where({ user_id: userId })
+      .whereIn('status', ['pending', 'approved'])
+      .andWhere(function () {
+        this.where(function () {
+          this.where('date', '<=', finalEndDate || finalDate)
+            .andWhere(db.raw('COALESCE(end_date, date)'), '>=', finalDate);
+        });
+      })
+      .first();
+
+    if (overlapping) {
+      return res.status(409).json({
+        error: `Энэ хугацаанд аль хэдийн чөлөөний хүсэлт (${overlapping.status === 'approved' ? 'зөвшөөрөгдсөн' : 'хүлээгдэж буй'}) байна.`,
+      });
+    }
 
     await db('leave_requests').insert({
       id,
@@ -254,6 +315,14 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
       authorId: userId,
     });
 
+    await logAction(
+      userId,
+      'CREATE_LEAVE_REQUEST',
+      'leave_requests',
+      id,
+      `${leaveType} leave requested for ${finalDate}${finalEndDate && finalEndDate !== finalDate ? ` - ${finalEndDate}` : ''}`,
+    );
+
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create leave request error:', err);
@@ -270,12 +339,24 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ error: 'Төлөв буруу байна' });
   }
+  if (comment !== undefined && comment !== null && String(comment).length > 1000) {
+    return res.status(400).json({ error: 'Тайлбар хэт урт байна (1000 тэмдэгт)' });
+  }
 
   try {
+    // LEFT join, not an inner join. leave_requests.user_id becomes NULL when
+    // the employee is deleted (ON DELETE SET NULL, deliberately, so the
+    // history survives). With an inner join the row was still LISTED by
+    // GET /leave - which does use a left join - but could not be found here,
+    // so the admin saw a request they were simply unable to action and got
+    // 404 "Хүсэлт олдсонгүй".
     const request = await db('leave_requests')
-      .join('users', 'leave_requests.user_id', '=', 'users.id')
+      .leftJoin('users', 'leave_requests.user_id', '=', 'users.id')
       .where({ 'leave_requests.id': id })
-      .select('leave_requests.*', 'users.name as user_name')
+      .select(
+        'leave_requests.*',
+        db.raw('COALESCE(users.name, leave_requests.user_name) as user_name'),
+      )
       .first();
 
     if (!request) {
@@ -288,50 +369,89 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
     // approving urgent leave just excuses this person from working it
     // (reflected in exports/reports), without freeing capacity for others.
 
-    await db('leave_requests').where({ id }).update({
-      status,
-      comment: comment || null,
-      approved_by: actingUserId,
-      updated_at: db.fn.now(),
+    // The whole decision - status, the stale admin alerts, and the
+    // notifications it produces - is now one transaction. Previously the
+    // status was committed first and a later notification failure returned
+    // 500, so the admin saw "error" for an approval that had in fact gone
+    // through, retried, and (with no state guard) approved it a second time.
+    const outcome = await db.transaction(async (trx) => {
+      // Guard the state machine. Without this an already-decided request
+      // could be decided again and again: approved_by was overwritten and
+      // the CSR was re-notified every time.
+      const updated = await trx('leave_requests')
+        .where({ id, status: 'pending' })
+        .update({
+          status,
+          comment: comment || null,
+          approved_by: actingUserId,
+          updated_at: trx.fn.now(),
+        });
+
+      if (updated !== 1) return { conflict: true as const };
+
+      // Clear the original "хүсэлт ирлээ" notifications that were sent to
+      // every admin when this request was created - now that it's resolved,
+      // those stale pending-alerts should stop showing for admins who didn't
+      // act on it. The CSR's own copy (if any) is untouched.
+      await trx('notifications')
+        .where({ related_entity_type: 'leave_request', related_entity_id: id })
+        .whereIn('target_user_id', trx('users').select('id').whereIn('role', ['admin', 'superadmin']))
+        .del();
+
+      const isApproved = status === 'approved';
+      const actingUser = await trx('users').where({ id: actingUserId }).first();
+      const isShiftLeave = request.type === 'shift_leave';
+
+      // A deleted requester has no account left to notify.
+      if (request.user_id) {
+        await createNotificationForUser({
+          userId: request.user_id,
+          title: isApproved ? 'Чөлөөний хүсэлт зөвшөөрөгдлөө' : 'Чөлөөний хүсэлт татгалзагдлаа',
+          content: isApproved
+            ? `Таны ${isShiftLeave ? `${displayDate(request.date)} ${displayTime(request.start_time)}-${displayTime(request.end_time)} ээлжийн` : request.type === 'daily' ? 'өдрийн' : 'цагийн'} чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} зөвшөөрлөө.`
+            : `Таны чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} татгалзлаа.${comment ? ` Шалтгаан: ${comment}` : ''}`,
+          type: 'leave_decision',
+          relatedEntityType: 'leave_request',
+          relatedEntityId: id,
+          authorId: actingUserId,
+        }, trx);
+      }
+
+      // Also let every admin know who made the decision, so it's visible to
+      // the whole admin team, not just the requesting CSR.
+      if (isShiftLeave) {
+        await createNotificationForAdmins({
+          title: isApproved ? 'Яаралтай чөлөө зөвшөөрөгдлөө' : 'Яаралтай чөлөө татгалзагдлаа',
+          content: `${request.user_name}-ийн ${displayDate(request.date)} ${displayTime(request.start_time)}-${displayTime(request.end_time)} ээлжийн чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} ${isApproved ? 'зөвшөөрлөө' : 'татгалзлаа'}.`,
+          type: 'leave_decision',
+          relatedEntityType: 'leave_request',
+          relatedEntityId: id,
+          authorId: actingUserId,
+        }, trx);
+      }
+
+      return { conflict: false as const };
     });
 
-    // Clear the original "хүсэлт ирлээ" notifications that were sent to
-    // every admin when this request was created - now that it's resolved,
-    // those stale pending-alerts should stop showing for admins who didn't
-    // act on it. The CSR's own copy (if any) is untouched.
-    await db('notifications')
-      .where({ related_entity_type: 'leave_request', related_entity_id: id })
-      .whereIn('target_user_id', db('users').select('id').whereIn('role', ['admin', 'superadmin']))
-      .del();
-
-    const isApproved = status === 'approved';
-    const actingUser = await db('users').where({ id: actingUserId }).first();
-    const isShiftLeave = request.type === 'shift_leave';
-
-    await createNotificationForUser({
-      userId: request.user_id,
-      title: isApproved ? 'Чөлөөний хүсэлт зөвшөөрөгдлөө' : 'Чөлөөний хүсэлт татгалзагдлаа',
-      content: isApproved
-        ? `Таны ${isShiftLeave ? `${displayDate(request.date)} ${displayTime(request.start_time)}-${displayTime(request.end_time)} ээлжийн` : request.type === 'daily' ? 'өдрийн' : 'цагийн'} чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} зөвшөөрлөө.`
-        : `Таны чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} татгалзлаа.${comment ? ` Шалтгаан: ${comment}` : ''}`,
-      type: 'leave_decision',
-      relatedEntityType: 'leave_request',
-      relatedEntityId: id,
-      authorId: actingUserId,
-    });
-
-    // Also let every admin know who made the decision, so it's visible to
-    // the whole admin team, not just the requesting CSR.
-    if (isShiftLeave) {
-      await createNotificationForAdmins({
-        title: isApproved ? 'Яаралтай чөлөө зөвшөөрөгдлөө' : 'Яаралтай чөлөө татгалзагдлаа',
-        content: `${request.user_name}-ийн ${displayDate(request.date)} ${displayTime(request.start_time)}-${displayTime(request.end_time)} ээлжийн чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} ${isApproved ? 'зөвшөөрлөө' : 'татгалзлаа'}.`,
-        type: 'leave_decision',
-        relatedEntityType: 'leave_request',
-        relatedEntityId: id,
-        authorId: actingUserId,
+    if (outcome.conflict) {
+      const current = await db('leave_requests').where({ id }).first();
+      return res.status(409).json({
+        error: current?.status === 'approved'
+          ? 'Энэ хүсэлтийг аль хэдийн зөвшөөрсөн байна.'
+          : current?.status === 'rejected'
+            ? 'Энэ хүсэлтийг аль хэдийн татгалзсан байна.'
+            : 'Хүсэлтийн төлөв өөрчлөгдсөн байна.',
+        status: current?.status,
       });
     }
+
+    await logAction(
+      actingUserId,
+      status === 'approved' ? 'APPROVE_LEAVE_REQUEST' : 'REJECT_LEAVE_REQUEST',
+      'leave_requests',
+      id,
+      `${status} ${request.type || 'hourly'} leave for ${request.user_name || 'deleted user'} (${displayDate(request.date)})`,
+    );
 
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
@@ -344,8 +464,11 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
 router.get('/vacation', authenticate, async (req: any, res) => {
   const { role, id } = req.user;
   try {
+    // LEFT join: vacation_requests.user_id is CASCADE-deleted today, but an
+    // inner join also hid any row whose user was merely being removed, and
+    // it is the same trap the leave endpoints fell into.
     let query = db('vacation_requests')
-      .join('users', 'vacation_requests.user_id', '=', 'users.id')
+      .leftJoin('users', 'vacation_requests.user_id', '=', 'users.id')
       .select('vacation_requests.*', 'users.name as user_name');
 
     if (role === 'csr') query = query.where({ 'vacation_requests.user_id': id });
@@ -369,9 +492,31 @@ router.post('/vacation', authenticate, authorize(['csr']), async (req: any, res)
   if (!finalStartDate || !finalEndDate || !reason) {
     return res.status(400).json({ error: 'Эхлэх/дуусах огноо болон шалтгааныг зөв оруулна уу' });
   }
+  if (String(reason).trim().length > 1000) {
+    return res.status(400).json({ error: 'Шалтгаан хэт урт байна (1000 тэмдэгт)' });
+  }
+  // Was entirely unchecked: an end date before the start date, and leave in
+  // the past, were both accepted.
+  if (finalEndDate < finalStartDate) {
+    return res.status(400).json({ error: 'Дуусах огноо эхлэх огнооноос өмнө байж болохгүй' });
+  }
+  if (finalStartDate < todayInMongolia()) {
+    return res.status(400).json({ error: 'Өнгөрсөн өдрөөр амралт хүсэх боломжгүй' });
+  }
 
   try {
+    const overlapping = await db('vacation_requests')
+      .where({ user_id: userId })
+      .whereIn('status', ['pending', 'approved'])
+      .andWhere('start_date', '<=', finalEndDate)
+      .andWhere('end_date', '>=', finalStartDate)
+      .first();
+    if (overlapping) {
+      return res.status(409).json({ error: 'Энэ хугацаанд аль хэдийн амралтын хүсэлт байна.' });
+    }
+
     const id = uuidv4();
+    const requestingUser = await db('users').where({ id: userId }).first();
     await db('vacation_requests').insert({
       id,
       user_id: userId,
@@ -380,6 +525,27 @@ router.post('/vacation', authenticate, authorize(['csr']), async (req: any, res)
       reason,
       status: 'pending',
     });
+
+    // No notification was created at all here, while PATCH below dutifully
+    // deleted the admin alerts that had never existed - so admins were
+    // simply never told a vacation request had arrived.
+    await createNotificationForAdmins({
+      title: 'Шинэ амралтын хүсэлт',
+      content: `${requestingUser?.name || 'CSR'} ${finalStartDate} - ${finalEndDate} хооронд амралт хүссэн байна.`,
+      type: 'vacation_request',
+      relatedEntityType: 'vacation_request',
+      relatedEntityId: id,
+      authorId: userId,
+    });
+
+    await logAction(
+      userId,
+      'CREATE_VACATION_REQUEST',
+      'vacation_requests',
+      id,
+      `Vacation requested ${finalStartDate} - ${finalEndDate}`,
+    );
+
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create vacation request error:', err);
@@ -399,7 +565,7 @@ router.patch('/vacation/:id', authenticate, authorize(['admin', 'superadmin']), 
 
   try {
     const request = await db('vacation_requests')
-      .join('users', 'vacation_requests.user_id', '=', 'users.id')
+      .leftJoin('users', 'vacation_requests.user_id', '=', 'users.id')
       .where({ 'vacation_requests.id': id })
       .select('vacation_requests.*', 'users.name as user_name')
       .first();
@@ -408,29 +574,50 @@ router.patch('/vacation/:id', authenticate, authorize(['admin', 'superadmin']), 
       return res.status(404).json({ error: 'Хүсэлт олдсонгүй' });
     }
 
-    await db('vacation_requests').where({ id }).update({
-      status,
-      approved_by: actingUserId,
-      updated_at: db.fn.now(),
-    });
-    const isApproved = status === 'approved';
+    const outcome = await db.transaction(async (trx) => {
+      const updated = await trx('vacation_requests')
+        .where({ id, status: 'pending' })
+        .update({ status, approved_by: actingUserId, updated_at: trx.fn.now() });
+      if (updated !== 1) return { conflict: true as const };
 
-    await db('notifications')
-      .where({ related_entity_type: 'vacation_request', related_entity_id: id })
-      .whereIn('target_user_id', db('users').select('id').whereIn('role', ['admin', 'superadmin']))
-      .del();
+      await trx('notifications')
+        .where({ related_entity_type: 'vacation_request', related_entity_id: id })
+        .whereIn('target_user_id', trx('users').select('id').whereIn('role', ['admin', 'superadmin']))
+        .del();
 
-    await createNotificationForUser({
-      userId: request.user_id,
-      title: isApproved ? 'Амралтын хүсэлт зөвшөөрөгдлөө' : 'Амралтын хүсэлт татгалзагдлаа',
-      content: isApproved
-        ? `Таны амралтын хүсэлт (${displayDate(request.start_date)} - ${displayDate(request.end_date)}) зөвшөөрөгдлөө.`
-        : `Таны амралтын хүсэлт (${displayDate(request.start_date)} - ${displayDate(request.end_date)}) татгалзагдлаа.`,
-      type: 'vacation_decision',
-      relatedEntityType: 'vacation_request',
-      relatedEntityId: id,
-      authorId: actingUserId,
+      if (request.user_id) {
+        const isApproved = status === 'approved';
+        await createNotificationForUser({
+          userId: request.user_id,
+          title: isApproved ? 'Амралтын хүсэлт зөвшөөрөгдлөө' : 'Амралтын хүсэлт татгалзагдлаа',
+          content: isApproved
+            ? `Таны амралтын хүсэлт (${displayDate(request.start_date)} - ${displayDate(request.end_date)}) зөвшөөрөгдлөө.`
+            : `Таны амралтын хүсэлт (${displayDate(request.start_date)} - ${displayDate(request.end_date)}) татгалзагдлаа.`,
+          type: 'vacation_decision',
+          relatedEntityType: 'vacation_request',
+          relatedEntityId: id,
+          authorId: actingUserId,
+        }, trx);
+      }
+
+      return { conflict: false as const };
     });
+
+    if (outcome.conflict) {
+      const current = await db('vacation_requests').where({ id }).first();
+      return res.status(409).json({
+        error: 'Энэ хүсэлтийг аль хэдийн шийдвэрлэсэн байна.',
+        status: current?.status,
+      });
+    }
+
+    await logAction(
+      actingUserId,
+      status === 'approved' ? 'APPROVE_VACATION_REQUEST' : 'REJECT_VACATION_REQUEST',
+      'vacation_requests',
+      id,
+      `${status} vacation for ${request.user_name || 'deleted user'} (${displayDate(request.start_date)} - ${displayDate(request.end_date)})`,
+    );
 
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {

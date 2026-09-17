@@ -30,6 +30,12 @@ apiClient.interceptors.request.use((config) => {
 type RetryableConfig = AxiosRequestConfig & { _retryCount?: number };
 
 /**
+ * Requests flagged `_background: true` come from a poller rather than a user
+ * action, so a 401 on one must not yank the page out from under unsaved work.
+ */
+type BackgroundAwareConfig = AxiosRequestConfig & { _background?: boolean };
+
+/**
  * Whether a failed request is worth sending again.
  *
  * Only reads (GET/HEAD) are retried. A write must never be replayed
@@ -90,7 +96,16 @@ apiClient.interceptors.response.use(
       // every single user out at once - see src/middleware/auth.ts.
       if (hadToken && window.location.pathname !== '/') {
         sessionStorage.setItem('sessionExpiredMessage', 'Таны нэвтрэлтийн хугацаа дууссан байна. Дахин нэвтэрнэ үү.');
-        window.location.href = '/';
+        // A 401 from a BACKGROUND poll used to navigate away mid-task,
+        // throwing away whatever the user was typing. Redirect immediately
+        // only for a foreground request; for a poll, let the next real
+        // interaction carry them to the login screen instead.
+        const isBackground = Boolean((error.config as BackgroundAwareConfig | undefined)?._background);
+        if (!isBackground) {
+          window.location.href = '/';
+        } else {
+          console.warn('Session expired during background polling; deferring redirect.');
+        }
       }
       return Promise.reject(error);
     }

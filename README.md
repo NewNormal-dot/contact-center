@@ -82,8 +82,12 @@ The backend serves both the API and the React frontend.
 
 ## Database Note
 
-* **SQLite**: Used for local development via `knexfile.ts`.
-* **Azure SQL / Microsoft SQL Server**: Used in production via `knexfile.mssql.cjs`.
+* **SQLite**: Used for local development via `knexfile.ts` (`development`).
+* **Azure SQL / Microsoft SQL Server**: Used in production via the same
+  `knexfile.ts` (`production`). There used to be a second, divergent
+  `knexfile.mssql.cjs` used only by `migrate:prod`; it did not set
+  `options.useUTC`, so migrations interpreted naive DATETIME values
+  differently from the running app. It has been removed.
 * Production database connection uses the `DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_PORT` environment variables.
 
 ## Important Migration Notes

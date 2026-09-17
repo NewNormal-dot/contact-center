@@ -28,7 +28,13 @@ export function toSqlTime(value: unknown): string | null {
   if (!value) return null;
 
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return [value.getHours(), value.getMinutes(), value.getSeconds()]
+    // A Date here comes from the driver: mssql with useUTC:true returns a
+    // TIME column as 1970-01-01T<stored time>Z, so the UTC fields ARE the
+    // stored value. Reading getHours() instead made the result depend on the
+    // server's timezone - identical on a UTC App Service, but eight hours
+    // out on a developer's machine set to Mongolia time, and it would break
+    // production outright if WEBSITE_TIME_ZONE were ever set.
+    return [value.getUTCHours(), value.getUTCMinutes(), value.getUTCSeconds()]
       .map((n) => String(n).padStart(2, '0'))
       .join(':');
   }

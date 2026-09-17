@@ -66,6 +66,8 @@ import {
   deleteLocalItem,
 } from "../../utils/localStorage";
 import apiClient from "../../lib/api-client";
+import { sanitizeRows, sanitizeAoa } from "../../utils/excel";
+import { downscaleImageToDataUrl, validateImageFile } from "../../utils/image";
 import { SHOW_VACATION_FEATURE } from "../../config/features";
 import { validatePasswordStrength } from "../../utils/passwordValidation";
 import {
@@ -551,6 +553,7 @@ const mapDbSlotsToSchedules = (slots: any[] = []) => {
       userName: booking.userName || booking.user_name || 'CSR',
       userCode: booking.userCode || booking.user_code,
       bookedAt: booking.bookedAt || booking.booked_at,
+      bookingWaveId: booking.bookingWaveId || booking.booking_wave_id || null,
     }));
 
     const day = next[dateKey] || {
@@ -589,12 +592,26 @@ const mapDbSlotsToSchedules = (slots: any[] = []) => {
           segment: slot.segment || 'All',
           employmentType: slot.employmentType || slot.employment_type || 'Full Time',
           location: slot.location || 'Ulaanbaatar',
-          bookingWaves: createDefaultBookingWaves(
-            Number(slot.capacity || slot.totalSlots || 1),
-            bookingOpen,
-            bookingOpenAt,
-            bookingCloseAt,
-          ),
+          // The server now persists the admin's split on
+          // work_slots.booking_waves. Regenerating it here on every poll is
+          // precisely what discarded the configuration a few seconds after
+          // it was set. Fall back to the default pair only when nothing has
+          // been configured yet.
+          bookingWaves: Array.isArray(slot.bookingWaves) && slot.bookingWaves.length > 0
+            ? slot.bookingWaves.map((wave: any, index: number) => ({
+                id: String(wave.id || `wave-${index + 1}`),
+                name: String(wave.name || `Эрх ${index + 1}`),
+                slotLimit: Math.max(0, Number(wave.slotLimit) || 0),
+                bookingOpen: Boolean(wave.bookingOpen),
+                bookingOpenAt: wave.bookingOpenAt || '',
+                bookingCloseAt: wave.bookingCloseAt || '',
+              }))
+            : createDefaultBookingWaves(
+                Number(slot.capacity || slot.totalSlots || 1),
+                bookingOpen,
+                bookingOpenAt,
+                bookingCloseAt,
+              ),
         },
       ],
     };
@@ -610,7 +627,7 @@ type BulkUploadUser = Partial<CSR> & {
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
-  const { logout, profile } = useAuth();
+  const { logout, profile, setProfilePhoto } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const trainingFileRef = useRef<HTMLInputElement>(null);
   const bulkUploadInputRef = useRef<HTMLInputElement>(null);
@@ -863,10 +880,18 @@ export default function AdminDashboard() {
       const list = Array.isArray(response.data) ? response.data : updated;
       setSegments(list);
       return list;
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving segments:", error);
-      alert("Segment жагсаалтыг хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
-      return segments;
+      // The server refuses to drop a segment that CSRs or shifts still point
+      // at, and says which - surface that instead of a generic message.
+      alert(
+        error.response?.data?.error ||
+          "Segment жагсаалтыг хадгалахад алдаа гарлаа. Дахин оролдоно уу.",
+      );
+      // Re-read the authoritative list so the UI does not keep showing an
+      // edit the server rejected.
+      const current = await fetchSegmentsFromDb().catch(() => segments);
+      return current;
     }
   };
 
@@ -967,10 +992,12 @@ export default function AdminDashboard() {
       if (waveSlotSaveTimerRef.current || pendingSaveCountRef.current > 0) {
         return dbSchedules;
       }
-      if (Object.keys(dbSchedules).length > 0) {
-        setSchedules(dbSchedules);
-        setLocalData("schedules", dbSchedules);
-      }
+      // Zero rows means "there is no schedule", not "the request failed" -
+      // conflating the two left deleted shifts on screen indefinitely and
+      // let admins act on a schedule the server no longer had. A transport
+      // failure still keeps the previous data, because it throws to catch.
+      setSchedules(dbSchedules);
+      setLocalData("schedules", dbSchedules);
       return dbSchedules;
     } catch (error) {
       console.error("Error fetching DB schedule:", error);
@@ -1015,11 +1042,37 @@ export default function AdminDashboard() {
       // never has to guess the timezone and the value stays stable across
       // save→read→save round-trips (fixes the "opens then reverts to
       // Товлогдсон" 8-hour drift). Local state is left untouched.
-      await apiClient.post("/slots/sync-schedules", {
+      const response = await apiClient.post("/slots/sync-schedules", {
         schedules: normalizeScheduleBookingTimes(scopedSchedules),
         dateKeys: uniqueDateKeys,
         ...(scope ? { scope } : {}),
       });
+
+      // The server no longer deletes a shift somebody has already booked, and
+      // no longer drops malformed shifts silently. Both used to look like a
+      // clean save while quietly losing data, so surface them here.
+      const kept: string[] = response.data?.keptBookedSlots || [];
+      const skippedRows: string[] = response.data?.skipped || [];
+      const messages: string[] = [];
+      if (kept.length > 0) {
+        messages.push(
+          `Дараах ээлжийг захиалсан ажилтан байгаа тул устгасангүй:\n${kept.slice(0, 15).join("\n")}` +
+            (kept.length > 15 ? `\n… бас ${kept.length - 15}` : "") +
+            `\n\nУстгах бол эхлээд ажилтныг ээлжээс хасна уу.`,
+        );
+      }
+      if (skippedRows.length > 0) {
+        messages.push(
+          `Дараах мөрүүд хадгалагдсангүй:\n${skippedRows.slice(0, 15).join("\n")}` +
+            (skippedRows.length > 15 ? `\n… бас ${skippedRows.length - 15}` : ""),
+        );
+      }
+      if (response.data?.skippedUnscopedDates > 0) {
+        messages.push(
+          "Segment сонгогдоогүй тул хуучин ээлжүүдийг цэгцлэсэнгүй. Segment-ээ сонгоод дахин хадгална уу.",
+        );
+      }
+      if (messages.length > 0) alert(messages.join("\n\n"));
     } catch (error: any) {
       console.error("Sync schedules to DB error:", error);
       alert(error.response?.data?.error || "Хуваарь DB-д хадгалахад алдаа гарлаа.");
@@ -1082,8 +1135,44 @@ export default function AdminDashboard() {
     tradeRequestId: raw.relatedEntityType === 'trade_requests' || raw.related_entity_type === 'trade_requests'
       ? (raw.relatedEntityId || raw.related_entity_id)
       : raw.tradeRequestId,
-    seenBy: [],
+    // GET /broadcasts/notifications returns the real read receipts for
+    // admins (notification_read_receipts, one row per user who opened it).
+    // This used to be hardcoded to [], which threw them away - so the
+    // "who has seen this" report marked EVERY employee as Үзээгүй and the
+    // unseen export returned the entire roster.
+    seenBy: Array.isArray(raw.notification_read_receipts)
+      ? raw.notification_read_receipts.map((receipt: any) => ({
+          userId: receipt.user_id || receipt.userId,
+          userName: receipt.user_name || receipt.userName || 'Unknown',
+          seenAt: receipt.read_at || receipt.readAt,
+        }))
+      : [],
   } as Notification);
+
+  const mapTrainingForUi = (raw: any): TrainingMaterial => ({
+    id: String(raw.id),
+    title: raw.title || "",
+    description: raw.description || "",
+    url: raw.attachmentUrl || raw.attachment_url || "",
+    type: raw.type || (raw.attachmentName || raw.attachment_name ? "File" : "Link"),
+    date: raw.createdAt || raw.created_at || new Date().toISOString(),
+    deadline: raw.deadline || "",
+    fileName: raw.attachmentName || raw.attachment_name || "",
+    hasStoredAttachment: Boolean(raw.hasStoredAttachment),
+    seenBy: [],
+  } as TrainingMaterial);
+
+  const fetchTrainingsFromDb = async () => {
+    try {
+      const response = await apiClient.get("/broadcasts/trainings");
+      const data = (response.data || []).map(mapTrainingForUi);
+      setTrainingMaterials(data);
+      return data;
+    } catch (error) {
+      console.error("Error fetching trainings:", error);
+      return [];
+    }
+  };
 
   const fetchNotificationsFromDb = async () => {
     try {
@@ -1128,7 +1217,7 @@ export default function AdminDashboard() {
     }).catch(() => undefined);
 
     fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
-    setTrainingMaterials(getLocalData("trainingMaterials", []));
+    fetchTrainingsFromDb().catch(() => undefined);
     setVacationRequests(getLocalData("vacationRequests", []));
     setMonthlyQuotas(
       getLocalData("monthlyQuotas", {
@@ -1216,7 +1305,6 @@ export default function AdminDashboard() {
       // and supervisor name to flash correctly on load and then revert
       // to blank shortly after.
       const n = getLocalData("notifications", []);
-      const tm = getLocalData("trainingMaterials", []);
       const vr = getLocalData("vacationRequests", []);
       const mq = getLocalData("monthlyQuotas", {
         0: 5,
@@ -1244,7 +1332,6 @@ export default function AdminDashboard() {
 
       const currentHash = JSON.stringify({
         n,
-        tm,
         vr,
         mq,
         hl,
@@ -1252,7 +1339,6 @@ export default function AdminDashboard() {
       if (currentHash !== lastDataRef.current) {
         lastDataRef.current = currentHash;
         fetchNotificationsFromDb().catch(() => setNotifications(n));
-        setTrainingMaterials(tm);
         setVacationRequests(vr);
         setMonthlyQuotas(mq);
         fetchLeaveRequests().catch(() => setHourlyLeaveRequests(hl));
@@ -1274,6 +1360,28 @@ export default function AdminDashboard() {
       fetchShiftRules().catch(() => undefined);
     }, POLLING_INTERVALS.REQUESTS);
 
+    // Notifications had NO timed refresh at all: they were only re-read on
+    // mount, on a cross-tab `storage` event, or when this browser's own
+    // localStorage happened to change. A new leave-request alert therefore
+    // reached an admin only after a manual page reload - "the page doesn't
+    // update / it only works after refresh".
+    const stopNotificationPoll = startPolling(() => {
+      fetchNotificationsFromDb().catch(() => undefined);
+      fetchTrainingsFromDb().catch(() => undefined);
+    }, POLLING_INTERVALS.NOTIFICATIONS);
+
+    // Employee roster, segments and holidays were likewise fetched once at
+    // mount, so another admin's changes never appeared.
+    const stopReferenceDataPoll = startPolling(() => {
+      fetchCsrUsers().catch(() => undefined);
+      fetchSegmentsFromDb().catch(() => undefined);
+    }, POLLING_INTERVALS.SUPERADMIN);
+
+    const stopHolidayPoll = startPolling(
+      () => fetchHolidaysFromDb().catch(() => undefined),
+      POLLING_INTERVALS.HOLIDAYS,
+    );
+
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === "notifications") {
         fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
@@ -1288,6 +1396,9 @@ export default function AdminDashboard() {
       clearInterval(interval);
       stopSchedulePoll();
       stopApiRefresh();
+      stopNotificationPoll();
+      stopReferenceDataPoll();
+      stopHolidayPoll();
       window.removeEventListener("storage", handleStorageUpdate);
       if (waveSlotSaveTimerRef.current) {
         window.clearTimeout(waveSlotSaveTimerRef.current);
@@ -1428,19 +1539,26 @@ export default function AdminDashboard() {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // Was a localStorage write to a key nothing reads, so it silently did
+  // nothing. See the same fix in Sidebar.tsx.
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file && profile) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result as string;
-        try {
-          updateLocalItem("users", profile.id, { photoUrl: base64 });
-        } catch (error) {
-          console.error("Error updating admin photo:", error);
-        }
-      };
-      reader.readAsDataURL(file);
+    event.target.value = "";
+    if (!file || !profile) return;
+
+    const invalid = validateImageFile(file);
+    if (invalid) {
+      alert(invalid);
+      return;
+    }
+
+    try {
+      const dataUrl = await downscaleImageToDataUrl(file);
+      const response = await apiClient.post("/users/me/photo", { photo: dataUrl });
+      setProfilePhoto(response.data?.photoUrl || dataUrl);
+    } catch (error: any) {
+      console.error("Error updating admin photo:", error);
+      alert(error.response?.data?.error || "Зураг хадгалахад алдаа гарлаа.");
     }
   };
 
@@ -1608,7 +1726,7 @@ export default function AdminDashboard() {
     });
 
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(rows));
     XLSX.utils.book_append_sheet(wb, ws, "Амралтын хүсэлтүүд");
     XLSX.writeFile(
       wb,
@@ -1680,7 +1798,7 @@ export default function AdminDashboard() {
     }));
 
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(rows));
     XLSX.utils.book_append_sheet(wb, ws, "Ажилтнууд");
     XLSX.writeFile(
       wb,
@@ -1706,7 +1824,7 @@ export default function AdminDashboard() {
       },
     ];
     const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const worksheet = XLSX.utils.json_to_sheet(sanitizeRows(rows));
     XLSX.utils.book_append_sheet(workbook, worksheet, "Employees");
     XLSX.writeFile(workbook, "employee_bulk_upload_template.xlsx");
     logAction(
@@ -1731,10 +1849,15 @@ export default function AdminDashboard() {
     }
 
     try {
-      await apiClient.post("/auth/change-password", {
+      const passwordResponse = await apiClient.post("/auth/change-password", {
         oldPassword: passwordForm.old,
         newPassword: passwordForm.new,
       });
+      // The server revokes every session opened before the change and hands
+      // back a token issued after that cutoff, so THIS session survives.
+      if (passwordResponse.data?.token) {
+        localStorage.setItem("token", passwordResponse.data.token);
+      }
 
       logAction("Password Changed", `Changed password for ${profile.name}`);
       alert("Нууц үг амжилттай солигдлоо!");
@@ -1748,62 +1871,62 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleAddMaterial = (e: React.FormEvent) => {
+  const handleAddMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMaterial.title) {
-      const processSubmission = (url: string = "", type: string = "Link") => {
+    if (!newMaterial.title) return;
+
+    // This used to write ONLY to localStorage - nothing ever called
+    // POST /broadcasts/trainings, so CSRs read an always-empty list and the
+    // whole Training feature was non-functional for every role. Attachments
+    // over 255 characters (i.e. any real file) are stored server-side in
+    // training_attachments and fetched on demand.
+    const submit = async (url: string, type: string) => {
+      const payload = {
+        title: newMaterial.title,
+        description: newMaterial.description || "",
+        attachmentUrl: url || newMaterial.url || "",
+        attachmentName: newMaterial.fileName || selectedFile?.name || "",
+        deadline: newMaterial.deadline || "",
+      };
+
+      try {
         if (editingMaterial) {
-          const updatedMaterials = updateLocalItem(
-            "trainingMaterials",
-            editingMaterial.id,
-            {
-              ...newMaterial,
-              id: editingMaterial.id,
-              url: url || newMaterial.url || "",
-              type: type || newMaterial.type || "Link",
-            },
+          await apiClient.put(
+            `/broadcasts/trainings/${editingMaterial.id}`,
+            payload,
           );
-          setTrainingMaterials(updatedMaterials);
           logAction(
             "Material Updated",
             `Updated training material: ${newMaterial.title}`,
           );
         } else {
-          const material: TrainingMaterial = {
-            id: Math.random().toString(36).substr(2, 9),
-            title: newMaterial.title!,
-            description: newMaterial.description || "",
-            url: url,
-            type: type,
-            date: new Date().toISOString().split("T")[0],
-            deadline: newMaterial.deadline,
-            seenBy: [],
-          };
-          const updatedMaterials = addLocalItem("trainingMaterials", material);
-          setTrainingMaterials(updatedMaterials);
-          setShowSeenDetails(material);
+          await apiClient.post("/broadcasts/trainings", payload);
           logAction(
             "Material Added",
-            `Added training material: ${material.title}`,
+            `Added training material: ${newMaterial.title}`,
           );
 
-          const notification: Notification = {
-            id: Math.random().toString(36).substr(2, 9),
-            title: "Шинэ сургалтын материал",
-            content: `"${material.title}" нэртэй шинэ сургалтын материал нэмэгдлээ. Дуусах хугацаа: ${material.deadline}`,
-            createdAt: new Date().toISOString(),
-            deadline: material.deadline || "",
-            authorId: "admin",
-            authorName: "Admin",
-            type: "training",
-            seenBy: [],
-          };
-          const updatedNotifications = addLocalItem(
-            "notifications",
-            notification,
-          );
-          setNotifications(updatedNotifications);
+          // Announce it through the real notification pipeline so CSRs
+          // actually hear about it.
+          await apiClient
+            .post("/broadcasts/notifications", {
+              title: "Шинэ сургалтын материал",
+              content: `"${newMaterial.title}" нэртэй шинэ сургалтын материал нэмэгдлээ.${newMaterial.deadline ? ` Дуусах хугацаа: ${newMaterial.deadline}` : ""}`,
+              type: "training",
+              deadline: newMaterial.deadline || "",
+            })
+            .catch((err: any) =>
+              console.error("Training announcement failed:", err),
+            );
+          await fetchNotificationsFromDb().catch(() => undefined);
         }
+
+        const list = await fetchTrainingsFromDb();
+        const saved = list.find(
+          (item: TrainingMaterial) => item.title === newMaterial.title,
+        );
+        if (saved && !editingMaterial) setShowSeenDetails(saved);
+
         setIsAddingMaterial(false);
         setEditingMaterial(null);
         setSelectedFile(null);
@@ -1813,107 +1936,161 @@ export default function AdminDashboard() {
             .toISOString()
             .slice(0, 16),
         });
-      };
-
-      if (selectedFile) {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64 = reader.result as string;
-          let fileType = "File";
-          if (selectedFile.type.startsWith("image/")) fileType = "Image";
-          else if (selectedFile.type.startsWith("video/")) fileType = "Video";
-          else if (selectedFile.type === "application/pdf") fileType = "PDF";
-          processSubmission(base64, fileType);
-        };
-        reader.readAsDataURL(selectedFile);
-      } else {
-        processSubmission(newMaterial.url || "", newMaterial.type || "Article");
+      } catch (error: any) {
+        console.error("Error saving training material:", error);
+        alert(
+          error.response?.data?.error ||
+            "Сургалтын материал хадгалахад алдаа гарлаа.",
+        );
       }
+    };
+
+    if (selectedFile) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        let fileType = "File";
+        if (selectedFile.type.startsWith("image/")) fileType = "Image";
+        else if (selectedFile.type.startsWith("video/")) fileType = "Video";
+        else if (selectedFile.type === "application/pdf") fileType = "PDF";
+        void submit(base64, fileType);
+      };
+      reader.onerror = () => {
+        alert("Файл уншихад алдаа гарлаа.");
+      };
+      reader.readAsDataURL(selectedFile);
+    } else {
+      await submit(newMaterial.url || "", newMaterial.type || "Article");
     }
   };
 
-  const handleDeleteMaterial = (id: string) => {
-    const updatedMaterials = deleteLocalItem("trainingMaterials", id);
-    setTrainingMaterials(updatedMaterials);
-    setShowSeenDetails((prev) => (prev?.id === id ? null : prev));
-    logAction("Material Deleted", `Deleted material with ID: ${id}`);
+  const handleDeleteMaterial = async (id: string) => {
+    try {
+      await apiClient.delete(`/broadcasts/trainings/${id}`);
+      setTrainingMaterials((prev) => prev.filter((m) => m.id !== id));
+      setShowSeenDetails((prev) => (prev?.id === id ? null : prev));
+      logAction("Material Deleted", `Deleted material with ID: ${id}`);
+    } catch (error: any) {
+      console.error("Error deleting training material:", error);
+      alert(
+        error.response?.data?.error || "Материал устгахад алдаа гарлаа.",
+      );
+    }
   };
 
-  const handleSendNotification = (e: React.FormEvent) => {
+  const handleSendNotification = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newNotification.title && newNotification.content) {
-      const notification: Notification = {
-        id: Math.random().toString(36).substr(2, 9),
+    if (!newNotification.title || !newNotification.content) return;
+
+    // This used to write ONLY to localStorage. No CSR ever received the
+    // notification, and the 5-second local-data poll below refetched from
+    // the database and wiped it off the admin's own screen a moment later -
+    // the "I sent it and it disappeared" report. The endpoint has always
+    // existed; SuperAdminDashboard already used it.
+    try {
+      await apiClient.post("/broadcasts/notifications", {
         title: newNotification.title,
         content: newNotification.content,
-        type: newNotification.type as any,
         deadline: newNotification.deadline || "",
-        createdAt: new Date().toISOString(),
-        authorId: "admin",
-        authorName: "Admin",
-        seenBy: [],
-      };
-      const updatedNotifications = addLocalItem("notifications", notification);
-      setNotifications(updatedNotifications);
-      setShowSeenDetails(notification);
+        type: newNotification.type || "general",
+      });
+
+      const refreshed = await fetchNotificationsFromDb();
+      const created = refreshed.find(
+        (item: Notification) =>
+          item.title === newNotification.title &&
+          item.content === newNotification.content,
+      );
+      if (created) setShowSeenDetails(created);
+
       logAction(
         "Notification Sent",
-        `Sent notification: ${notification.title}`,
+        `Sent notification: ${newNotification.title}`,
       );
       setNewNotification({
         type: "general",
         deadline: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
       });
       setNotifSubTab("inbox");
+    } catch (error: any) {
+      console.error("Error sending notification:", error);
+      alert(
+        error.response?.data?.error || "Мэдэгдэл илгээхэд алдаа гарлаа.",
+      );
     }
   };
 
-  const markMaterialAsRead = (id: string) => {
+  const markMaterialAsRead = async (id: string) => {
+    if (!profile?.id) return;
     const mat = trainingMaterials.find((m) => m.id === id);
-    if (mat && !mat.seenBy?.some((s) => s.userId === "admin")) {
+    if (!mat || mat.seenBy?.some((s) => s.userId === profile.id)) return;
+
+    try {
+      await apiClient.post("/broadcasts/trainings/complete", {
+        training_id: id,
+      });
       const seenBy = [
         ...(mat.seenBy || []),
         {
-          userId: "admin",
-          userName: "Admin",
+          userId: profile.id,
+          userName: profile.name || "Admin",
           seenAt: new Date().toISOString(),
         },
       ];
-      const updatedMaterials = updateLocalItem("trainingMaterials", id, {
-        seenBy,
-      });
-      setTrainingMaterials(updatedMaterials);
+      setTrainingMaterials((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, seenBy } : m)),
+      );
       setShowSeenDetails((prev) =>
         prev?.id === id ? ({ ...prev, seenBy } as any) : prev,
       );
+    } catch (error) {
+      console.error("Error marking material as read:", error);
     }
   };
 
-  const markNotificationAsRead = (id: string) => {
+  const markNotificationAsRead = async (id: string) => {
+    if (!profile?.id) return;
     const n = notifications.find((notif) => notif.id === id);
-    if (n && !n.seenBy?.some((s) => s.userId === "admin")) {
+    if (!n || n.seenBy?.some((s) => s.userId === profile.id)) return;
+
+    // Read state belongs in notification_read_receipts, not localStorage -
+    // the previous version recorded the literal string "admin" as the user
+    // id in a per-browser copy, so it never matched a real receipt.
+    try {
+      await apiClient.post("/broadcasts/notifications/read", {
+        notification_id: id,
+      });
       const seenBy = [
         ...(n.seenBy || []),
         {
-          userId: "admin",
-          userName: "Admin",
+          userId: profile.id,
+          userName: profile.name || "Admin",
           seenAt: new Date().toISOString(),
         },
       ];
-      const updatedNotifications = updateLocalItem("notifications", id, {
-        seenBy,
-      });
-      setNotifications(updatedNotifications);
+      setNotifications((prev) =>
+        prev.map((notif) => (notif.id === id ? { ...notif, seenBy } : notif)),
+      );
       setShowSeenDetails((prev) =>
         prev?.id === id ? ({ ...prev, seenBy } as any) : prev,
       );
+    } catch (error) {
+      console.error("Error marking notification as read:", error);
     }
   };
 
-  const handleDeleteNotification = (id: string) => {
-    const updatedNotifications = deleteLocalItem("notifications", id);
-    setNotifications(updatedNotifications);
-    logAction("Notification Deleted", `Deleted notification: ${id}`);
+  const handleDeleteNotification = async (id: string) => {
+    // Was localStorage-only, so the notification came straight back on the
+    // next fetch and was never removed for anybody else.
+    try {
+      await apiClient.delete(`/broadcasts/notifications/${id}`);
+      setNotifications((prev) => prev.filter((notif) => notif.id !== id));
+      setShowSeenDetails((prev) => (prev?.id === id ? null : prev));
+      logAction("Notification Deleted", `Deleted notification: ${id}`);
+    } catch (error: any) {
+      console.error("Error deleting notification:", error);
+      alert(error.response?.data?.error || "Мэдэгдэл устгахад алдаа гарлаа.");
+    }
   };
 
   const handleDeleteUser = async (id: string) => {
@@ -2000,7 +2177,7 @@ export default function AdminDashboard() {
       };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(data);
+    const worksheet = XLSX.utils.json_to_sheet(sanitizeRows(data));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Seen Status");
     XLSX.writeFile(workbook, `Notification_Report_${notif.id}.xlsx`);
@@ -2023,7 +2200,7 @@ export default function AdminDashboard() {
       };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(data);
+    const worksheet = XLSX.utils.json_to_sheet(sanitizeRows(data));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Unseen Users");
     XLSX.writeFile(workbook, `Notification_Unseen_${notif.id}.xlsx`);
@@ -2152,6 +2329,7 @@ export default function AdminDashboard() {
   const [bulkUsers, setBulkUsers] = useState<BulkUploadUser[]>([]);
   const [bulkUploadFileName, setBulkUploadFileName] = useState("");
   const [bulkUploadError, setBulkUploadError] = useState("");
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
   const [isAddingSegment, setIsAddingSegment] = useState(false);
   const [newSegment, setNewSegment] = useState("");
   const [editingSegment, setEditingSegment] = useState<string | null>(null);
@@ -2338,19 +2516,21 @@ export default function AdminDashboard() {
     return "Full Time";
   };
 
-  const persistSegments = (updatedSegments: string[]) => {
-    saveSegmentsToDb(updatedSegments);
+  // Awaits the save and only re-points the active views once the server has
+  // actually accepted the new list. Previously this was fire-and-forget, so a
+  // rejected save still moved the UI as though it had worked.
+  const persistSegments = async (updatedSegments: string[]) => {
+    const saved = await saveSegmentsToDb(updatedSegments);
 
-    if (activeSegmentView && !updatedSegments.includes(activeSegmentView)) {
-      setActiveSegmentView(updatedSegments[0] || "");
+    if (activeSegmentView && !saved.includes(activeSegmentView)) {
+      setActiveSegmentView(saved[0] || "");
     }
 
-    if (
-      filters.segment !== "All" &&
-      !updatedSegments.includes(filters.segment)
-    ) {
+    if (filters.segment !== "All" && !saved.includes(filters.segment)) {
       setFilters((prev) => ({ ...prev, segment: "All" }));
     }
+
+    return saved;
   };
 
   const handleBulkUploadFile = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2358,10 +2538,23 @@ export default function AdminDashboard() {
     event.target.value = "";
     if (!file) return;
 
+    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(file.name)) {
+      setBulkUploadError("Зөвхөн Excel (.xlsx, .xls, .csv) файл оруулна уу.");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setBulkUploadError("Файл хэт том байна (20MB-аас бага байх ёстой).");
+      return;
+    }
+
     setBulkUploadFileName(file.name);
     setBulkUploadError("");
 
     const reader = new FileReader();
+    reader.onerror = () => {
+      setBulkUsers([]);
+      setBulkUploadError("Файл уншихад алдаа гарлаа.");
+    };
     reader.onload = (evt) => {
       try {
         const workbook = XLSX.read(evt.target?.result, { type: "array" });
@@ -2489,6 +2682,7 @@ export default function AdminDashboard() {
       return;
     }
 
+    setIsBulkSubmitting(true);
     try {
       const uploadSegments = Array.from(
         new Set(
@@ -2505,47 +2699,89 @@ export default function AdminDashboard() {
           ),
       );
       if (missingSegments.length > 0) {
-        persistSegments([...segments, ...missingSegments]);
+        await persistSegments([...segments, ...missingSegments]);
       }
 
-      const usersToAdd: CSR[] = [];
+      // Previously this was a bare `for` loop inside ONE try/catch, so the
+      // first failing row threw and every remaining row was silently never
+      // attempted - leaving a half-imported roster with one generic alert
+      // and no indication of where it stopped. Each row is now independent
+      // and its real outcome is reported.
+      const created: CSR[] = [];
+      const failed: { row: BulkUploadUser; reason: string }[] = [];
+
       for (const user of validUsers) {
-        const response = await apiClient.post("/users", {
-          code: user.code,
-          name: user.name,
-          email: user.email,
-          location: user.location,
-          supervisorName: user.supervisorName,
-          role: "csr",
-          status: "active",
-          segment: user.lineType,
-          employmentType: user.employmentType || "Full Time",
-        });
-        usersToAdd.push(
-          mapCsrForUi({
-            ...response.data,
-            segment: user.lineType,
+        try {
+          const response = await apiClient.post("/users", {
+            code: user.code,
+            name: user.name,
+            email: user.email,
             location: user.location,
             supervisorName: user.supervisorName,
-            photoUrl: user.photoUrl,
-          }),
+            role: "csr",
+            status: "active",
+            segment: user.lineType,
+            employmentType: user.employmentType || "Full Time",
+          });
+          created.push(
+            mapCsrForUi({
+              ...response.data,
+              segment: user.lineType,
+              location: user.location,
+              supervisorName: user.supervisorName,
+              photoUrl: user.photoUrl,
+            }),
+          );
+        } catch (error: any) {
+          failed.push({
+            row: user,
+            reason:
+              error.response?.data?.error ||
+              (error.code === "ECONNABORTED"
+                ? "Хугацаа хэтэрсэн"
+                : "Сервертэй холбогдож чадсангүй"),
+          });
+        }
+      }
+
+      await fetchCsrUsers();
+
+      if (created.length > 0) {
+        logAction(
+          "Bulk Employees Added",
+          `${created.length} ажилтан Excel-ээр олноор нэмэгдлээ.`,
         );
       }
 
-      const updatedUsers = [...csrs, ...usersToAdd];
-      setCsrs(updatedUsers);
-      closeBulkUploadModal();
-      logAction(
-        "Bulk Employees Added",
-        `${usersToAdd.length} ажилтан Excel-ээр олноор нэмэгдлээ.`,
-      );
-      await fetchCsrUsers();
-      alert(`${usersToAdd.length} CSR амжилттай нэмэгдэж, нууц үг тохируулах холбоосууд и-мэйлээр илгээгдлээ.`);
+      // A real per-row report instead of "N duplicates skipped" for every
+      // possible cause.
+      const summary = [`Амжилттай нэмэгдсэн: ${created.length}`];
+      if (failed.length > 0) {
+        summary.push(
+          `Нэмэгдээгүй: ${failed.length}`,
+          ...failed
+            .slice(0, 15)
+            .map((f) => `  • ${f.row.email} — ${f.reason}`),
+        );
+        if (failed.length > 15) summary.push(`  … бас ${failed.length - 15}`);
+      }
+      alert(summary.join("\n"));
+
+      if (failed.length === 0) {
+        closeBulkUploadModal();
+      } else {
+        // Leave the failed rows on screen so they can be corrected and retried.
+        setBulkUsers(
+          failed.map((f) => ({ ...f.row, error: f.reason })),
+        );
+      }
     } catch (error: any) {
       console.error("Error bulk adding CSR users:", error);
       alert(
         error.response?.data?.error || "Хэрэглэгч олноор нэмэхэд алдаа гарлаа.",
       );
+    } finally {
+      setIsBulkSubmitting(false);
     }
   };
 
@@ -2557,17 +2793,24 @@ export default function AdminDashboard() {
       !segments.some((s) => s.toLowerCase() === trimmedSegment.toLowerCase())
     ) {
       const updatedSegments = [...segments, trimmedSegment];
-      persistSegments(updatedSegments);
+      void persistSegments(updatedSegments);
       setIsAddingSegment(false);
       setNewSegment("");
       logAction("Segment Added", `Added segment: ${trimmedSegment}`);
     }
   };
 
-  const handleDeleteSegment = (segmentName: string) => {
+  const handleDeleteSegment = async (segmentName: string) => {
     const updatedSegments = segments.filter((s) => s !== segmentName);
-    persistSegments(updatedSegments);
-    logAction("Segment Deleted", `Deleted segment: ${segmentName}`);
+    // The server refuses the delete (409) if CSRs or shifts still reference
+    // this segment, and saveSegmentsToDb surfaces that message; it also
+    // re-reads the authoritative list, so a refused delete leaves the UI
+    // showing the segment still present rather than silently orphaning
+    // everyone in it.
+    const saved = await persistSegments(updatedSegments);
+    if (!saved.includes(segmentName)) {
+      logAction("Segment Deleted", `Deleted segment: ${segmentName}`);
+    }
   };
 
   const handleMoveSegment = (segmentName: string, direction: -1 | 1) => {
@@ -2581,7 +2824,7 @@ export default function AdminDashboard() {
       updatedSegments[nextIndex],
       updatedSegments[currentIndex],
     ];
-    persistSegments(updatedSegments);
+    void persistSegments(updatedSegments);
     logAction("Segment Reordered", `Moved segment ${segmentName}`);
   };
 
@@ -2609,54 +2852,37 @@ export default function AdminDashboard() {
       return;
     }
 
-    const affectedUsers = csrs.filter((user) => user.lineType === oldName);
-
+    // Renaming used to be done from here as N separate PUT /users/:id calls
+    // plus a POST /slots/sync-schedules carrying the ENTIRE in-memory
+    // schedule with NO scope - which made the server treat every unmatched
+    // shift as stale and delete it together with its confirmed bookings.
+    // The server now does the whole rename in one transaction, updating
+    // users, work_slots and shift_rule_settings together.
     try {
-      await Promise.all(
-        affectedUsers.map((user) =>
-          apiClient.put(`/users/${user.id}`, {
-            code: user.code,
-            name: user.name,
-            status: user.status || "active",
-            segment: nextName,
-            employmentType: user.employmentType || "Full Time",
-          }),
-        ),
-      );
+      const response = await apiClient.post("/settings/segments/rename", {
+        from: oldName,
+        to: nextName,
+      });
 
-      const updatedSegments = segments.map((segment) =>
-        segment === oldName ? nextName : segment,
-      );
-      const updatedUsers = csrs.map((user) =>
-        user.lineType === oldName ? { ...user, lineType: nextName } : user,
-      );
-      const updatedSchedules = Object.entries(schedules).reduce(
-        (acc, [dateKey, dayData]: [string, any]) => {
-          acc[dateKey] = dayData?.shifts
-            ? {
-                ...dayData,
-                shifts: dayData.shifts.map((shift: any) =>
-                  shift.segment === oldName
-                    ? { ...shift, segment: nextName }
-                    : shift,
-                ),
-              }
-            : dayData;
-          return acc;
-        },
-        {} as Record<string, any>,
-      );
+      const nextSegments: string[] = Array.isArray(response.data?.segments)
+        ? response.data.segments
+        : segments.map((segment) => (segment === oldName ? nextName : segment));
+      setSegments(nextSegments);
 
-      persistSegments(updatedSegments);
-      setCsrs(updatedUsers);
-      await persistSchedules(updatedSchedules, Object.keys(updatedSchedules), null);
       if (activeSegmentView === oldName) setActiveSegmentView(nextName);
       if (filters.segment === oldName)
         setFilters((prev) => ({ ...prev, segment: nextName }));
       setEditingSegment(null);
       setSegmentDraftName("");
       logAction("Segment Renamed", `Renamed segment ${oldName} to ${nextName}`);
-      await fetchCsrUsers();
+
+      // Re-read everything the rename touched from the database rather than
+      // patching local copies.
+      await Promise.all([
+        fetchCsrUsers().catch(() => undefined),
+        fetchDbSchedule().catch(() => undefined),
+        fetchShiftRules().catch(() => undefined),
+      ]);
     } catch (error: any) {
       console.error("Error renaming segment:", error);
       alert(error.response?.data?.error || "Сегмент нэр солиход алдаа гарлаа.");
@@ -4333,7 +4559,7 @@ export default function AdminDashboard() {
         aoa.push(row);
       });
 
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const ws = XLSX.utils.aoa_to_sheet(sanitizeAoa(aoa));
 
       cellComments.forEach((commentText, key) => {
         const [r, c] = key.split(",").map(Number);

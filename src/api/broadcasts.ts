@@ -6,6 +6,7 @@ import { toSqlDateTime } from '../utils/sqlDate';
 import { logAction } from './audit';
 import { captureError } from '../utils/errorLog';
 import { createThrottledTask } from '../utils/throttledTask';
+import { tableExists } from '../database/schemaUtils';
 
 const router = express.Router();
 
@@ -24,6 +25,36 @@ function mapNotification(row: any) {
   };
 }
 
+// trainings.attachment_url is nvarchar(255); anything bigger (a base64 file
+// from the upload control) lives in training_attachments and is fetched on
+// demand. See migrations/20260918000000_create_training_attachments.
+const INLINE_ATTACHMENT_MAX = 255;
+const STORED_ATTACHMENT_MAX_CHARS = 5 * 1024 * 1024; // ~5MB of base64
+
+async function hasAttachmentTable() {
+  return tableExists(db, 'training_attachments');
+}
+
+/**
+ * True for a duplicate-key / unique-constraint violation on any of the three
+ * dialects this app talks to. Both of the tables below have a composite
+ * primary key and were written with a check-then-insert, so an ordinary
+ * double-click or two open tabs raced and surfaced the violation as a bare
+ * 500. The row already existing is the desired end state, so swallow it.
+ */
+function isDuplicateKeyError(err: any): boolean {
+  const number = err?.number ?? err?.originalError?.info?.number;
+  if (number === 2627 || number === 2601) return true; // mssql PK / unique index
+  const code = String(err?.code || '');
+  if (code === 'SQLITE_CONSTRAINT' || code === '23505') return true; // sqlite / postgres
+  return /duplicate|unique constraint|primary key/i.test(String(err?.message || ''));
+}
+
+function textField(value: unknown, max: number) {
+  const text = String(value ?? '').trim();
+  return text.length > max ? null : text;
+}
+
 function mapTraining(row: any) {
   return {
     ...row,
@@ -32,6 +63,9 @@ function mapTraining(row: any) {
     authorId: row.author_id,
     createdAt: row.created_at,
     completedAt: row.completed_at,
+    // True when the payload lives in training_attachments and has to be
+    // fetched through GET /trainings/:id/attachment.
+    hasStoredAttachment: Boolean(row.has_stored_attachment),
   };
 }
 
@@ -169,17 +203,27 @@ router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), 
     related_entity_id,
   } = req.body;
 
+  const finalTitle = textField(title, 200);
+  const finalImageUrl = textField(image_url ?? imageUrl, 2000);
+
   if (!title || !content) {
     return res.status(400).json({ error: 'Гарчиг болон агуулга шаардлагатай' });
+  }
+  // notifications.title and image_url are nvarchar(255); an oversized value
+  // used to reach SQL Server and come back as a truncation 500.
+  if (finalTitle === null) return res.status(400).json({ error: 'Гарчиг хэт урт байна (200 тэмдэгт)' });
+  if (String(content).length > 5000) return res.status(400).json({ error: 'Агуулга хэт урт байна (5000 тэмдэгт)' });
+  if (finalImageUrl === null || (finalImageUrl && finalImageUrl.length > 255)) {
+    return res.status(400).json({ error: 'Зургийн холбоос хэт урт байна. Файл хавсаргах бус холбоос ашиглана уу.' });
   }
 
   try {
     const id = uuidv4();
     await db('notifications').insert({
       id,
-      title,
+      title: finalTitle,
       content,
-      image_url: image_url || imageUrl || null,
+      image_url: finalImageUrl || null,
       deadline: toSqlDateTime(deadline),
       type: type || 'general',
       target_user_id: target_user_id || targetUserId || null,
@@ -199,9 +243,21 @@ router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), 
 router.delete('/notifications/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { id } = req.params;
   try {
+    const existing = await db('notifications').where({ id }).first();
+    // Used to return 200 for an id that did not exist, so the UI reported a
+    // successful delete for a no-op.
+    if (!existing) return res.status(404).json({ error: 'Мэдэгдэл олдсонгүй' });
+
+    // Any admin could delete ANY notification, including other admins' and
+    // system-generated ones. Authors may remove their own; superadmins may
+    // remove anything.
+    if (req.user.role !== 'superadmin' && existing.author_id && String(existing.author_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Зөвхөн өөрийн үүсгэсэн мэдэгдлийг устгах боломжтой' });
+    }
+
     await db('notification_read_receipts').where({ notification_id: id }).delete();
     await db('notifications').where({ id }).delete();
-    await logAction(req.user.id, 'DELETE_NOTIFICATION', 'notifications', id, 'Notification deleted');
+    await logAction(req.user.id, 'DELETE_NOTIFICATION', 'notifications', id, `Notification deleted: ${existing.title}`);
     res.json({ message: 'Мэдэгдэл устгагдлаа' });
   } catch (err) {
     console.error('Delete notification error:', err);
@@ -223,11 +279,17 @@ router.post('/notifications/read', authenticate, async (req: any, res) => {
       .first();
 
     if (!existing) {
-      await db('notification_read_receipts').insert({
-        notification_id: finalNotificationId,
-        user_id: userId,
-        read_at: db.fn.now(),
-      });
+      try {
+        await db('notification_read_receipts').insert({
+          notification_id: finalNotificationId,
+          user_id: userId,
+          read_at: db.fn.now(),
+        });
+      } catch (insertErr) {
+        // Lost the race with another tab/click - the receipt now exists,
+        // which is exactly what the caller asked for.
+        if (!isDuplicateKeyError(insertErr)) throw insertErr;
+      }
     }
 
     res.json({ success: true });
@@ -249,7 +311,23 @@ router.get('/trainings', authenticate, async (req: any, res) => {
       .leftJoin('users', 'trainings.author_id', '=', 'users.id')
       .select('trainings.*', 'training_completions.completed_at', 'users.name as author_name')
       .orderBy('trainings.created_at', 'desc');
-    res.json(trainings.map(mapTraining));
+
+    // Flag which materials carry a stored payload WITHOUT sending it - every
+    // dashboard polls this list, and a base64 file per row would make it
+    // enormous. The body is fetched from /trainings/:id/attachment when a
+    // material is actually opened.
+    let storedIds = new Set<string>();
+    if (trainings.length > 0 && (await hasAttachmentTable())) {
+      const rows = await db('training_attachments')
+        .whereIn('training_id', trainings.map((t: any) => t.id))
+        .select('training_id');
+      storedIds = new Set(rows.map((r: any) => String(r.training_id)));
+    }
+
+    res.json(trainings.map((row: any) => mapTraining({
+      ...row,
+      has_stored_attachment: storedIds.has(String(row.id)),
+    })));
   } catch (err) {
     console.error('Get trainings error:', err);
     captureError('broadcasts: Get trainings error:', err);
@@ -257,25 +335,76 @@ router.get('/trainings', authenticate, async (req: any, res) => {
   }
 });
 
+async function saveTrainingAttachment(trainingId: string, rawUrl: string, name: string | null) {
+  if (!rawUrl || rawUrl.length <= INLINE_ATTACHMENT_MAX) return { inline: rawUrl || null };
+
+  if (rawUrl.length > STORED_ATTACHMENT_MAX_CHARS) {
+    return { error: 'Хавсралт хэт том байна (дээд тал нь ~3.5MB файл).' };
+  }
+  if (!(await hasAttachmentTable())) {
+    return {
+      error:
+        'Файл хавсаргах боломж идэвхжээгүй байна (training_attachments migration хийгдээгүй). ' +
+        'Одоохондоо холбоос (URL) ашиглана уу.',
+    };
+  }
+
+  const contentType = rawUrl.startsWith('data:')
+    ? rawUrl.slice(5, Math.max(5, rawUrl.indexOf(';'))) || null
+    : null;
+
+  // NOT onConflict(): knex does not implement it for the mssql dialect, so
+  // it would throw on Azure SQL while working fine on the sqlite used in
+  // local development. Delete-then-insert is dialect-neutral, and this is a
+  // single-admin write path where the race is not meaningful.
+  await db('training_attachments').where({ training_id: trainingId }).delete();
+  await db('training_attachments').insert({
+    training_id: trainingId,
+    data: rawUrl,
+    name,
+    content_type: contentType,
+  });
+
+  return { inline: null, stored: true };
+}
+
 router.post('/trainings', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { title, description, attachmentUrl, attachment_url, attachmentName, attachment_name, deadline } = req.body;
 
-  if (!title || !description) {
+  const finalTitle = textField(title, 200);
+  const finalDescription = String(description ?? '').trim();
+  const finalAttachmentName = textField(attachment_name ?? attachmentName, 200);
+
+  if (!finalTitle || !finalDescription) {
     return res.status(400).json({ error: 'Гарчиг болон тайлбар шаардлагатай' });
   }
+  if (finalTitle === null) return res.status(400).json({ error: 'Гарчиг хэт урт байна (200 тэмдэгт)' });
+  if (finalAttachmentName === null) return res.status(400).json({ error: 'Файлын нэр хэт урт байна' });
+
+  const rawUrl = String(attachment_url ?? attachmentUrl ?? '').trim();
 
   try {
     const id = uuidv4();
     await db('trainings').insert({
       id,
-      title,
-      description,
-      attachment_url: attachment_url || attachmentUrl || null,
-      attachment_name: attachment_name || attachmentName || null,
+      title: finalTitle,
+      description: finalDescription,
+      attachment_url: null,
+      attachment_name: finalAttachmentName || null,
       deadline: toSqlDateTime(deadline),
       author_id: req.user.id,
     });
-    await logAction(req.user.id, 'CREATE_TRAINING', 'trainings', id, title);
+
+    const attachment = await saveTrainingAttachment(id, rawUrl, finalAttachmentName || null);
+    if ('error' in attachment && attachment.error) {
+      await db('trainings').where({ id }).delete();
+      return res.status(400).json({ error: attachment.error });
+    }
+    if (attachment.inline) {
+      await db('trainings').where({ id }).update({ attachment_url: attachment.inline });
+    }
+
+    await logAction(req.user.id, 'CREATE_TRAINING', 'trainings', id, finalTitle);
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create training error:', err);
@@ -284,12 +413,89 @@ router.post('/trainings', authenticate, authorize(['admin', 'superadmin']), asyn
   }
 });
 
+router.put('/trainings/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+  const { id } = req.params;
+  const { title, description, attachmentUrl, attachment_url, attachmentName, attachment_name, deadline } = req.body;
+
+  const finalTitle = textField(title, 200);
+  const finalAttachmentName = textField(attachment_name ?? attachmentName, 200);
+  if (finalTitle === null) return res.status(400).json({ error: 'Гарчиг хэт урт байна (200 тэмдэгт)' });
+  if (finalAttachmentName === null) return res.status(400).json({ error: 'Файлын нэр хэт урт байна' });
+
+  try {
+    const existing = await db('trainings').where({ id }).first();
+    if (!existing) return res.status(404).json({ error: 'Сургалт олдсонгүй' });
+
+    const updates: any = { updated_at: db.fn.now() };
+    if (finalTitle) updates.title = finalTitle;
+    if (description !== undefined) updates.description = String(description ?? '').trim();
+    if (deadline !== undefined) updates.deadline = toSqlDateTime(deadline);
+    if (finalAttachmentName !== undefined) updates.attachment_name = finalAttachmentName || null;
+
+    const rawUrl = attachment_url ?? attachmentUrl;
+    if (rawUrl !== undefined) {
+      const attachment = await saveTrainingAttachment(id, String(rawUrl ?? '').trim(), finalAttachmentName || null);
+      if ('error' in attachment && attachment.error) {
+        return res.status(400).json({ error: attachment.error });
+      }
+      updates.attachment_url = attachment.inline || null;
+      if (!attachment.stored && (await hasAttachmentTable())) {
+        await db('training_attachments').where({ training_id: id }).delete();
+      }
+    }
+
+    await db('trainings').where({ id }).update(updates);
+    await logAction(req.user.id, 'UPDATE_TRAINING', 'trainings', id, updates.title || existing.title);
+    res.json({ id });
+  } catch (err) {
+    console.error('Update training error:', err);
+    captureError('broadcasts: Update training error:', err);
+    res.status(500).json({ error: 'Сургалт шинэчлэхэд алдаа гарлаа' });
+  }
+});
+
+// Fetched only when a material is actually opened, so the polled list stays
+// small even when a material carries a multi-megabyte file.
+router.get('/trainings/:id/attachment', authenticate, async (req: any, res) => {
+  const { id } = req.params;
+  try {
+    const training = await db('trainings').where({ id }).first();
+    if (!training) return res.status(404).json({ error: 'Сургалт олдсонгүй' });
+
+    if (training.attachment_url) {
+      return res.json({ attachmentUrl: training.attachment_url, attachmentName: training.attachment_name });
+    }
+    if (!(await hasAttachmentTable())) {
+      return res.json({ attachmentUrl: '', attachmentName: training.attachment_name });
+    }
+
+    const stored = await db('training_attachments').where({ training_id: id }).first();
+    res.json({
+      attachmentUrl: stored?.data || '',
+      attachmentName: stored?.name || training.attachment_name || '',
+    });
+  } catch (err) {
+    console.error('Get training attachment error:', err);
+    captureError('broadcasts: Get training attachment error:', err);
+    res.status(500).json({ error: 'Хавсралт татахад алдаа гарлаа' });
+  }
+});
+
 router.delete('/trainings/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { id } = req.params;
   try {
+    const existing = await db('trainings').where({ id }).first();
+    if (!existing) return res.status(404).json({ error: 'Сургалт олдсонгүй' });
+    if (req.user.role !== 'superadmin' && existing.author_id && String(existing.author_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Зөвхөн өөрийн үүсгэсэн сургалтыг устгах боломжтой' });
+    }
+
     await db('training_completions').where({ training_id: id }).delete();
+    if (await hasAttachmentTable()) {
+      await db('training_attachments').where({ training_id: id }).delete();
+    }
     await db('trainings').where({ id }).delete();
-    await logAction(req.user.id, 'DELETE_TRAINING', 'trainings', id, 'Training deleted');
+    await logAction(req.user.id, 'DELETE_TRAINING', 'trainings', id, `Training deleted: ${existing.title}`);
     res.json({ message: 'Сургалт устгагдлаа' });
   } catch (err) {
     console.error('Delete training error:', err);
@@ -311,11 +517,15 @@ router.post('/trainings/complete', authenticate, async (req: any, res) => {
       .first();
 
     if (!existing) {
-      await db('training_completions').insert({
-        training_id: finalTrainingId,
-        user_id: userId,
-        completed_at: db.fn.now(),
-      });
+      try {
+        await db('training_completions').insert({
+          training_id: finalTrainingId,
+          user_id: userId,
+          completed_at: db.fn.now(),
+        });
+      } catch (insertErr) {
+        if (!isDuplicateKeyError(insertErr)) throw insertErr;
+      }
     }
 
     res.json({ success: true });

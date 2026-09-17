@@ -10,7 +10,15 @@ router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
     const defaultStart = new Date();
     defaultStart.setMonth(defaultStart.getMonth() - 3);
-    const queryStartDate = startDate ? new Date(startDate as string) : defaultStart;
+    // An unparseable ?startDate made toISOString() throw and the whole
+    // request 500 - a bad link was enough to break the page.
+    const parsedStart = startDate ? new Date(startDate as string) : defaultStart;
+    const queryStartDate = Number.isNaN(parsedStart.getTime()) ? defaultStart : parsedStart;
+
+    // The log was capped at 200 rows with no way to page, so the superadmin
+    // could never reach the 201st entry.
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
 
     let query = db('audit_logs')
       .leftJoin('users', 'audit_logs.user_id', '=', 'users.id')
@@ -22,9 +30,22 @@ router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
     if (entityType) query = query.andWhere('audit_logs.entity_type', entityType as string);
     if (endDate) query = query.andWhere('audit_logs.created_at', '<=', endDate as string);
 
-    const logs = await query.orderBy('audit_logs.created_at', 'desc').limit(200);
+
+    if (endDate) {
+      const parsedEnd = new Date(endDate as string);
+      if (Number.isNaN(parsedEnd.getTime())) {
+        return res.status(400).json({ error: 'endDate буруу форматтай байна' });
+      }
+    }
+
+    const logs = await query
+      .orderBy('audit_logs.created_at', 'desc')
+      .limit(limit)
+      .offset(offset);
     res.json(logs);
   } catch (err) {
+    console.error('Get audit log error:', err);
+    captureError('audit: GET /api/audit', err);
     res.status(500).json({ error: 'Алдаа гарлаа' });
   }
 });

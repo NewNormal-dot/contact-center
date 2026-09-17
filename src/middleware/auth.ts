@@ -93,6 +93,26 @@ export async function authenticate(req: any, res: Response, next: NextFunction) 
       return res.status(401).json({ error: 'Unauthorized or inactive user' });
     }
 
+    // Session revocation. Tokens are self-contained 24h JWTs with no jti and
+    // no blacklist, so before this check nothing could end a session early:
+    // logging out left a valid token behind, and neither changing your
+    // password nor an admin resetting a compromised account ejected whoever
+    // was already inside it.
+    //
+    // `sessions_valid_from` is bumped on a password change/reset and on an
+    // explicit "sign out everywhere"; any token issued before that instant is
+    // dead. The column is added by a migration that production applies by
+    // hand, so an undefined value simply means "no cutoff" and the check is a
+    // no-op until it lands.
+    const cutoff = dbUser.sessions_valid_from ? new Date(dbUser.sessions_valid_from).getTime() : NaN;
+    if (Number.isFinite(cutoff) && typeof decoded.iat === 'number') {
+      // jwt `iat` is whole seconds, so allow a second of slack rather than
+      // logging out the very request that performed the change.
+      if (decoded.iat * 1000 < cutoff - 1000) {
+        return res.status(401).json({ error: 'Session expired' });
+      }
+    }
+
     req.user = {
       ...decoded,
       role: dbUser.role,

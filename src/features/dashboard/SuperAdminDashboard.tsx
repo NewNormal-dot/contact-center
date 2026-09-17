@@ -39,6 +39,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { CSR, ActivityLog, Notification, TrainingMaterial } from '../../types';
 import { logAction } from '../../utils/logger';
 import apiClient from '../../lib/api-client';
+import { sanitizeRows, sanitizeAoa } from '../../utils/excel';
 import { getLocalData, setLocalData, addLocalItem, updateLocalItem, deleteLocalItem } from '../../utils/localStorage';
 import { groupNotificationsByDay, groupTrainingMaterialsByDay } from '../../utils/notificationGroups';
 import { validatePasswordStrength } from '../../utils/passwordValidation';
@@ -85,6 +86,7 @@ export default function SuperAdminDashboard() {
   // States
   const [csrs, setCsrs] = useState<CSR[]>([]);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [logsError, setLogsError] = useState('');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [segments, setSegments] = useState<string[]>([]);
   const [trainingMaterials, setTrainingMaterials] = useState<TrainingMaterial[]>([]);
@@ -177,18 +179,47 @@ export default function SuperAdminDashboard() {
       }));
       setLogs(backendLogs);
     } catch (error) {
+      // Do NOT fall back to localStorage 'activity_logs'. That store is
+      // per-browser, is written by a helper that guesses the actor from the
+      // URL path, and silently turned the shared audit trail into this one
+      // machine's fiction whenever a fetch hiccuped. An empty list with an
+      // error is honest; a fabricated one is not.
       console.error('Error fetching audit logs:', error);
-      const fallbackLogs = getLocalData('activity_logs', []);
-      setLogs(fallbackLogs);
+      setLogsError('Үйл ажиллагааны логийг татахад алдаа гарлаа. Дахин оролдоно уу.');
+      return;
+    }
+    setLogsError('');
+  };
+
+  const mapTrainingForUi = (raw: any): TrainingMaterial => ({
+    id: String(raw.id),
+    title: raw.title || '',
+    description: raw.description || '',
+    url: raw.attachmentUrl || raw.attachment_url || '',
+    type: raw.type || (raw.attachmentName || raw.attachment_name ? 'File' : 'Link'),
+    date: raw.createdAt || raw.created_at || new Date().toISOString(),
+    deadline: raw.deadline || '',
+    fileName: raw.attachmentName || raw.attachment_name || '',
+    hasStoredAttachment: Boolean(raw.hasStoredAttachment),
+    seenBy: [],
+  } as TrainingMaterial);
+
+  const fetchTrainingMaterials = async (): Promise<TrainingMaterial[]> => {
+    try {
+      const response = await apiClient.get('/broadcasts/trainings');
+      const data = (response.data || []).map(mapTrainingForUi);
+      setTrainingMaterials(data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching training materials:', error);
+      return [];
     }
   };
 
   const fetchNotifications = async () => {
     try {
       const response = await apiClient.get('/broadcasts/notifications');
-      const localNotifications: Notification[] = getLocalData('notifications', []);
       const notificationsData: Notification[] = response.data.map((n: any) => {
-        const localMatch = localNotifications.find(local => String(local.id) === String(n.id));
         return {
         id: n.id,
         title: n.title,
@@ -199,17 +230,24 @@ export default function SuperAdminDashboard() {
         authorId: n.author_id || n.authorId,
         authorName: n.author_name || n.authorName || 'Unknown',
         type: n.type || 'general',
-        seenBy: localMatch?.seenBy?.length ? localMatch.seenBy : n.notification_read_receipts ? n.notification_read_receipts.map((r: any) => ({
-          userId: r.user_id,
-          userName: r.user_name || 'Unknown',
-          seenAt: r.read_at
-        })) : (n.readAt ? [{ userId: profile?.id, userName: profile?.name, seenAt: n.readAt }] : [])
+        // The server's notification_read_receipts is the ONLY authoritative
+        // record of who opened a notification. This used to prefer a
+        // localStorage copy, which markNotificationAsRead had stuffed with a
+        // single synthetic entry whose userId was the literal string
+        // 'superadmin' - so the moment a superadmin opened a notification the
+        // "who has seen it" report collapsed to that one fake row.
+        seenBy: Array.isArray(n.notification_read_receipts)
+          ? n.notification_read_receipts.map((r: any) => ({
+              userId: r.user_id,
+              userName: r.user_name || 'Unknown',
+              seenAt: r.read_at
+            }))
+          : (n.readAt ? [{ userId: profile?.id, userName: profile?.name, seenAt: n.readAt }] : [])
       };
       });
-      const localOnly = localNotifications.filter(local => (
-        !notificationsData.some(remote => String(remote.id) === String(local.id))
-      ));
-      setNotifications([...notificationsData, ...localOnly]);
+      // Everything the superadmin sends now goes through the API, so there
+      // are no "local only" notifications left to merge in.
+      setNotifications(notificationsData);
     } catch (error) {
       console.error('Error fetching notifications:', error);
       setNotifications(getLocalData('notifications', []));
@@ -228,7 +266,7 @@ export default function SuperAdminDashboard() {
       setLocalData('segments', defaultSegments);
     }
     setSegments(initialSegments);
-    setTrainingMaterials(getLocalData('trainingMaterials', []));
+    fetchTrainingMaterials();
 
     fetchLogs();
     fetchNotifications();
@@ -241,7 +279,7 @@ export default function SuperAdminDashboard() {
       fetchUsers();
       fetchLogs();
       fetchNotifications();
-      setTrainingMaterials(getLocalData('trainingMaterials', []));
+      fetchTrainingMaterials();
     }, POLLING_INTERVALS.SUPERADMIN);
 
     const handleStorageUpdate = (event: StorageEvent) => {
@@ -251,9 +289,7 @@ export default function SuperAdminDashboard() {
       if (event.key === 'notifications') {
         fetchNotifications();
       }
-      if (event.key === 'trainingMaterials') {
-        setTrainingMaterials(getLocalData('trainingMaterials', []));
-      }
+
     };
 
     window.addEventListener('storage', handleStorageUpdate);
@@ -289,53 +325,46 @@ export default function SuperAdminDashboard() {
   const [isAddingNotification, setIsAddingNotification] = useState(false);
   const [isUploadingBulk, setIsUploadingBulk] = useState(false);
 
-  const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => s.userId === 'superadmin')).length;
-  const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === 'superadmin')).length;
+  const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => String(s.userId) === String(profile?.id))).length;
+  const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => String(s.userId) === String(profile?.id))).length;
 
-  const markMaterialAsRead = (materialId: string) => {
+  const markMaterialAsRead = async (materialId: string) => {
+    if (!profile?.id) return;
     const material = trainingMaterials.find(m => m.id === materialId);
-    if (material) {
-      const alreadySeen = material.seenBy?.some(s => s.userId === 'superadmin');
-      if (!alreadySeen) {
-        const newSeenBy = [...(material.seenBy || []), {
-          userId: 'superadmin',
-          userName: 'Super Admin',
-          seenAt: new Date().toISOString()
-        }];
+    if (!material || material.seenBy?.some(s => String(s.userId) === String(profile.id))) return;
 
-        updateLocalItem('trainingMaterials', materialId, { seenBy: newSeenBy });
-
-        setTrainingMaterials(prev =>
-          prev.map(m =>
-            m.id === materialId
-              ? { ...m, seenBy: newSeenBy }
-              : m
-          )
-        );
-        setShowSeenDetails(prev => (
-          prev?.id === materialId ? { ...prev, seenBy: newSeenBy } as any : prev
-        ));
-
-        logAction('Material Viewed', `Viewed training material: ${material.title}`);
-      }
+    try {
+      await apiClient.post('/broadcasts/trainings/complete', { training_id: materialId });
+      const newSeenBy = [...(material.seenBy || []), {
+        userId: profile.id,
+        userName: profile.name || 'Super Admin',
+        seenAt: new Date().toISOString()
+      }];
+      setTrainingMaterials(prev => prev.map(m => m.id === materialId ? { ...m, seenBy: newSeenBy } : m));
+      setShowSeenDetails(prev => (prev?.id === materialId ? { ...prev, seenBy: newSeenBy } as any : prev));
+      logAction('Material Viewed', `Viewed training material: ${material.title}`);
+    } catch (error) {
+      console.error('Error marking material as read:', error);
     }
   };
 
   const markNotificationAsRead = async (notifId: string) => {
+    if (!profile?.id) return;
     try {
       await apiClient.post('/broadcasts/notifications/read', {
         notification_id: notifId,
       });
       const notification = notifications.find(n => n.id === notifId);
       if (notification) {
-        const seenBy = notification.seenBy?.some(seen => String(seen.userId) === 'superadmin')
+        // Record the REAL user id so it matches the server-side receipt the
+        // next fetch brings back.
+        const seenBy = notification.seenBy?.some(seen => String(seen.userId) === String(profile.id))
           ? notification.seenBy
           : [...(notification.seenBy || []), {
-              userId: 'superadmin',
-              userName: profile?.name || 'Super Admin',
+              userId: profile.id,
+              userName: profile.name || 'Super Admin',
               seenAt: new Date().toISOString()
             }];
-        updateLocalItem('notifications', notifId, { seenBy });
         setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, seenBy } : n));
         setShowSeenDetails(prev => (
           prev?.id === notifId ? { ...prev, seenBy } as any : prev
@@ -440,10 +469,13 @@ export default function SuperAdminDashboard() {
     }
 
     try {
-      await apiClient.post('/auth/change-password', {
+      const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: myPasswordForm.old,
         newPassword: myPasswordForm.new,
       });
+      if (passwordResponse.data?.token) {
+        localStorage.setItem('token', passwordResponse.data.token);
+      }
       logAction('Password Changed', `Changed password for ${profile?.name || 'current user'}`);
       alert('Нууц үг амжилттай солигдлоо!');
       setIsChangingMyPassword(false);
@@ -619,164 +651,187 @@ export default function SuperAdminDashboard() {
     e.target.value = '';
     if (!file) return;
 
+    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(file.name)) {
+      alert('Зөвхөн Excel (.xlsx, .xls, .csv) файл оруулна уу.');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      alert('Файл хэт том байна (20MB-аас бага байх ёстой).');
+      return;
+    }
+
     setIsUploadingBulk(true);
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
+    try {
+      // readAsBinaryString is deprecated and doubles memory; arrayBuffer is
+      // both supported and cheaper. More importantly the whole body used to
+      // live in reader.onload with NO try/catch and setIsUploadingBulk(false)
+      // only on the success path - so any parse failure left the spinner
+      // turning forever with no message at all.
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) {
+        alert('Excel файлд хуудас олдсонгүй.');
+        return;
+      }
       const data = XLSX.utils.sheet_to_json(ws) as any[];
 
       const newUsers: Array<Partial<CSR>> = [];
-      let duplicates = 0;
-      let invalidRows = 0;
+      const invalid: string[] = [];
 
-      data.forEach(row => {
+      data.forEach((row, index) => {
         const email = row['И-мэйл'] || row['Email'] || '';
         const name = row['Нэр'] || row['Name'] || '';
-        const role = ((row['Эрх'] || row['Role'] || 'csr') as string).toLowerCase();
+        const role = ((row['Эрх'] || row['Role'] || 'csr') as string).toLowerCase().trim();
         const code = row['Код'] || row['Code'] || '';
         const segment = row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid';
         const employmentType = row['Цагийн төрөл'] || row['EmploymentType'] || row['Employment Type'] || 'Full Time';
         const location = normalizeUserLocation(row['Байршил'] || row['Хот'] || row['Location'] || row['City'] || row['Bayrshil'] || '');
         const supervisorName = String(row['Ахлах'] || row['Ахлах ажилтан'] || row['Supervisor'] || row['Supervisor Name'] || row['SupervisorName'] || '').trim();
+        const rowLabel = `${index + 2}-р мөр (${email || 'и-мэйлгүй'})`;
 
-        if (!email || !name || !role) {
-          invalidRows++;
+        if (!email || !name) {
+          invalid.push(`${rowLabel} — и-мэйл эсвэл нэр дутуу`);
           return;
         }
-
-        if (role === 'csr' && (!location || !supervisorName)) {
-          invalidRows++;
+        // The role came straight from the spreadsheet and was never checked
+        // against the three the API accepts, so a Mongolian value like
+        // "Админ" was rejected by the server and counted as a DUPLICATE.
+        if (!['csr', 'admin', 'superadmin'].includes(role)) {
+          invalid.push(`${rowLabel} — эрх буруу: "${role}" (csr / admin / superadmin)`);
           return;
         }
-
-        if (csrs.some(u => u.email?.toLowerCase() === email.toLowerCase())) {
-          duplicates++;
+        if (role === 'csr' && !location) {
+          invalid.push(`${rowLabel} — байршил Ulaanbaatar эсвэл Darkhan байх ёстой`);
+          return;
+        }
+        if (role === 'csr' && !supervisorName) {
+          invalid.push(`${rowLabel} — ахлах ажилтны нэр дутуу`);
+          return;
+        }
+        if (csrs.some(u => u.email?.toLowerCase() === String(email).toLowerCase())) {
+          invalid.push(`${rowLabel} — и-мэйл аль хэдийн бүртгэлтэй`);
           return;
         }
 
         newUsers.push({
-          code,
-          name,
-          email,
+          code, name, email,
           role: role as any,
           lineType: segment,
           employmentType,
           location,
           supervisorName,
           status: 'active',
-          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
+          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
         });
       });
 
-      if (newUsers.length > 0) {
-        const createdUsers: CSR[] = [];
-        for (const rowUser of newUsers) {
-          try {
-            const response = await apiClient.post('/users', {
-              email: rowUser.email,
-              name: rowUser.name,
-              role: rowUser.role,
-              status: rowUser.status,
-              employmentType: rowUser.employmentType,
-              segment: rowUser.lineType,
-              lineType: rowUser.lineType,
-              code: rowUser.code,
-              location: rowUser.location,
-              supervisorName: rowUser.supervisorName,
-            });
-            createdUsers.push({
-              ...response.data,
-              lineType: rowUser.lineType,
-              employmentType: rowUser.employmentType,
-              code: rowUser.code,
-              location: rowUser.location,
-              supervisorName: rowUser.supervisorName,
-              photoUrl: rowUser.photoUrl,
-              status: rowUser.status,
-            });
-          } catch (err: any) {
-            duplicates++;
-          }
-        }
+      const createdUsers: CSR[] = [];
+      const failed: string[] = [];
 
-        if (createdUsers.length > 0) {
-          setCsrs(prev => [...prev, ...createdUsers]);
-          await fetchUsers();
-          await fetchLogs();
-          logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
-          alert(`${createdUsers.length} хэрэглэгч амжилттай нэмэгдэж, нууц үг тохируулах холбоосууд и-мэйлээр илгээгдлээ. ${duplicates} давхардсан, ${invalidRows} форматын алдаатай мөрүүд алгасагдлаа.`);
-          triggerSuccess();
-        } else {
-          alert(`Файл доторх мөрүүдийн аль нь ч шинээр нэмэгдсэнгүй. ${duplicates} давхардсан, ${invalidRows} алдаатай мөр.`);
+      for (const rowUser of newUsers) {
+        try {
+          const response = await apiClient.post('/users', {
+            email: rowUser.email,
+            name: rowUser.name,
+            role: rowUser.role,
+            status: rowUser.status,
+            employmentType: rowUser.employmentType,
+            segment: rowUser.lineType,
+            lineType: rowUser.lineType,
+            code: rowUser.code,
+            location: rowUser.location,
+            supervisorName: rowUser.supervisorName,
+          });
+          createdUsers.push({
+            ...response.data,
+            lineType: rowUser.lineType,
+            employmentType: rowUser.employmentType,
+            code: rowUser.code,
+            location: rowUser.location,
+            supervisorName: rowUser.supervisorName,
+            photoUrl: rowUser.photoUrl,
+            status: rowUser.status,
+          });
+        } catch (err: any) {
+          // Was `duplicates++` for EVERY failure, so a validation error, a
+          // bad segment or a server outage were all reported to the admin as
+          // "duplicate".
+          failed.push(
+            `${rowUser.email} — ${err.response?.data?.error || 'сервертэй холбогдож чадсангүй'}`,
+          );
         }
-      } else {
-        alert(`Файлд тохирох мөр олдсонгүй. Формат: Код | Нэр | И-мэйл | Эрх | Сегмент | Цагийн төрөл`);
       }
+
+      if (createdUsers.length > 0) {
+        await fetchUsers();
+        await fetchLogs();
+        logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel.`);
+      }
+
+      const summary = [`Амжилттай нэмэгдсэн: ${createdUsers.length}`];
+      if (failed.length > 0) {
+        summary.push(`Нэмэгдээгүй: ${failed.length}`, ...failed.slice(0, 15).map(f => `  • ${f}`));
+        if (failed.length > 15) summary.push(`  … бас ${failed.length - 15}`);
+      }
+      if (invalid.length > 0) {
+        summary.push(`Алгасагдсан мөр: ${invalid.length}`, ...invalid.slice(0, 15).map(f => `  • ${f}`));
+        if (invalid.length > 15) summary.push(`  … бас ${invalid.length - 15}`);
+      }
+      alert(summary.join('\n'));
+      if (createdUsers.length > 0) triggerSuccess();
+    } catch (error: any) {
+      console.error('Bulk upload failed:', error);
+      alert('Excel файл уншихад алдаа гарлаа. Загварын дагуу файл оруулна уу.');
+    } finally {
       setIsUploadingBulk(false);
-    };
-    reader.readAsBinaryString(file);
+    }
   };
 
   const handleAddMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMaterial.title && newMaterial.type) {
+    if (!newMaterial.title || !newMaterial.type) return;
+
+    // Was localStorage-only, exactly like the admin dashboard: nothing ever
+    // called POST /broadcasts/trainings, so no CSR could see a material.
+    const payload = {
+      title: newMaterial.title,
+      description: newMaterial.description || '',
+      attachmentUrl: newMaterial.url || '',
+      attachmentName: newMaterial.fileName || '',
+      deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
+    };
+
+    try {
       if (editingMaterial) {
-        // Update existing
-        const updates = {
-          title: newMaterial.title!,
-          description: newMaterial.description || '',
-          type: newMaterial.type as any,
-          url: newMaterial.url || editingMaterial.url,
-          thumbnailUrl: newMaterial.thumbnailUrl || editingMaterial.thumbnailUrl,
-          deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
-          seenBy: []
-        };
-        const updatedMaterials = updateLocalItem('trainingMaterials', editingMaterial.id, updates);
-        setTrainingMaterials(updatedMaterials);
+        await apiClient.put(`/broadcasts/trainings/${editingMaterial.id}`, payload);
         logAction('Material Updated', `Updated training material: ${newMaterial.title}`);
         setEditingMaterial(null);
       } else {
-        // Add new
-        const material: TrainingMaterial = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: newMaterial.title!,
-          description: newMaterial.description || '',
-          type: newMaterial.type as any,
-          url: newMaterial.url || '#',
-          date: new Date().toISOString().split('T')[0],
-          thumbnailUrl: newMaterial.thumbnailUrl,
-          deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
-          seenBy: []
-        };
-        const updatedMaterials = addLocalItem('trainingMaterials', material);
-        setTrainingMaterials(updatedMaterials);
-        setShowSeenDetails(material);
-        
-        // Create a notification for the new training material
-        const notification: Notification = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: 'Шинэ сургалт: ' + material.title,
-          content: `Шинэ сургалтын материал нэмэгдлээ. ${material.description}`,
-          deadline: material.deadline,
-          createdAt: new Date().toISOString(),
-          authorId: 'superadmin',
-          authorName: 'Super Admin',
+        await apiClient.post('/broadcasts/trainings', payload);
+        await apiClient.post('/broadcasts/notifications', {
+          title: 'Шинэ сургалт: ' + newMaterial.title,
+          content: `Шинэ сургалтын материал нэмэгдлээ. ${newMaterial.description || ''}`.trim(),
           type: 'training',
-          seenBy: []
-        };
-        addLocalItem('notifications', notification);
-        
-        logAction('Material Added', `Added training material: ${material.title}`);
+          deadline: payload.deadline,
+        }).catch((err: any) => console.error('Training announcement failed:', err));
+        logAction('Material Added', `Added training material: ${newMaterial.title}`);
       }
+
+      const list = await fetchTrainingMaterials();
+      const saved = list.find((item: TrainingMaterial) => item.title === newMaterial.title);
+      if (saved && !editingMaterial) setShowSeenDetails(saved);
+      await fetchNotifications();
+
       setIsAddingMaterial(false);
-      setNewMaterial({ 
+      setNewMaterial({
         type: 'PDF',
         deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
       });
       triggerSuccess();
+    } catch (error: any) {
+      console.error('Error saving training material:', error);
+      alert(error.response?.data?.error || 'Сургалтын материал хадгалахад алдаа гарлаа.');
     }
   };
 
@@ -829,10 +884,13 @@ export default function SuperAdminDashboard() {
       return;
     }
     try {
-      await apiClient.post('/auth/change-password', {
+      const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: myPasswordForm.old,
         newPassword: myPasswordForm.new,
       });
+      if (passwordResponse.data?.token) {
+        localStorage.setItem('token', passwordResponse.data.token);
+      }
       logAction('Admin Password Change', 'Super Admin changed their own password');
       setIsChangingMyPassword(false);
       setMyPasswordForm({ old: '', new: '', confirm: '' });
@@ -870,7 +928,6 @@ export default function SuperAdminDashboard() {
         type: newNotification.type || 'general',
         seenBy: []
       };
-      addLocalItem('notifications', notification);
       setShowSeenDetails(notification);
       logAction('Notification Sent', `Sent ${newNotification.type} notification: ${newNotification.title}`);
       setIsAddingNotification(false);
@@ -895,7 +952,7 @@ export default function SuperAdminDashboard() {
       'Цагийн төрөл': getDisplayTimeType(u)
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data, {
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(data), {
       header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Байршил', 'Ахлах', 'Сегмент', 'Цагийн төрөл']
     });
     const wb = XLSX.utils.book_new();
@@ -918,7 +975,7 @@ export default function SuperAdminDashboard() {
       }
     ];
 
-    const ws = XLSX.utils.json_to_sheet(templateRows, {
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(templateRows), {
       header: ['Код', 'Нэр', 'И-мэйл', 'Эрх', 'Байршил', 'Ахлах', 'Сегмент', 'Цагийн төрөл']
     });
     const wb = XLSX.utils.book_new();
@@ -936,7 +993,7 @@ export default function SuperAdminDashboard() {
       'Дэлгэрэнгүй': l.details
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(data));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Activity Logs");
     XLSX.writeFile(wb, "activity_logs.xlsx");
@@ -999,7 +1056,7 @@ export default function SuperAdminDashboard() {
       'Хугацаа/Огноо'
     ];
 
-    const ws = XLSX.utils.json_to_sheet(rows, { header: headers });
+    const ws = XLSX.utils.json_to_sheet(sanitizeRows(rows), { header: headers });
     ws['!cols'] = [
       { wch: 14 },
       { wch: 24 },
@@ -1103,6 +1160,11 @@ export default function SuperAdminDashboard() {
 
     return (
       <div className="space-y-6">
+        {logsError && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 text-sm">
+            {logsError}
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <h2 className="text-xl sm:text-2xl font-black text-white">Үйлдэлүүдийн бүртгэл</h2>

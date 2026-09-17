@@ -11,6 +11,8 @@ import AdminDashboard from './features/dashboard/AdminDashboard';
 import CsrDashboard from './features/dashboard/CsrDashboard';
 import SuperAdminDashboard from './features/dashboard/SuperAdminDashboard';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
+import { purgeLegacyActivityLog } from './utils/logger';
 
 function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: string }) {
   const { user, loading, logout } = useAuth();
@@ -28,6 +30,10 @@ function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: 
 
 export default function App() {
   React.useEffect(() => {
+    // Drop the per-browser "activity log" the old client-side logger wrote,
+    // so it can never be mistaken for the real audit trail again.
+    purgeLegacyActivityLog();
+
     const theme = localStorage.getItem('theme') || 'dark';
     if (theme === 'dark') {
       document.documentElement.classList.add('dark');
@@ -37,16 +43,22 @@ export default function App() {
   }, []);
 
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Login />} />
-          <Route path="/setup-password" element={<SetupPassword />} />
-          <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
-          <Route path="/csr" element={<ProtectedRoute role="csr"><CsrDashboard /></ProtectedRoute>} />
-          <Route path="/superadmin" element={<ProtectedRoute role="superadmin"><SuperAdminDashboard /></ProtectedRoute>} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Login />} />
+            <Route path="/setup-password" element={<SetupPassword />} />
+            <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/csr" element={<ProtectedRoute role="csr"><CsrDashboard /></ProtectedRoute>} />
+            <Route path="/superadmin" element={<ProtectedRoute role="superadmin"><SuperAdminDashboard /></ProtectedRoute>} />
+            {/* There was no catch-all, so any unmatched path - a typo, an old
+                bookmark - rendered an EMPTY <Routes> and the user got a blank
+                white page rather than a redirect or a 404. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
