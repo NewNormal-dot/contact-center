@@ -35,7 +35,7 @@ function makeMonthlyFontHourKey(monthKey: string, segment: string, employmentTyp
   return `${monthKey}|${makeSegmentTypeKey(segment, employmentType, location)}`;
 }
 
-function makeRuleId(ruleType: string, monthKey: string | null, segment: string, employmentType: string, location: string) {
+export function makeRuleId(ruleType: string, monthKey: string | null, segment: string, employmentType: string, location: string) {
   return [ruleType, monthKey || 'ALL_MONTHS', location, segment, employmentType || 'Full Time']
     .map((part) => String(part).trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]/g, '_'))
     .join('__')

@@ -863,10 +863,18 @@ export default function AdminDashboard() {
       const list = Array.isArray(response.data) ? response.data : updated;
       setSegments(list);
       return list;
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving segments:", error);
-      alert("Segment жагсаалтыг хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
-      return segments;
+      // The server refuses to drop a segment that CSRs or shifts still point
+      // at, and says which - surface that instead of a generic message.
+      alert(
+        error.response?.data?.error ||
+          "Segment жагсаалтыг хадгалахад алдаа гарлаа. Дахин оролдоно уу.",
+      );
+      // Re-read the authoritative list so the UI does not keep showing an
+      // edit the server rejected.
+      const current = await fetchSegmentsFromDb().catch(() => segments);
+      return current;
     }
   };
 
@@ -2364,19 +2372,21 @@ export default function AdminDashboard() {
     return "Full Time";
   };
 
-  const persistSegments = (updatedSegments: string[]) => {
-    saveSegmentsToDb(updatedSegments);
+  // Awaits the save and only re-points the active views once the server has
+  // actually accepted the new list. Previously this was fire-and-forget, so a
+  // rejected save still moved the UI as though it had worked.
+  const persistSegments = async (updatedSegments: string[]) => {
+    const saved = await saveSegmentsToDb(updatedSegments);
 
-    if (activeSegmentView && !updatedSegments.includes(activeSegmentView)) {
-      setActiveSegmentView(updatedSegments[0] || "");
+    if (activeSegmentView && !saved.includes(activeSegmentView)) {
+      setActiveSegmentView(saved[0] || "");
     }
 
-    if (
-      filters.segment !== "All" &&
-      !updatedSegments.includes(filters.segment)
-    ) {
+    if (filters.segment !== "All" && !saved.includes(filters.segment)) {
       setFilters((prev) => ({ ...prev, segment: "All" }));
     }
+
+    return saved;
   };
 
   const handleBulkUploadFile = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2531,7 +2541,7 @@ export default function AdminDashboard() {
           ),
       );
       if (missingSegments.length > 0) {
-        persistSegments([...segments, ...missingSegments]);
+        await persistSegments([...segments, ...missingSegments]);
       }
 
       const usersToAdd: CSR[] = [];
@@ -2583,17 +2593,24 @@ export default function AdminDashboard() {
       !segments.some((s) => s.toLowerCase() === trimmedSegment.toLowerCase())
     ) {
       const updatedSegments = [...segments, trimmedSegment];
-      persistSegments(updatedSegments);
+      void persistSegments(updatedSegments);
       setIsAddingSegment(false);
       setNewSegment("");
       logAction("Segment Added", `Added segment: ${trimmedSegment}`);
     }
   };
 
-  const handleDeleteSegment = (segmentName: string) => {
+  const handleDeleteSegment = async (segmentName: string) => {
     const updatedSegments = segments.filter((s) => s !== segmentName);
-    persistSegments(updatedSegments);
-    logAction("Segment Deleted", `Deleted segment: ${segmentName}`);
+    // The server refuses the delete (409) if CSRs or shifts still reference
+    // this segment, and saveSegmentsToDb surfaces that message; it also
+    // re-reads the authoritative list, so a refused delete leaves the UI
+    // showing the segment still present rather than silently orphaning
+    // everyone in it.
+    const saved = await persistSegments(updatedSegments);
+    if (!saved.includes(segmentName)) {
+      logAction("Segment Deleted", `Deleted segment: ${segmentName}`);
+    }
   };
 
   const handleMoveSegment = (segmentName: string, direction: -1 | 1) => {
@@ -2607,7 +2624,7 @@ export default function AdminDashboard() {
       updatedSegments[nextIndex],
       updatedSegments[currentIndex],
     ];
-    persistSegments(updatedSegments);
+    void persistSegments(updatedSegments);
     logAction("Segment Reordered", `Moved segment ${segmentName}`);
   };
 
@@ -2635,54 +2652,37 @@ export default function AdminDashboard() {
       return;
     }
 
-    const affectedUsers = csrs.filter((user) => user.lineType === oldName);
-
+    // Renaming used to be done from here as N separate PUT /users/:id calls
+    // plus a POST /slots/sync-schedules carrying the ENTIRE in-memory
+    // schedule with NO scope - which made the server treat every unmatched
+    // shift as stale and delete it together with its confirmed bookings.
+    // The server now does the whole rename in one transaction, updating
+    // users, work_slots and shift_rule_settings together.
     try {
-      await Promise.all(
-        affectedUsers.map((user) =>
-          apiClient.put(`/users/${user.id}`, {
-            code: user.code,
-            name: user.name,
-            status: user.status || "active",
-            segment: nextName,
-            employmentType: user.employmentType || "Full Time",
-          }),
-        ),
-      );
+      const response = await apiClient.post("/settings/segments/rename", {
+        from: oldName,
+        to: nextName,
+      });
 
-      const updatedSegments = segments.map((segment) =>
-        segment === oldName ? nextName : segment,
-      );
-      const updatedUsers = csrs.map((user) =>
-        user.lineType === oldName ? { ...user, lineType: nextName } : user,
-      );
-      const updatedSchedules = Object.entries(schedules).reduce(
-        (acc, [dateKey, dayData]: [string, any]) => {
-          acc[dateKey] = dayData?.shifts
-            ? {
-                ...dayData,
-                shifts: dayData.shifts.map((shift: any) =>
-                  shift.segment === oldName
-                    ? { ...shift, segment: nextName }
-                    : shift,
-                ),
-              }
-            : dayData;
-          return acc;
-        },
-        {} as Record<string, any>,
-      );
+      const nextSegments: string[] = Array.isArray(response.data?.segments)
+        ? response.data.segments
+        : segments.map((segment) => (segment === oldName ? nextName : segment));
+      setSegments(nextSegments);
 
-      persistSegments(updatedSegments);
-      setCsrs(updatedUsers);
-      await persistSchedules(updatedSchedules, Object.keys(updatedSchedules), null);
       if (activeSegmentView === oldName) setActiveSegmentView(nextName);
       if (filters.segment === oldName)
         setFilters((prev) => ({ ...prev, segment: nextName }));
       setEditingSegment(null);
       setSegmentDraftName("");
       logAction("Segment Renamed", `Renamed segment ${oldName} to ${nextName}`);
-      await fetchCsrUsers();
+
+      // Re-read everything the rename touched from the database rather than
+      // patching local copies.
+      await Promise.all([
+        fetchCsrUsers().catch(() => undefined),
+        fetchDbSchedule().catch(() => undefined),
+        fetchShiftRules().catch(() => undefined),
+      ]);
     } catch (error: any) {
       console.error("Error renaming segment:", error);
       alert(error.response?.data?.error || "Сегмент нэр солиход алдаа гарлаа.");
