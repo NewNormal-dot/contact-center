@@ -242,3 +242,48 @@ az sql db update -g cc-web -s contact-center-sql -n contact-center-db --service-
 az sql db update -g cc-web -s contact-center-sql -n contact-center-db --service-objective S0
 # instance count back to 1
 ```
+
+## Applying the migrations added on 2026-09-18
+
+`SKIP_DB_MIGRATIONS=true` is set on the App Service, so the five migrations
+below **will not apply themselves**. Everything that uses them is written to
+degrade cleanly while they are missing (`columnExists`/`tableExists` guards),
+so the code is safe to deploy first — but the features stay switched off
+until they run.
+
+| Migration | Adds | Until it runs |
+|---|---|---|
+| `20260918000000_create_training_attachments` | `training_attachments` | File attachments on training materials are refused with a clear message; link-only materials work |
+| `20260918001000_add_sessions_valid_from` | `users.sessions_valid_from` | Sessions cannot be revoked; everything else is unaffected |
+| `20260918002000_add_user_photo_data` | `users.photo_data` | Profile photo upload answers 503 with a clear message |
+| `20260918003000_add_booking_waves` | `work_slots.booking_waves`, `slot_bookings.booking_wave_id` | Booking stays one undivided pool, exactly as today |
+| `20260918004000_create_server_errors` | `server_errors` | Errors stay in the 30-entry in-memory ring only |
+
+Check what is outstanding first — `/api/health` now reports the count, and
+`GET /api/admin/migration-status` names them:
+
+```js
+// browser console, logged in as superadmin
+fetch('/api/admin/migration-status', {
+  headers: { Authorization: 'Bearer ' + localStorage.getItem('token') },
+}).then(r => r.json()).then(console.log)
+```
+
+Then apply them:
+
+```js
+fetch('/api/admin/run-migrations', {
+  method: 'POST',
+  headers: { Authorization: 'Bearer ' + localStorage.getItem('token') },
+}).then(r => r.json()).then(console.log)
+```
+
+Every one of these migrations is additive — new tables and new nullable
+columns only. Nothing is dropped, altered or backfilled, so applying them
+cannot break the running app, and rolling the code back does not require
+rolling them back.
+
+**Check `/api/health` before anything else when something "stops working".**
+A non-zero `migrations.pending` means the schema is behind the code, and the
+symptom of that is a generic 500 on whichever feature needed the missing
+column.

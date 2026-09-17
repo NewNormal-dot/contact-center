@@ -163,6 +163,11 @@ async function startServer() {
         frameSrc: ["'self'", 'https://chat.agents.mn'],
         objectSrc: ["'none'"],
         frameAncestors: ["'self'"],
+        // Helmet enables this by default. It is right in production (the app
+        // is served over HTTPS behind App Service) but would rewrite plain
+        // http subresource URLs during local development, so it is only
+        // applied where it makes sense.
+        ...(process.env.NODE_ENV === 'production' ? {} : { upgradeInsecureRequests: null }),
       },
     },
     // Keep cross-origin isolation off: base64 media in <img>/<video> and the
