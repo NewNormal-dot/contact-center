@@ -175,16 +175,26 @@ async function startServer() {
         // loader were moved out of index.html into public/*.js precisely so
         // this can stay free of 'unsafe-inline'.
         scriptSrc: ["'self'", 'https://chat.agents.mn'],
-        // chat.agents.mn belongs here too. It was allowed for scripts,
-        // images, fonts, connections and frames but NOT stylesheets, so the
-        // widget's own https://chat.agents.mn/css/webchat-styles.css was
-        // blocked in production and it failed to render ("Failed to load
-        // CSS from ... / Error: CSS loading failed").
-        styleSrc: ["'self'", "'unsafe-inline'", 'https://chat.agents.mn'],
-        imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://api.dicebear.com', 'https://chat.agents.mn'],
+        // Three origins, three different reasons:
+        //   'unsafe-inline' - Tailwind and motion write inline styles.
+        //   chat.agents.mn  - the widget loads its own webchat-styles.css.
+        //   fonts.googleapis.com - src/index.css line 1 is
+        //     @import url('https://fonts.googleapis.com/css2?family=Inter...&family=Outfit...')
+        //     i.e. the app's OWN typography. Omitting it did not just break
+        //     the widget: every page fell back to a system sans-serif, the
+        //     WORKFORCE wordmark included.
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://chat.agents.mn', 'https://fonts.googleapis.com'],
+        // agents.mn (no chat. prefix) is a separate origin and needs listing
+        // separately - the widget's own logo is served from
+        // https://agents.mn/m/core/pub/files/agent-logos/<id>.png, which is
+        // why the launcher rendered a bare "Logo" placeholder.
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://api.dicebear.com', 'https://chat.agents.mn', 'https://agents.mn'],
         // Same origin, same reason - notification sounds would be blocked.
         mediaSrc: ["'self'", 'data:', 'blob:', 'https://chat.agents.mn'],
-        fontSrc: ["'self'", 'data:', 'https://chat.agents.mn'],
+        // googleapis.com serves the @font-face rules; the .woff2 files they
+        // point at come from gstatic.com. Allowing only the first would let
+        // the stylesheet load and still leave the fonts blocked.
+        fontSrc: ["'self'", 'data:', 'https://chat.agents.mn', 'https://fonts.gstatic.com'],
         connectSrc: ["'self'", 'https://chat.agents.mn', 'wss://chat.agents.mn'],
         frameSrc: ["'self'", 'https://chat.agents.mn'],
         objectSrc: ["'none'"],
