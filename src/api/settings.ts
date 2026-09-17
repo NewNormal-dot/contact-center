@@ -6,6 +6,12 @@ import { toSqlDate } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
 import { logAction } from './audit';
 import { makeRuleId } from './rules';
+import { tableExists } from '../database/schemaUtils';
+import {
+  REST_SHIFT_LABEL,
+  normalizeShiftTemplateValue,
+  isValidShiftTemplateValue,
+} from '../utils/shiftTime';
 
 const router = express.Router();
 
@@ -242,6 +248,192 @@ router.put('/segments', authenticate, authorize(['admin', 'superadmin']), async 
     console.error('Save segments error:', err);
     captureError('settings: Save segments error:', err);
     res.status(500).json({ error: 'Segment жагсаалтыг хадгалахад алдаа гарлаа' });
+  }
+});
+
+// ===== Vacation quotas =====
+// How many people may take vacation in a given month.
+//
+// This used to be two disconnected localStorage keys: the admin wrote
+// "monthlyQuotas" (month index 0-11) and the CSR dashboard read
+// "vacationQuotas" ("YYYY-MM"), which nothing ever wrote. The admin's
+// control therefore did nothing at all - not "nothing outside this browser",
+// nothing anywhere - and every CSR saw the hardcoded fallback of 5.
+//
+// Keyed by month 1-12 because that is what the admin UI offers: twelve
+// months, no year picker.
+
+const DEFAULT_VACATION_QUOTA = 5;
+const MAX_VACATION_QUOTA = 999;
+
+async function hasVacationQuotas() {
+  return tableExists(db, 'vacation_quotas');
+}
+
+// Read: any authenticated user. A CSR needs this to know whether a month is
+// full before requesting vacation in it.
+router.get('/vacation-quotas', authenticate, async (_req, res) => {
+  try {
+    if (!(await hasVacationQuotas())) {
+      // Migration not applied yet. An empty list is honest and lets the
+      // client fall back to its default rather than failing the dashboard.
+      return res.json([]);
+    }
+    const rows = await db('vacation_quotas').select('month', 'quota_limit').orderBy('month', 'asc');
+    res.json(rows.map((r: any) => ({ month: Number(r.month), limit: Number(r.quota_limit) })));
+  } catch (err: any) {
+    console.error('Get vacation quotas error:', err);
+    captureError('settings: Get vacation quotas error:', err);
+    res.status(500).json({ error: 'Амралтын квотыг татахад алдаа гарлаа' });
+  }
+});
+
+// Replaces the whole set, mirroring PUT /holidays: the admin UI already has
+// all twelve months in hand, and twelve rows is not worth a diffing protocol.
+router.put('/vacation-quotas', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+  const incoming = Array.isArray(req.body?.quotas) ? req.body.quotas : null;
+  if (!incoming) {
+    return res.status(400).json({ error: 'quotas массив шаардлагатай' });
+  }
+
+  try {
+    if (!(await hasVacationQuotas())) {
+      return res.status(503).json({
+        error: 'Амралтын квотын хүснэгт үүсээгүй байна. Migration ажиллуулна уу.',
+      });
+    }
+
+    const byMonth = new Map<number, number>();
+    for (const item of incoming) {
+      const month = Number(item?.month);
+      if (!Number.isInteger(month) || month < 1 || month > 12) continue;
+      const rawLimit = Number(item?.limit);
+      if (!Number.isFinite(rawLimit)) continue;
+      // Clamped rather than rejected: a quota is a cap, and a negative or
+      // absurd one is a slip, not an attack worth failing the whole save for.
+      const limit = Math.max(0, Math.min(MAX_VACATION_QUOTA, Math.floor(rawLimit)));
+      byMonth.set(month, limit);
+    }
+
+    if (byMonth.size === 0) {
+      return res.status(400).json({ error: 'Хүчинтэй квот олдсонгүй' });
+    }
+
+    // Delete-then-insert inside one transaction. NOT onConflict: knex does
+    // not implement it for the mssql dialect, so it throws in production
+    // while passing locally on SQLite.
+    await db.transaction(async (trx) => {
+      await trx('vacation_quotas').whereIn('month', [...byMonth.keys()]).del();
+      await trx('vacation_quotas').insert(
+        [...byMonth.entries()].map(([month, limit]) => ({
+          id: uuidv4(),
+          month,
+          quota_limit: limit,
+          updated_at: trx.fn.now(),
+        })),
+      );
+    });
+
+    const rows = await db('vacation_quotas').select('month', 'quota_limit').orderBy('month', 'asc');
+    await logAction(
+      req.user.id,
+      'UPDATE_VACATION_QUOTAS',
+      'vacation_quotas',
+      null,
+      [...byMonth.entries()].map(([m, l]) => `${m}:${l}`).join(', '),
+    );
+    res.json(rows.map((r: any) => ({ month: Number(r.month), limit: Number(r.quota_limit) })));
+  } catch (err: any) {
+    console.error('Save vacation quotas error:', err);
+    captureError('settings: Save vacation quotas error:', err);
+    res.status(500).json({ error: 'Амралтын квотыг хадгалахад алдаа гарлаа' });
+  }
+});
+
+// ===== Shift templates =====
+// The selectable shift times in the schedule builder. Previously per-browser,
+// so two admins could be working from different lists without knowing it.
+
+const MAX_SHIFT_TEMPLATES = 200;
+
+async function hasShiftTemplates() {
+  return tableExists(db, 'shift_templates');
+}
+
+router.get('/shift-templates', authenticate, async (_req, res) => {
+  try {
+    if (!(await hasShiftTemplates())) return res.json([]);
+    const rows = await db('shift_templates')
+      .select('id', 'time', 'label')
+      .orderBy('display_order', 'asc');
+    res.json(rows.map((r: any) => ({ id: String(r.id), time: r.time, label: r.label })));
+  } catch (err: any) {
+    console.error('Get shift templates error:', err);
+    captureError('settings: Get shift templates error:', err);
+    res.status(500).json({ error: 'Ээлжийн загварыг татахад алдаа гарлаа' });
+  }
+});
+
+router.put('/shift-templates', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+  const incoming = Array.isArray(req.body?.templates) ? req.body.templates : null;
+  if (!incoming) {
+    return res.status(400).json({ error: 'templates массив шаардлагатай' });
+  }
+
+  try {
+    if (!(await hasShiftTemplates())) {
+      return res.status(503).json({
+        error: 'Ээлжийн загварын хүснэгт үүсээгүй байна. Migration ажиллуулна уу.',
+      });
+    }
+
+    const normalized: { time: string; label: string }[] = [];
+    const seen = new Set<string>();
+    for (const item of incoming.slice(0, MAX_SHIFT_TEMPLATES)) {
+      const value = normalizeShiftTemplateValue(String(item?.time ?? item?.label ?? ''));
+      // Validated with the SAME helper the admin UI uses, so the server
+      // cannot quietly accept something the client would refuse to render.
+      if (!value || !isValidShiftTemplateValue(value)) continue;
+      if (seen.has(value)) continue;
+      seen.add(value);
+      normalized.push({ time: value, label: value });
+    }
+
+    // The rest day is not optional - the schedule builder needs a way to mark
+    // a day off, and an admin deleting it from their own list would otherwise
+    // remove that possibility for everyone.
+    if (!seen.has(REST_SHIFT_LABEL)) {
+      normalized.push({ time: REST_SHIFT_LABEL, label: REST_SHIFT_LABEL });
+    }
+
+    await db.transaction(async (trx) => {
+      await trx('shift_templates').del();
+      await trx('shift_templates').insert(
+        normalized.map((t, index) => ({
+          id: uuidv4(),
+          time: t.time,
+          label: t.label,
+          display_order: index,
+          updated_at: trx.fn.now(),
+        })),
+      );
+    });
+
+    const rows = await db('shift_templates')
+      .select('id', 'time', 'label')
+      .orderBy('display_order', 'asc');
+    await logAction(
+      req.user.id,
+      'UPDATE_SHIFT_TEMPLATES',
+      'shift_templates',
+      null,
+      `${normalized.length} загвар хадгалагдлаа`,
+    );
+    res.json(rows.map((r: any) => ({ id: String(r.id), time: r.time, label: r.label })));
+  } catch (err: any) {
+    console.error('Save shift templates error:', err);
+    captureError('settings: Save shift templates error:', err);
+    res.status(500).json({ error: 'Ээлжийн загварыг хадгалахад алдаа гарлаа' });
   }
 });
 

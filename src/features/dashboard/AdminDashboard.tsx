@@ -317,6 +317,48 @@ const formatBookingOpenAt = (value?: string) => {
   return `${formatMonthShort(date.getMonth())}.${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 };
 
+// The admin vacation tab renders twelve months with no year picker, so the
+// quota is per month-of-year and applies to every year. The UI keys this
+// record by month INDEX (0-11); the API speaks month NUMBER (1-12), and the
+// two are converted at the fetch/save boundary rather than anywhere else.
+const DEFAULT_MONTHLY_QUOTA = 5;
+const DEFAULT_MONTHLY_QUOTAS: Record<number, number> = {
+  0: DEFAULT_MONTHLY_QUOTA, 1: DEFAULT_MONTHLY_QUOTA, 2: DEFAULT_MONTHLY_QUOTA,
+  3: DEFAULT_MONTHLY_QUOTA, 4: DEFAULT_MONTHLY_QUOTA, 5: DEFAULT_MONTHLY_QUOTA,
+  6: DEFAULT_MONTHLY_QUOTA, 7: DEFAULT_MONTHLY_QUOTA, 8: DEFAULT_MONTHLY_QUOTA,
+  9: DEFAULT_MONTHLY_QUOTA, 10: DEFAULT_MONTHLY_QUOTA, 11: DEFAULT_MONTHLY_QUOTA,
+};
+
+const DEFAULT_SHIFT_TEMPLATES = [
+  { id: "1", time: "09-14", label: "09-14" },
+  { id: "2", time: "09-15", label: "09-15" },
+  { id: "3", time: "09-16", label: "09-16" },
+  { id: "4", time: "09-17", label: "09-17" },
+  { id: "5", time: "10-15", label: "10-15" },
+  { id: "6", time: "10-16", label: "10-16" },
+  { id: "7", time: "10-17", label: "10-17" },
+  { id: "8", time: "10-18", label: "10-18" },
+  { id: "9", time: "11-16", label: "11-16" },
+  { id: "10", time: "11-17", label: "11-17" },
+  { id: "11", time: "11-18", label: "11-18" },
+  { id: "12", time: "11-19", label: "11-19" },
+  { id: "13", time: "12-17", label: "12-17" },
+  { id: "14", time: "12-18", label: "12-18" },
+  { id: "15", time: "12-19", label: "12-19" },
+  { id: "16", time: "12-20", label: "12-20" },
+  { id: "17", time: "13-18", label: "13-18" },
+  { id: "18", time: "13-19", label: "13-19" },
+  { id: "19", time: "13-20", label: "13-20" },
+  { id: "20", time: "13-21", label: "13-21" },
+  { id: "21", time: "14-19", label: "14-19" },
+  { id: "22", time: "14-20", label: "14-20" },
+  { id: "23", time: "14-21", label: "14-21" },
+  { id: "24", time: "14-22", label: "14-22" },
+  { id: "25", time: "18-01", label: "18-01" },
+  { id: "26", time: "19-01", label: "19-01" },
+  { id: "27", time: "20-01", label: "20-01" },
+];
+
 const REST_SHIFT_LABEL = "Амралт";
 const REST_SHIFT_INPUT = "амралт";
 
@@ -963,6 +1005,91 @@ export default function AdminDashboard() {
 
 
 
+  // ===== Shared settings that used to be per-browser =====
+  //
+  // The vacation quota and the shift-template list were both kept in
+  // localStorage. That made them invisible to every other admin, and in the
+  // quota's case invisible to everyone at all: the admin wrote the key
+  // "monthlyQuotas" while the CSR dashboard read "vacationQuotas", which
+  // nothing ever wrote. Both now come from the database.
+
+  const normalizeTemplateList = (raw: any[]) => {
+    const list = (Array.isArray(raw) ? raw : [])
+      .map((template: any) => {
+        const rawTime = String(template?.time || template?.label || "");
+        const time = normalizeShiftTime(rawTime);
+        return { ...template, id: String(template?.id ?? time), time, label: time };
+      })
+      .filter(
+        (template: any) =>
+          template.time === REST_SHIFT_LABEL || isValidShiftTime(template.time),
+      );
+    if (!list.some((template: any) => template.time === REST_SHIFT_LABEL)) {
+      list.push({ id: "rest", time: REST_SHIFT_LABEL, label: REST_SHIFT_LABEL });
+    }
+    return list;
+  };
+
+  const fetchShiftTemplates = async () => {
+    try {
+      const response = await apiClient.get("/settings/shift-templates");
+      const rows = Array.isArray(response.data) ? response.data : [];
+      // An empty answer means "nobody has saved a list yet" (or the migration
+      // has not been applied). Show the built-in defaults rather than an
+      // empty picker, but do NOT write them back - a read should not produce
+      // a write, and the first real edit persists the whole list anyway.
+      const list = normalizeTemplateList(rows.length > 0 ? rows : DEFAULT_SHIFT_TEMPLATES);
+      setShiftTemplates(list);
+      return list;
+    } catch (error) {
+      console.error("Error fetching shift templates:", error);
+      const list = normalizeTemplateList(DEFAULT_SHIFT_TEMPLATES);
+      setShiftTemplates(list);
+      return list;
+    }
+  };
+
+  const persistShiftTemplates = async (next: any[]) => {
+    const list = normalizeTemplateList(next);
+    const previous = shiftTemplates;
+    setShiftTemplates(list); // optimistic: the editor should feel immediate
+    try {
+      const response = await apiClient.put("/settings/shift-templates", {
+        templates: list.map((t: any) => ({ time: t.time, label: t.label })),
+      });
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (rows.length > 0) setShiftTemplates(normalizeTemplateList(rows));
+    } catch (error) {
+      console.error("Error saving shift templates:", error);
+      // Put the old list back. Leaving the optimistic one on screen would
+      // show the admin a change that no other admin can see - which is the
+      // exact failure this whole change is meant to end.
+      setShiftTemplates(previous);
+      alert("Ээлжийн загварыг хадгалж чадсангүй. Дахин оролдоно уу.");
+    }
+  };
+
+  const fetchVacationQuotas = async () => {
+    try {
+      const response = await apiClient.get("/settings/vacation-quotas");
+      const rows = Array.isArray(response.data) ? response.data : [];
+      const next: Record<number, number> = { ...DEFAULT_MONTHLY_QUOTAS };
+      rows.forEach((row: any) => {
+        const month = Number(row?.month);
+        const limit = Number(row?.limit);
+        if (Number.isInteger(month) && month >= 1 && month <= 12 && Number.isFinite(limit)) {
+          next[month - 1] = limit;
+        }
+      });
+      setMonthlyQuotas(next);
+      return next;
+    } catch (error) {
+      console.error("Error fetching vacation quotas:", error);
+      setMonthlyQuotas({ ...DEFAULT_MONTHLY_QUOTAS });
+      return { ...DEFAULT_MONTHLY_QUOTAS };
+    }
+  };
+
   const fetchShiftRules = async () => {
     try {
       const response = await apiClient.get("/rules");
@@ -1219,22 +1346,7 @@ export default function AdminDashboard() {
     fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
     fetchTrainingsFromDb().catch(() => undefined);
     setVacationRequests(getLocalData("vacationRequests", []));
-    setMonthlyQuotas(
-      getLocalData("monthlyQuotas", {
-        0: 5,
-        1: 5,
-        2: 5,
-        3: 5,
-        4: 5,
-        5: 5,
-        6: 5,
-        7: 5,
-        8: 5,
-        9: 5,
-        10: 5,
-        11: 5,
-      }),
-    );
+    fetchVacationQuotas().catch(() => undefined);
     setSchedules(getLocalData("schedules", {}));
     fetchDbSchedule().catch(() => undefined);
     fetchShiftRules().catch(() => undefined);
@@ -1245,54 +1357,7 @@ export default function AdminDashboard() {
       setVacationRequests(getLocalData("vacationRequests", [])),
     );
     fetchHolidaysFromDb().catch(() => undefined);
-    const defaultShiftTemplates = [
-      { id: "1", time: "09-14", label: "09-14" },
-      { id: "2", time: "09-15", label: "09-15" },
-      { id: "3", time: "09-16", label: "09-16" },
-      { id: "4", time: "09-17", label: "09-17" },
-      { id: "5", time: "10-15", label: "10-15" },
-      { id: "6", time: "10-16", label: "10-16" },
-      { id: "7", time: "10-17", label: "10-17" },
-      { id: "8", time: "10-18", label: "10-18" },
-      { id: "9", time: "11-16", label: "11-16" },
-      { id: "10", time: "11-17", label: "11-17" },
-      { id: "11", time: "11-18", label: "11-18" },
-      { id: "12", time: "11-19", label: "11-19" },
-      { id: "13", time: "12-17", label: "12-17" },
-      { id: "14", time: "12-18", label: "12-18" },
-      { id: "15", time: "12-19", label: "12-19" },
-      { id: "16", time: "12-20", label: "12-20" },
-      { id: "17", time: "13-18", label: "13-18" },
-      { id: "18", time: "13-19", label: "13-19" },
-      { id: "19", time: "13-20", label: "13-20" },
-      { id: "20", time: "13-21", label: "13-21" },
-      { id: "21", time: "14-19", label: "14-19" },
-      { id: "22", time: "14-20", label: "14-20" },
-      { id: "23", time: "14-21", label: "14-21" },
-      { id: "24", time: "14-22", label: "14-22" },
-      { id: "25", time: "18-01", label: "18-01" },
-      { id: "26", time: "19-01", label: "19-01" },
-      { id: "27", time: "20-01", label: "20-01" },
-    ];
-    const normalizedShiftTemplates = getLocalData(
-      "shiftTemplates",
-      defaultShiftTemplates,
-    )
-      .map((template: any) => {
-        const rawTime = String(template.time || template.label || "");
-        const time = normalizeShiftTime(rawTime);
-        return { ...template, time, label: time };
-      })
-      .filter((template: any) => template.time === REST_SHIFT_LABEL || isValidShiftTime(template.time));
-    if (!normalizedShiftTemplates.some((template: any) => template.time === REST_SHIFT_LABEL)) {
-      normalizedShiftTemplates.push({
-        id: "rest",
-        time: REST_SHIFT_LABEL,
-        label: REST_SHIFT_LABEL,
-      });
-    }
-    setShiftTemplates(normalizedShiftTemplates);
-    setLocalData("shiftTemplates", normalizedShiftTemplates);
+    fetchShiftTemplates().catch(() => undefined);
 
     // Real-time polling
     const interval = setInterval(() => {
@@ -1306,20 +1371,11 @@ export default function AdminDashboard() {
       // to blank shortly after.
       const n = getLocalData("notifications", []);
       const vr = getLocalData("vacationRequests", []);
-      const mq = getLocalData("monthlyQuotas", {
-        0: 5,
-        1: 5,
-        2: 5,
-        3: 5,
-        4: 5,
-        5: 5,
-        6: 5,
-        7: 5,
-        8: 5,
-        9: 5,
-        10: 5,
-        11: 5,
-      });
+      // NOTE: monthlyQuotas is intentionally NOT read from localStorage here
+      // anymore, for the same reason schedules and users were removed above:
+      // re-applying this browser's own snapshot every few seconds would
+      // overwrite the freshly-fetched database value, so another admin's
+      // quota change would never stick on this screen.
       // NOTE: schedules is intentionally NOT read from localStorage here
       // anymore. Previously this polling loop re-applied THIS BROWSER's own
       // local snapshot every 2 seconds, which silently overwrote whatever
@@ -1333,14 +1389,12 @@ export default function AdminDashboard() {
       const currentHash = JSON.stringify({
         n,
         vr,
-        mq,
         hl,
       });
       if (currentHash !== lastDataRef.current) {
         lastDataRef.current = currentHash;
         fetchNotificationsFromDb().catch(() => setNotifications(n));
         setVacationRequests(vr);
-        setMonthlyQuotas(mq);
         fetchLeaveRequests().catch(() => setHourlyLeaveRequests(hl));
       }
     }, POLLING_INTERVALS.LOCAL_DATA);
@@ -1382,6 +1436,14 @@ export default function AdminDashboard() {
       POLLING_INTERVALS.HOLIDAYS,
     );
 
+    // Quotas and templates are edited a few times a year, and this admin's
+    // own edits re-fetch immediately. This poll exists only so a SECOND
+    // admin's change appears without a reload.
+    const stopSharedSettingsPoll = startPolling(() => {
+      fetchVacationQuotas().catch(() => undefined);
+      fetchShiftTemplates().catch(() => undefined);
+    }, POLLING_INTERVALS.SHARED_SETTINGS);
+
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key === "notifications") {
         fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
@@ -1397,6 +1459,7 @@ export default function AdminDashboard() {
       stopSchedulePoll();
       stopApiRefresh();
       stopNotificationPoll();
+      stopSharedSettingsPoll();
       stopReferenceDataPoll();
       stopHolidayPoll();
       window.removeEventListener("storage", handleStorageUpdate);
@@ -1666,24 +1729,41 @@ export default function AdminDashboard() {
     addLocalItem("notifications", notification);
   };
 
-  const handleUpdateQuota = (monthIndex: number, newQuota: number) => {
-    const currentQuotas = getLocalData("monthlyQuotas", {
-      0: 5,
-      1: 5,
-      2: 5,
-      3: 5,
-      4: 5,
-      5: 5,
-      6: 5,
-      7: 5,
-      8: 5,
-      9: 5,
-      10: 5,
-      11: 5,
-    });
-    const updated = { ...currentQuotas, [monthIndex]: newQuota };
-    setLocalData("monthlyQuotas", updated);
-    setMonthlyQuotas(updated);
+  const handleUpdateQuota = async (monthIndex: number, newQuota: number) => {
+    if (!Number.isInteger(monthIndex) || monthIndex < 0 || monthIndex > 11) return;
+    const limit = Math.max(0, Math.floor(Number(newQuota) || 0));
+    const previous = monthlyQuotas;
+    const updated = { ...monthlyQuotas, [monthIndex]: limit };
+    setMonthlyQuotas(updated); // optimistic
+
+    try {
+      // The whole set goes up, matching PUT /settings/vacation-quotas and
+      // PUT /settings/holidays before it: twelve rows is not worth a
+      // per-field protocol, and sending them together means a half-applied
+      // save cannot leave some months on the old value and some on the new.
+      const response = await apiClient.put("/settings/vacation-quotas", {
+        quotas: Object.entries(updated).map(([index, value]) => ({
+          month: Number(index) + 1,
+          limit: Number(value),
+        })),
+      });
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (rows.length > 0) {
+        const next: Record<number, number> = { ...DEFAULT_MONTHLY_QUOTAS };
+        rows.forEach((row: any) => {
+          const month = Number(row?.month);
+          const value = Number(row?.limit);
+          if (Number.isInteger(month) && month >= 1 && month <= 12 && Number.isFinite(value)) {
+            next[month - 1] = value;
+          }
+        });
+        setMonthlyQuotas(next);
+      }
+    } catch (error) {
+      console.error("Error saving vacation quota:", error);
+      setMonthlyQuotas(previous);
+      alert("Амралтын квотыг хадгалж чадсангүй. Дахин оролдоно уу.");
+    }
   };
 
   const handleExportVacations = (
@@ -8319,8 +8399,7 @@ export default function AdminDashboard() {
                                 label: normalizedTime,
                               },
                             ];
-                            setShiftTemplates(newTemplates);
-                            setLocalData("shiftTemplates", newTemplates);
+                            void persistShiftTemplates(newTemplates);
                             setNewTemplateTime("");
                             setIsAddingTemplate(false);
                           }
@@ -8362,8 +8441,7 @@ export default function AdminDashboard() {
                             const newTemplates = shiftTemplates.filter(
                               (item) => item.id !== template.id,
                             );
-                            setShiftTemplates(newTemplates);
-                            setLocalData("shiftTemplates", newTemplates);
+                            void persistShiftTemplates(newTemplates);
                           }}
                           className="p-3 text-gray-600 hover:text-red-500 hover:bg-red-500/10 rounded-2xl transition-all opacity-0 group-hover:opacity-100"
                         >
@@ -8916,8 +8994,7 @@ export default function AdminDashboard() {
                               label: time,
                             },
                           ];
-                          setShiftTemplates(newTemplates);
-                          setLocalData("shiftTemplates", newTemplates);
+                          void persistShiftTemplates(newTemplates);
                         }
 
                         void persistSchedules(newSchedules, targetDateKeys);

@@ -59,6 +59,12 @@ export const POLLING_INTERVALS = {
    *  it can stay responsive. */
   LOCAL_DATA: 5_000,
 
+  /** Shared admin settings that used to live in localStorage: the vacation
+   *  quota per month and the shift-template list. Both are edited a handful
+   *  of times a year, and every edit re-fetches immediately, so this poll
+   *  only exists so a SECOND admin's change shows up without a reload. */
+  SHARED_SETTINGS: 300_000,
+
   /** The superadmin console: user list, audit log, notifications. The audit
    *  log in particular is an expensive query, and a superadmin watching it
    *  does not need second-by-second updates. */

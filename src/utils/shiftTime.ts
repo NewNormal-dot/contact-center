@@ -102,3 +102,41 @@ export const getShiftDuplicateIndexMap = (
 
   return result;
 };
+
+// ---------------------------------------------------------------------------
+// Shift TEMPLATE values (the admin's list of selectable shift times).
+//
+// These are deliberately separate from normalizeShiftTime() above, which
+// collapses "09:30-18:00" to "09-18" - correct for the whole-hour bucketing
+// it was written for, wrong for a template the admin typed with minutes.
+// Templates also accept the rest-day label, which is not a time at all.
+//
+// They live here rather than inside a dashboard component because the server
+// now validates the same values on the way into shift_templates. Two copies
+// of this logic drifting apart is exactly how the vacation quota ended up
+// written under one key and read under another.
+export const REST_SHIFT_LABEL = 'Амралт';
+const REST_SHIFT_INPUT = 'амралт';
+
+export const isRestShiftText = (value: string) =>
+  value.trim().toLowerCase() === REST_SHIFT_INPUT;
+
+export const compactShiftTimeInput = (value: string) =>
+  value.trim().replace(/\s+/g, '').replace(/-+/g, '-');
+
+/** Trims and canonicalises a template value, mapping any spelling of the
+ *  rest day onto the single stored label. */
+export const normalizeShiftTemplateValue = (value: string) => {
+  const trimmed = String(value ?? '').trim();
+  if (isRestShiftText(trimmed) || trimmed === REST_SHIFT_LABEL) return REST_SHIFT_LABEL;
+  return compactShiftTimeInput(trimmed);
+};
+
+/** "09-18" and "10:00-16:00" are both accepted; so is the rest label. */
+export const isValidShiftTemplateTime = (value: string) =>
+  /^(?:[01]\d|2[0-3])(?::[0-5]\d)?-(?:[01]\d|2[0-3])(?::[0-5]\d)?$/.test(value);
+
+export const isValidShiftTemplateValue = (value: string) => {
+  const normalized = normalizeShiftTemplateValue(value);
+  return normalized === REST_SHIFT_LABEL || isValidShiftTemplateTime(normalized);
+};
