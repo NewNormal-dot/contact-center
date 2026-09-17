@@ -2,6 +2,7 @@ import express from 'express';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { captureError } from '../utils/errorLog';
+import { logAction } from './audit';
 
 const router = express.Router();
 
@@ -183,7 +184,18 @@ router.put('/monthly-font-hours', authenticate, authorize(['admin', 'superadmin'
     const hours = normalizeMonthlyFontHours(req.body.hours);
 
     await upsertRule('monthly_font_hours', monthKey, segment, employmentType, location, hours);
-    res.json({ key: makeMonthlyFontHourKey(monthKey, segment, employmentType, location), hours });
+    const key = makeMonthlyFontHourKey(monthKey, segment, employmentType, location);
+    // Shift rules decide whether a CSR may book at all, so "who tightened
+    // this and when" is exactly the question asked after a complaint.
+    await logAction(
+      (req as any).user?.id,
+      'UPDATE_MONTHLY_FONT_HOURS',
+      'shift_rule_settings',
+      key,
+      `${monthKey} ${segment}/${employmentType}/${location}: ${JSON.stringify(hours)}`.slice(0, 500),
+      req,
+    );
+    res.json({ key, hours });
   } catch (err) {
     console.error('Save monthly font hours error:', err);
     captureError('rules: Save monthly font hours error:', err);
@@ -200,7 +212,16 @@ router.put('/weekly-shift-rules', authenticate, authorize(['admin', 'superadmin'
     const rule = normalizeWeeklyShiftRule(req.body.rule || req.body);
 
     await upsertRule('weekly_shift_rules', null, segment, employmentType, location, rule);
-    res.json({ key: makeSegmentTypeKey(segment, employmentType, location), rule });
+    const key = makeSegmentTypeKey(segment, employmentType, location);
+    await logAction(
+      (req as any).user?.id,
+      'UPDATE_WEEKLY_SHIFT_RULES',
+      'shift_rule_settings',
+      key,
+      `${segment}/${employmentType}/${location}: ${JSON.stringify(rule)}`.slice(0, 500),
+      req,
+    );
+    res.json({ key, rule });
   } catch (err) {
     console.error('Save weekly shift rule error:', err);
     captureError('rules: Save weekly shift rule error:', err);

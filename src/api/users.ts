@@ -155,7 +155,7 @@ router.post('/me/photo', authenticate, async (req: any, res) => {
       updated_at: db.fn.now(),
     });
     invalidateAuthUserCache(req.user.id);
-    await logAction(req.user.id, 'UPDATE_PROFILE_PHOTO', 'users', req.user.id, 'Profile photo updated');
+    await logAction(req.user.id, 'UPDATE_PROFILE_PHOTO', 'users', req.user.id, 'Profile photo updated', req);
     res.json({ photoUrl: photo });
   } catch (err) {
     console.error('Update profile photo error:', err);
@@ -340,8 +340,9 @@ router.post('/', authenticate, async (req: any, res) => {
       'users',
       id,
       invitationSent
-        ? `Created user ${name} (${finalRole}) and sent password setup link to ${email}`
-        : `Created user ${name} (${finalRole}); password setup email failed for ${email}`
+      ? `Created user ${name} (${finalRole}) and sent password setup link to ${email}`
+      : `Created user ${name} (${finalRole}); password setup email failed for ${email}`,
+      req,
     );
     res.status(201).json({
       id,
@@ -463,7 +464,7 @@ router.put('/:id', authenticate, async (req: any, res) => {
     // or status change must take effect on the very next request, not after
     // the cache expires.
     invalidateAuthUserCache(id);
-    await logAction(req.user.id, 'UPDATE_USER', 'users', id, `Updated user ${updates.name || userToUpdate.name} (${updates.role || userToUpdate.role})`);
+    await logAction(req.user.id, 'UPDATE_USER', 'users', id, `Updated user ${updates.name || userToUpdate.name} (${updates.role || userToUpdate.role})`, req);
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
   } catch (err) {
     // This is a WRITE and it used to swallow the error completely - no
@@ -535,7 +536,7 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
       invitationSent = false;
     }
 
-    await logAction(actingUser.id, 'SEND_PASSWORD_SETUP_LINK', 'users', id, `Sent password setup link to ${userToUpdate.email || userToUpdate.name}`);
+    await logAction(actingUser.id, 'SEND_PASSWORD_SETUP_LINK', 'users', id, `Sent password setup link to ${userToUpdate.email || userToUpdate.name}`, req);
     res.json({
       message: invitationSent
         ? 'Нууц үг тохируулах холбоос хэрэглэгчийн и-мэйл рүү илгээгдлээ'
@@ -598,7 +599,7 @@ router.delete('/:id', authenticate, async (req: any, res) => {
       await trx('users').where({ id }).delete();
     });
     invalidateAuthUserCache(id);
-    await logAction(actingUser.id, 'DELETE_USER', 'users', id, `Deleted user ${userToDelete.email || userToDelete.name}`);
+    await logAction(actingUser.id, 'DELETE_USER', 'users', id, `Deleted user ${userToDelete.email || userToDelete.name}`, req);
     res.json({ message: 'Хэрэглэгч амжилттай устгагдлаа' });
   } catch (err) {
     console.error(err);

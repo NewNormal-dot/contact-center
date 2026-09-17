@@ -91,7 +91,7 @@ router.post('/change-password', authenticate, async (req: any, res) => {
     await db('users').where({ id: userId }).update(updates);
     invalidateAuthUserCache(userId);
 
-    await logAction(userId, 'CHANGE_PASSWORD', 'users', userId, 'User changed their password');
+    await logAction(userId, 'CHANGE_PASSWORD', 'users', userId, 'User changed their password', req);
     // Hand the caller a token issued AFTER the cutoff so the session they are
     // sitting in survives while all the others are revoked.
     const refreshed = await db('users').where({ id: userId }).first();
@@ -149,7 +149,7 @@ router.post('/setup-password', setupPasswordRateLimiter, async (req, res) => {
     await db('users').where({ id: user.id }).update(setupUpdates);
     invalidateAuthUserCache(user.id);
 
-    await logAction(user.id, 'SETUP_PASSWORD', 'users', user.id, `User set password via email setup link: ${user.email}`);
+    await logAction(user.id, 'SETUP_PASSWORD', 'users', user.id, `User set password via email setup link: ${user.email}`, req);
     res.json({ message: 'Нууц үг амжилттай тохирлоо. Одоо шинэ нууц үгээрээ нэвтэрнэ үү.' });
   } catch (err) {
     console.error('Setup Password Error:', err);
@@ -189,7 +189,7 @@ router.post('/forgot-password', forgotPasswordRateLimiter, async (req, res) => {
       });
       await db('users').where({ id: user.id }).update({ invitation_sent_at: db.fn.now(), updated_at: db.fn.now() });
 
-      await logAction(user.id, 'REQUEST_PASSWORD_RESET', 'users', user.id, `Password setup link requested for ${user.email}`);
+      await logAction(user.id, 'REQUEST_PASSWORD_RESET', 'users', user.id, `Password setup link requested for ${user.email}`, req);
     }
 
     res.json({ message: 'Хэрэв энэ и-мэйл бүртгэлтэй бол нууц үг тохируулах холбоос илгээгдэнэ.' });
@@ -237,7 +237,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     // response itself. logAction already catches its own errors internally,
     // so not awaiting it here is safe (it can't produce an unhandled
     // rejection or crash the process).
-    void logAction(user.id, 'LOGIN_SUCCESS', 'users', user.id, `User logged in: ${user.email}`);
+    void logAction(user.id, 'LOGIN_SUCCESS', 'users', user.id, `User logged in: ${user.email}`, req);
 
     res.json({ token, user: formatUserForClient(user) });
   } catch (err) {
@@ -346,7 +346,7 @@ router.post('/logout', authenticate, async (req: any, res) => {
       });
       invalidateAuthUserCache(req.user.id);
     }
-    await logAction(req.user.id, 'LOGOUT', 'users', req.user.id, allDevices ? 'Signed out of all devices' : 'Signed out');
+    await logAction(req.user.id, 'LOGOUT', 'users', req.user.id, allDevices ? 'Signed out of all devices' : 'Signed out', req);
     res.json({ ok: true, allDevices });
   } catch (err) {
     console.error('Logout error:', err);

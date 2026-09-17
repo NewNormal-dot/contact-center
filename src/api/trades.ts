@@ -328,6 +328,7 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
       'trade_requests',
       id,
       `${sender.name} -> ${receiver.name} | ${displayDate(senderSlot.date)} ${slotTimeLabel(senderSlot)} <-> ${slotTimeLabel(receiverSlot)}`,
+      req,
     );
 
     await createNotification({
@@ -386,6 +387,7 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
         'trade_requests',
         id,
         `${trade.receiver_name} declined ${trade.sender_name}'s trade`,
+        req,
       );
       return res.json({ message: 'Амжилттай хариу илгээлээ' });
     } catch (err) {
@@ -470,6 +472,7 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
       'trade_requests',
       id,
       `${trade.sender_name} (${trade.sender_email}) <-> ${trade.receiver_name} (${trade.receiver_email}) | segment: ${trade.sender_segment} | ${displayDate(senderSlot.date)} ${slotTimeLabel(senderSlot)} <-> ${displayDate(receiverSlot.date)} ${slotTimeLabel(receiverSlot)}`,
+      req,
     );
 
     res.json({ message: 'Арилжаа амжилттай хийгдэж хуваарь автоматаар солигдлоо' });

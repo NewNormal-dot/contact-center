@@ -2,6 +2,7 @@ import express from 'express';
 import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { captureError } from '../utils/errorLog';
+import { getClientKey } from '../middleware/rateLimiter';
 
 const router = express.Router();
 
@@ -50,7 +51,34 @@ router.get('/', authenticate, authorize(['superadmin']), async (req, res) => {
   }
 });
 
-export async function logAction(userId: string, action: string, entityType: string, entityId: string | null, details: string) {
+/**
+ * The caller's IP, for the audit trail.
+ *
+ * Reuses the rate limiter's key function rather than reading
+ * x-forwarded-for[0]: that header is client-controlled and the proxy
+ * APPENDS to it, so the first entry is whatever the caller typed. An audit
+ * log that records a forged address is worse than one that records none,
+ * because it looks authoritative.
+ */
+export function clientIpFor(req: any): string | null {
+  try {
+    return getClientKey(req) || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function logAction(
+  userId: string,
+  action: string,
+  entityType: string,
+  entityId: string | null,
+  details: string,
+  // Optional so the ~30 existing call sites keep working unchanged; passing
+  // the request is what fills audit_logs.ip_address, a column that had
+  // existed since the initial schema and was never once written to.
+  req?: any,
+) {
   try {
     const { v4: uuidv4 } = await import('uuid');
     await db('audit_logs').insert({
@@ -60,6 +88,7 @@ export async function logAction(userId: string, action: string, entityType: stri
       entity_type: entityType,
       entity_id: entityId,
       details,
+      ip_address: req ? clientIpFor(req) : null,
       created_at: new Date().toISOString()
     });
 
