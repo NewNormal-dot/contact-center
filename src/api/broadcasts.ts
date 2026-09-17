@@ -35,6 +35,21 @@ async function hasAttachmentTable() {
   return tableExists(db, 'training_attachments');
 }
 
+/**
+ * True for a duplicate-key / unique-constraint violation on any of the three
+ * dialects this app talks to. Both of the tables below have a composite
+ * primary key and were written with a check-then-insert, so an ordinary
+ * double-click or two open tabs raced and surfaced the violation as a bare
+ * 500. The row already existing is the desired end state, so swallow it.
+ */
+function isDuplicateKeyError(err: any): boolean {
+  const number = err?.number ?? err?.originalError?.info?.number;
+  if (number === 2627 || number === 2601) return true; // mssql PK / unique index
+  const code = String(err?.code || '');
+  if (code === 'SQLITE_CONSTRAINT' || code === '23505') return true; // sqlite / postgres
+  return /duplicate|unique constraint|primary key/i.test(String(err?.message || ''));
+}
+
 function textField(value: unknown, max: number) {
   const text = String(value ?? '').trim();
   return text.length > max ? null : text;
@@ -188,17 +203,27 @@ router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), 
     related_entity_id,
   } = req.body;
 
+  const finalTitle = textField(title, 200);
+  const finalImageUrl = textField(image_url ?? imageUrl, 2000);
+
   if (!title || !content) {
     return res.status(400).json({ error: 'Гарчиг болон агуулга шаардлагатай' });
+  }
+  // notifications.title and image_url are nvarchar(255); an oversized value
+  // used to reach SQL Server and come back as a truncation 500.
+  if (finalTitle === null) return res.status(400).json({ error: 'Гарчиг хэт урт байна (200 тэмдэгт)' });
+  if (String(content).length > 5000) return res.status(400).json({ error: 'Агуулга хэт урт байна (5000 тэмдэгт)' });
+  if (finalImageUrl === null || (finalImageUrl && finalImageUrl.length > 255)) {
+    return res.status(400).json({ error: 'Зургийн холбоос хэт урт байна. Файл хавсаргах бус холбоос ашиглана уу.' });
   }
 
   try {
     const id = uuidv4();
     await db('notifications').insert({
       id,
-      title,
+      title: finalTitle,
       content,
-      image_url: image_url || imageUrl || null,
+      image_url: finalImageUrl || null,
       deadline: toSqlDateTime(deadline),
       type: type || 'general',
       target_user_id: target_user_id || targetUserId || null,
@@ -218,9 +243,21 @@ router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), 
 router.delete('/notifications/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { id } = req.params;
   try {
+    const existing = await db('notifications').where({ id }).first();
+    // Used to return 200 for an id that did not exist, so the UI reported a
+    // successful delete for a no-op.
+    if (!existing) return res.status(404).json({ error: 'Мэдэгдэл олдсонгүй' });
+
+    // Any admin could delete ANY notification, including other admins' and
+    // system-generated ones. Authors may remove their own; superadmins may
+    // remove anything.
+    if (req.user.role !== 'superadmin' && existing.author_id && String(existing.author_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Зөвхөн өөрийн үүсгэсэн мэдэгдлийг устгах боломжтой' });
+    }
+
     await db('notification_read_receipts').where({ notification_id: id }).delete();
     await db('notifications').where({ id }).delete();
-    await logAction(req.user.id, 'DELETE_NOTIFICATION', 'notifications', id, 'Notification deleted');
+    await logAction(req.user.id, 'DELETE_NOTIFICATION', 'notifications', id, `Notification deleted: ${existing.title}`);
     res.json({ message: 'Мэдэгдэл устгагдлаа' });
   } catch (err) {
     console.error('Delete notification error:', err);
@@ -242,11 +279,17 @@ router.post('/notifications/read', authenticate, async (req: any, res) => {
       .first();
 
     if (!existing) {
-      await db('notification_read_receipts').insert({
-        notification_id: finalNotificationId,
-        user_id: userId,
-        read_at: db.fn.now(),
-      });
+      try {
+        await db('notification_read_receipts').insert({
+          notification_id: finalNotificationId,
+          user_id: userId,
+          read_at: db.fn.now(),
+        });
+      } catch (insertErr) {
+        // Lost the race with another tab/click - the receipt now exists,
+        // which is exactly what the caller asked for.
+        if (!isDuplicateKeyError(insertErr)) throw insertErr;
+      }
     }
 
     res.json({ success: true });
@@ -441,9 +484,18 @@ router.get('/trainings/:id/attachment', authenticate, async (req: any, res) => {
 router.delete('/trainings/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { id } = req.params;
   try {
+    const existing = await db('trainings').where({ id }).first();
+    if (!existing) return res.status(404).json({ error: 'Сургалт олдсонгүй' });
+    if (req.user.role !== 'superadmin' && existing.author_id && String(existing.author_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Зөвхөн өөрийн үүсгэсэн сургалтыг устгах боломжтой' });
+    }
+
     await db('training_completions').where({ training_id: id }).delete();
+    if (await hasAttachmentTable()) {
+      await db('training_attachments').where({ training_id: id }).delete();
+    }
     await db('trainings').where({ id }).delete();
-    await logAction(req.user.id, 'DELETE_TRAINING', 'trainings', id, 'Training deleted');
+    await logAction(req.user.id, 'DELETE_TRAINING', 'trainings', id, `Training deleted: ${existing.title}`);
     res.json({ message: 'Сургалт устгагдлаа' });
   } catch (err) {
     console.error('Delete training error:', err);
@@ -465,11 +517,15 @@ router.post('/trainings/complete', authenticate, async (req: any, res) => {
       .first();
 
     if (!existing) {
-      await db('training_completions').insert({
-        training_id: finalTrainingId,
-        user_id: userId,
-        completed_at: db.fn.now(),
-      });
+      try {
+        await db('training_completions').insert({
+          training_id: finalTrainingId,
+          user_id: userId,
+          completed_at: db.fn.now(),
+        });
+      } catch (insertErr) {
+        if (!isDuplicateKeyError(insertErr)) throw insertErr;
+      }
     }
 
     res.json({ success: true });
