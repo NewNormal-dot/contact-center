@@ -14,3 +14,9 @@ database.sqlite.corrupt-backup
 release.zip
 node_modules.zip
 release/
+
+# Written into the deployment package by the workflow (and by anyone
+# reproducing it locally) to stamp the build with its commit. Never committed:
+# a stale checked-in copy would make /api/health lie about which build is
+# running, which is the exact thing it exists to prove.
+build-info.json

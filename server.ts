@@ -1,4 +1,5 @@
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
@@ -21,6 +22,31 @@ import { captureError } from "./src/utils/errorLog";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Which build is actually running.
+//
+// The post-deploy health check polls /api/health and passes as soon as it
+// gets a 200 - but App Service needs time to restart into the newly uploaded
+// package, so for the first ~30-60s after a deploy that 200 comes from the
+// PREVIOUS process. Observed on 2026-09-17: the check passed six seconds
+// after upload, against the old build. A deploy that uploads fine and then
+// fails to start is exactly what this guardrail exists to catch, and it
+// would slip straight through unless the app can say which build answered.
+//
+// build-info.json is written into the deployment package by the workflow.
+// Absent (local development, a hand-made deploy) simply means "unknown".
+function readBuildCommit(): string | null {
+  if (process.env.BUILD_SHA) return process.env.BUILD_SHA;
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.commit === "string" && parsed.commit ? parsed.commit : null;
+  } catch {
+    return null;
+  }
+}
+
+const BUILD_COMMIT = readBuildCommit();
 
 let migrationStatus: "skipped" | "running" | "complete" | "failed" = "skipped";
 let migrationError: string | null = null;
@@ -228,6 +254,10 @@ async function startServer() {
       status: "ok",
       timestamp: new Date().toISOString(),
       env: process.env.NODE_ENV,
+      // The deploy workflow polls until this matches the commit it just
+      // shipped, which is what proves the restart actually happened rather
+      // than the old process still answering.
+      commit: BUILD_COMMIT,
       migrations: {
         status: migrationStatus,
         // Production runs with SKIP_DB_MIGRATIONS=true and applies
@@ -307,6 +337,7 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Build: ${BUILD_COMMIT || '(unknown - no build-info.json)'}`);
   });
 }
 
