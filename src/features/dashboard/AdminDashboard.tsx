@@ -1015,11 +1015,37 @@ export default function AdminDashboard() {
       // never has to guess the timezone and the value stays stable across
       // save→read→save round-trips (fixes the "opens then reverts to
       // Товлогдсон" 8-hour drift). Local state is left untouched.
-      await apiClient.post("/slots/sync-schedules", {
+      const response = await apiClient.post("/slots/sync-schedules", {
         schedules: normalizeScheduleBookingTimes(scopedSchedules),
         dateKeys: uniqueDateKeys,
         ...(scope ? { scope } : {}),
       });
+
+      // The server no longer deletes a shift somebody has already booked, and
+      // no longer drops malformed shifts silently. Both used to look like a
+      // clean save while quietly losing data, so surface them here.
+      const kept: string[] = response.data?.keptBookedSlots || [];
+      const skippedRows: string[] = response.data?.skipped || [];
+      const messages: string[] = [];
+      if (kept.length > 0) {
+        messages.push(
+          `Дараах ээлжийг захиалсан ажилтан байгаа тул устгасангүй:\n${kept.slice(0, 15).join("\n")}` +
+            (kept.length > 15 ? `\n… бас ${kept.length - 15}` : "") +
+            `\n\nУстгах бол эхлээд ажилтныг ээлжээс хасна уу.`,
+        );
+      }
+      if (skippedRows.length > 0) {
+        messages.push(
+          `Дараах мөрүүд хадгалагдсангүй:\n${skippedRows.slice(0, 15).join("\n")}` +
+            (skippedRows.length > 15 ? `\n… бас ${skippedRows.length - 15}` : ""),
+        );
+      }
+      if (response.data?.skippedUnscopedDates > 0) {
+        messages.push(
+          "Segment сонгогдоогүй тул хуучин ээлжүүдийг цэгцлэсэнгүй. Segment-ээ сонгоод дахин хадгална уу.",
+        );
+      }
+      if (messages.length > 0) alert(messages.join("\n\n"));
     } catch (error: any) {
       console.error("Sync schedules to DB error:", error);
       alert(error.response?.data?.error || "Хуваарь DB-д хадгалахад алдаа гарлаа.");

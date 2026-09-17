@@ -689,6 +689,13 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
     : null;
   let synced = 0;
   let deleted = 0;
+  // Shifts the payload contained but which could not be stored (unparseable
+  // time, missing segment). These used to be dropped with only a
+  // console.warn, so the admin saw "saved" for a save that lost rows.
+  const skipped: string[] = [];
+  const deletedDescriptions: string[] = [];
+  const keptBookedSlots: string[] = [];
+  let skippedUnscoped = 0;
   try {
     await db.transaction(async (trx) => {
       for (const rawDateKey of keys) {
@@ -713,6 +720,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
               endTime = String(shift.endTime || shift.end_time).trim();
             } else {
               console.warn('Skipping invalid work slot time during sync:', { dateKey, rawShiftTime, shift });
+              skipped.push(`${dateKey}: цагийн формат буруу (${rawShiftTime || 'хоосон'})`);
               continue;
             }
           }
@@ -724,6 +732,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           const segment = String(shift.segment || '').trim();
           if (!segment) {
             console.warn('Skipping work slot with missing segment during sync:', { dateKey, shift });
+            skipped.push(`${dateKey}: segment сонгогдоогүй (${rawShiftTime || 'Амралт'})`);
             continue;
           }
           const employmentType = normalizeEmploymentType(shift.employmentType || shift.employment_type);
@@ -732,6 +741,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           const sqlEnd = rest ? '00:00:00' : normalizeTime(endTime);
           if (!rest && (!sqlStart || !sqlEnd)) {
             console.warn('Skipping work slot with invalid normalized time during sync:', { dateKey, startTime, endTime, shift });
+            skipped.push(`${dateKey}: цаг танигдсангүй (${startTime}-${endTime})`);
             continue;
           }
           const bookingWindow = resolveBookingWindow(day, shift);
@@ -784,35 +794,112 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
           }
         }
 
+        // ------------------------------------------------------------------
+        // Reconciliation deletes. This is the most destructive code in the
+        // application and it has two hard rules.
+        //
+        // RULE 1: no scope, no deletion.
+        // A sync request carries every shift for a date across ALL segments,
+        // employment types and locations. `scope` says which slice of that
+        // the admin was actually editing. Without it we cannot tell "the
+        // admin removed this shift" from "this shift belongs to a slice the
+        // admin never loaded", so treating everything unmatched as stale
+        // deleted other segments' entire schedules. That fired whenever
+        // `activeSegmentView` had not been populated yet (the segments fetch
+        // is async) and unconditionally on a segment rename, which passes no
+        // scope at all. Deleting nothing is always the safe answer here.
+        //
+        // RULE 2: never silently delete a shift somebody has booked.
+        // Identity matching is date|start|end|segment|type|location|is_rest,
+        // so merely editing a shift's TIME made the old row unmatched - and
+        // deleting it took every confirmed booking on it with no audit row,
+        // no notification and no way to find out who lost their shift.
+        // Booked shifts are now kept and reported back to the admin instead.
+        // ------------------------------------------------------------------
+        if (!syncScope?.segment) {
+          if (existingRows.some((row: any) => !keptIds.has(String(row.id)))) {
+            skippedUnscoped += 1;
+          }
+          continue;
+        }
+
         const staleRows = existingRows.filter((row: any) => {
           if (keptIds.has(String(row.id))) return false;
-          if (!syncScope?.segment) return true;
           return normalizeLocation(row.location) === syncScope.location
             && String(row.segment || '').trim() === syncScope.segment
             && normalizeEmploymentType(row.employment_type) === syncScope.employmentType;
         });
-        if (staleRows.length > 0) {
-          const staleIds = staleRows.map((row: any) => row.id);
-          try {
-            await trx('trade_requests')
-              .whereIn('sender_slot_id', staleIds)
-              .orWhereIn('receiver_slot_id', staleIds)
-              .delete();
-            await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
-            await trx('work_slots').whereIn('id', staleIds).delete();
-            deleted += staleRows.length;
-          } catch (staleErr: any) {
-            console.error('Stale rows deletion failed:', {
-              date: dateKey,
-              staleIds,
-              error: staleErr.message
-            });
-            throw staleErr;
-          }
+        if (staleRows.length === 0) continue;
+
+        const staleIds = staleRows.map((row: any) => String(row.id));
+        const bookedRows = await trx('slot_bookings')
+          .whereIn('slot_id', staleIds)
+          .where({ status: 'confirmed' })
+          .select('slot_id');
+        const bookedSlotIds = new Set(bookedRows.map((row: any) => String(row.slot_id)));
+
+        const deletableRows = staleRows.filter((row: any) => !bookedSlotIds.has(String(row.id)));
+        for (const row of staleRows) {
+          if (!bookedSlotIds.has(String(row.id))) continue;
+          keptBookedSlots.push(
+            `${dateKey} ${displayTime(row.start_time)}-${displayTime(row.end_time)}`,
+          );
+        }
+
+        if (deletableRows.length === 0) continue;
+        const deletableIds = deletableRows.map((row: any) => row.id);
+        try {
+          await trx('trade_requests')
+            .whereIn('sender_slot_id', deletableIds)
+            .orWhereIn('receiver_slot_id', deletableIds)
+            .delete();
+          // Only cancelled/auto-assigned rows can remain here - confirmed
+          // ones were excluded above - but they still have to go before the
+          // slot itself can be removed.
+          await trx('slot_bookings').whereIn('slot_id', deletableIds).delete();
+          await trx('work_slots').whereIn('id', deletableIds).delete();
+          deleted += deletableRows.length;
+          deletedDescriptions.push(
+            ...deletableRows.map((row: any) =>
+              `${dateKey} ${displayTime(row.start_time)}-${displayTime(row.end_time)}`,
+            ),
+          );
+        } catch (staleErr: any) {
+          console.error('Stale rows deletion failed:', {
+            date: dateKey,
+            staleIds: deletableIds,
+            error: staleErr.message
+          });
+          throw staleErr;
         }
       }
     });
-    res.json({ synced, deleted });
+
+    if (deleted > 0) {
+      await logAction(
+        req.user.id,
+        'SYNC_SCHEDULE_DELETED_SLOTS',
+        'work_slots',
+        null,
+        `Removed ${deleted} unbooked shift(s) in scope ` +
+        `${syncScope?.location}/${syncScope?.segment}/${syncScope?.employmentType}: ` +
+        `${deletedDescriptions.slice(0, 40).join(', ')}` +
+        `${deletedDescriptions.length > 40 ? ` (+${deletedDescriptions.length - 40} more)` : ''}`,
+      );
+    }
+
+    res.json({
+      synced,
+      deleted,
+      skipped,
+      // Shifts the admin's payload no longer contained but which somebody has
+      // already booked. They were deliberately kept; the client surfaces this
+      // so the admin can remove the person first if the removal was intended.
+      keptBookedSlots,
+      // Dates where nothing could be reconciled because the request carried
+      // no editing scope.
+      skippedUnscopedDates: skippedUnscoped,
+    });
   } catch (err: any) {
     console.error('Sync schedules FATAL error:', err);
     captureError('slots: Sync schedules FATAL error:', err);
