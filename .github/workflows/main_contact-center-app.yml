@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+  # Validate pull requests BEFORE they are merged. Until now the only
+  # trigger was a push to main, which is also what deploys - so lint,
+  # typecheck, tests and the build were first exercised AFTER the change
+  # had already gone to production. The deploy job is hard-gated below so a
+  # pull_request event can never reach Azure.
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -73,10 +81,15 @@ jobs:
       - name: Build app
         run: npm run build --if-present
 
+      # Everything below only matters for a real deploy. On a pull request the
+      # run stops after install + lint + test + build, which is the fast
+      # feedback a PR wants.
       - name: Keep only production dependencies
+        if: github.event_name != 'pull_request'
         run: npm prune --omit=dev
 
       - name: Create deployment package
+        if: github.event_name != 'pull_request'
         run: |
           rm -rf release release.zip
           mkdir -p release
@@ -87,6 +100,7 @@ jobs:
           zip -rq ../release.zip .
 
       - name: Verify deployment package
+        if: github.event_name != 'pull_request'
         run: |
           test -f release/node_modules/express/package.json
           test -f release/node_modules/tsx/dist/cli.mjs
@@ -96,6 +110,7 @@ jobs:
           unzip -l release.zip | grep "src/database/migrations"
 
       - name: Upload artifact for deployment job
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: node-app
@@ -104,6 +119,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    # HARD GATE. The workflow now also runs on pull_request, and a pull
+    # request must NEVER be able to deploy to production. An explicit
+    # allow-list of the two events that may deploy - not a `!=` - so that
+    # adding a future trigger cannot silently grant deploy rights.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       id-token: write
       contents: read
