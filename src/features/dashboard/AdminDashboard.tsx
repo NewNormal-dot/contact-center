@@ -2303,6 +2303,7 @@ export default function AdminDashboard() {
   const [bulkUsers, setBulkUsers] = useState<BulkUploadUser[]>([]);
   const [bulkUploadFileName, setBulkUploadFileName] = useState("");
   const [bulkUploadError, setBulkUploadError] = useState("");
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
   const [isAddingSegment, setIsAddingSegment] = useState(false);
   const [newSegment, setNewSegment] = useState("");
   const [editingSegment, setEditingSegment] = useState<string | null>(null);
@@ -2511,10 +2512,23 @@ export default function AdminDashboard() {
     event.target.value = "";
     if (!file) return;
 
+    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(file.name)) {
+      setBulkUploadError("Зөвхөн Excel (.xlsx, .xls, .csv) файл оруулна уу.");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setBulkUploadError("Файл хэт том байна (20MB-аас бага байх ёстой).");
+      return;
+    }
+
     setBulkUploadFileName(file.name);
     setBulkUploadError("");
 
     const reader = new FileReader();
+    reader.onerror = () => {
+      setBulkUsers([]);
+      setBulkUploadError("Файл уншихад алдаа гарлаа.");
+    };
     reader.onload = (evt) => {
       try {
         const workbook = XLSX.read(evt.target?.result, { type: "array" });
@@ -2642,6 +2656,7 @@ export default function AdminDashboard() {
       return;
     }
 
+    setIsBulkSubmitting(true);
     try {
       const uploadSegments = Array.from(
         new Set(
@@ -2661,44 +2676,86 @@ export default function AdminDashboard() {
         await persistSegments([...segments, ...missingSegments]);
       }
 
-      const usersToAdd: CSR[] = [];
+      // Previously this was a bare `for` loop inside ONE try/catch, so the
+      // first failing row threw and every remaining row was silently never
+      // attempted - leaving a half-imported roster with one generic alert
+      // and no indication of where it stopped. Each row is now independent
+      // and its real outcome is reported.
+      const created: CSR[] = [];
+      const failed: { row: BulkUploadUser; reason: string }[] = [];
+
       for (const user of validUsers) {
-        const response = await apiClient.post("/users", {
-          code: user.code,
-          name: user.name,
-          email: user.email,
-          location: user.location,
-          supervisorName: user.supervisorName,
-          role: "csr",
-          status: "active",
-          segment: user.lineType,
-          employmentType: user.employmentType || "Full Time",
-        });
-        usersToAdd.push(
-          mapCsrForUi({
-            ...response.data,
-            segment: user.lineType,
+        try {
+          const response = await apiClient.post("/users", {
+            code: user.code,
+            name: user.name,
+            email: user.email,
             location: user.location,
             supervisorName: user.supervisorName,
-            photoUrl: user.photoUrl,
-          }),
+            role: "csr",
+            status: "active",
+            segment: user.lineType,
+            employmentType: user.employmentType || "Full Time",
+          });
+          created.push(
+            mapCsrForUi({
+              ...response.data,
+              segment: user.lineType,
+              location: user.location,
+              supervisorName: user.supervisorName,
+              photoUrl: user.photoUrl,
+            }),
+          );
+        } catch (error: any) {
+          failed.push({
+            row: user,
+            reason:
+              error.response?.data?.error ||
+              (error.code === "ECONNABORTED"
+                ? "Хугацаа хэтэрсэн"
+                : "Сервертэй холбогдож чадсангүй"),
+          });
+        }
+      }
+
+      await fetchCsrUsers();
+
+      if (created.length > 0) {
+        logAction(
+          "Bulk Employees Added",
+          `${created.length} ажилтан Excel-ээр олноор нэмэгдлээ.`,
         );
       }
 
-      const updatedUsers = [...csrs, ...usersToAdd];
-      setCsrs(updatedUsers);
-      closeBulkUploadModal();
-      logAction(
-        "Bulk Employees Added",
-        `${usersToAdd.length} ажилтан Excel-ээр олноор нэмэгдлээ.`,
-      );
-      await fetchCsrUsers();
-      alert(`${usersToAdd.length} CSR амжилттай нэмэгдэж, нууц үг тохируулах холбоосууд и-мэйлээр илгээгдлээ.`);
+      // A real per-row report instead of "N duplicates skipped" for every
+      // possible cause.
+      const summary = [`Амжилттай нэмэгдсэн: ${created.length}`];
+      if (failed.length > 0) {
+        summary.push(
+          `Нэмэгдээгүй: ${failed.length}`,
+          ...failed
+            .slice(0, 15)
+            .map((f) => `  • ${f.row.email} — ${f.reason}`),
+        );
+        if (failed.length > 15) summary.push(`  … бас ${failed.length - 15}`);
+      }
+      alert(summary.join("\n"));
+
+      if (failed.length === 0) {
+        closeBulkUploadModal();
+      } else {
+        // Leave the failed rows on screen so they can be corrected and retried.
+        setBulkUsers(
+          failed.map((f) => ({ ...f.row, error: f.reason })),
+        );
+      }
     } catch (error: any) {
       console.error("Error bulk adding CSR users:", error);
       alert(
         error.response?.data?.error || "Хэрэглэгч олноор нэмэхэд алдаа гарлаа.",
       );
+    } finally {
+      setIsBulkSubmitting(false);
     }
   };
 

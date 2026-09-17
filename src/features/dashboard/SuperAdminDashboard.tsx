@@ -643,105 +643,141 @@ export default function SuperAdminDashboard() {
     e.target.value = '';
     if (!file) return;
 
+    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(file.name)) {
+      alert('Зөвхөн Excel (.xlsx, .xls, .csv) файл оруулна уу.');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      alert('Файл хэт том байна (20MB-аас бага байх ёстой).');
+      return;
+    }
+
     setIsUploadingBulk(true);
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
+    try {
+      // readAsBinaryString is deprecated and doubles memory; arrayBuffer is
+      // both supported and cheaper. More importantly the whole body used to
+      // live in reader.onload with NO try/catch and setIsUploadingBulk(false)
+      // only on the success path - so any parse failure left the spinner
+      // turning forever with no message at all.
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) {
+        alert('Excel файлд хуудас олдсонгүй.');
+        return;
+      }
       const data = XLSX.utils.sheet_to_json(ws) as any[];
 
       const newUsers: Array<Partial<CSR>> = [];
-      let duplicates = 0;
-      let invalidRows = 0;
+      const invalid: string[] = [];
 
-      data.forEach(row => {
+      data.forEach((row, index) => {
         const email = row['И-мэйл'] || row['Email'] || '';
         const name = row['Нэр'] || row['Name'] || '';
-        const role = ((row['Эрх'] || row['Role'] || 'csr') as string).toLowerCase();
+        const role = ((row['Эрх'] || row['Role'] || 'csr') as string).toLowerCase().trim();
         const code = row['Код'] || row['Code'] || '';
         const segment = row['Сегмент'] || row['Segment'] || segments[0] || 'Postpaid';
         const employmentType = row['Цагийн төрөл'] || row['EmploymentType'] || row['Employment Type'] || 'Full Time';
         const location = normalizeUserLocation(row['Байршил'] || row['Хот'] || row['Location'] || row['City'] || row['Bayrshil'] || '');
         const supervisorName = String(row['Ахлах'] || row['Ахлах ажилтан'] || row['Supervisor'] || row['Supervisor Name'] || row['SupervisorName'] || '').trim();
+        const rowLabel = `${index + 2}-р мөр (${email || 'и-мэйлгүй'})`;
 
-        if (!email || !name || !role) {
-          invalidRows++;
+        if (!email || !name) {
+          invalid.push(`${rowLabel} — и-мэйл эсвэл нэр дутуу`);
           return;
         }
-
-        if (role === 'csr' && (!location || !supervisorName)) {
-          invalidRows++;
+        // The role came straight from the spreadsheet and was never checked
+        // against the three the API accepts, so a Mongolian value like
+        // "Админ" was rejected by the server and counted as a DUPLICATE.
+        if (!['csr', 'admin', 'superadmin'].includes(role)) {
+          invalid.push(`${rowLabel} — эрх буруу: "${role}" (csr / admin / superadmin)`);
           return;
         }
-
-        if (csrs.some(u => u.email?.toLowerCase() === email.toLowerCase())) {
-          duplicates++;
+        if (role === 'csr' && !location) {
+          invalid.push(`${rowLabel} — байршил Ulaanbaatar эсвэл Darkhan байх ёстой`);
+          return;
+        }
+        if (role === 'csr' && !supervisorName) {
+          invalid.push(`${rowLabel} — ахлах ажилтны нэр дутуу`);
+          return;
+        }
+        if (csrs.some(u => u.email?.toLowerCase() === String(email).toLowerCase())) {
+          invalid.push(`${rowLabel} — и-мэйл аль хэдийн бүртгэлтэй`);
           return;
         }
 
         newUsers.push({
-          code,
-          name,
-          email,
+          code, name, email,
           role: role as any,
           lineType: segment,
           employmentType,
           location,
           supervisorName,
           status: 'active',
-          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
+          photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
         });
       });
 
-      if (newUsers.length > 0) {
-        const createdUsers: CSR[] = [];
-        for (const rowUser of newUsers) {
-          try {
-            const response = await apiClient.post('/users', {
-              email: rowUser.email,
-              name: rowUser.name,
-              role: rowUser.role,
-              status: rowUser.status,
-              employmentType: rowUser.employmentType,
-              segment: rowUser.lineType,
-              lineType: rowUser.lineType,
-              code: rowUser.code,
-              location: rowUser.location,
-              supervisorName: rowUser.supervisorName,
-            });
-            createdUsers.push({
-              ...response.data,
-              lineType: rowUser.lineType,
-              employmentType: rowUser.employmentType,
-              code: rowUser.code,
-              location: rowUser.location,
-              supervisorName: rowUser.supervisorName,
-              photoUrl: rowUser.photoUrl,
-              status: rowUser.status,
-            });
-          } catch (err: any) {
-            duplicates++;
-          }
-        }
+      const createdUsers: CSR[] = [];
+      const failed: string[] = [];
 
-        if (createdUsers.length > 0) {
-          setCsrs(prev => [...prev, ...createdUsers]);
-          await fetchUsers();
-          await fetchLogs();
-          logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel. ${duplicates} duplicates skipped.`);
-          alert(`${createdUsers.length} хэрэглэгч амжилттай нэмэгдэж, нууц үг тохируулах холбоосууд и-мэйлээр илгээгдлээ. ${duplicates} давхардсан, ${invalidRows} форматын алдаатай мөрүүд алгасагдлаа.`);
-          triggerSuccess();
-        } else {
-          alert(`Файл доторх мөрүүдийн аль нь ч шинээр нэмэгдсэнгүй. ${duplicates} давхардсан, ${invalidRows} алдаатай мөр.`);
+      for (const rowUser of newUsers) {
+        try {
+          const response = await apiClient.post('/users', {
+            email: rowUser.email,
+            name: rowUser.name,
+            role: rowUser.role,
+            status: rowUser.status,
+            employmentType: rowUser.employmentType,
+            segment: rowUser.lineType,
+            lineType: rowUser.lineType,
+            code: rowUser.code,
+            location: rowUser.location,
+            supervisorName: rowUser.supervisorName,
+          });
+          createdUsers.push({
+            ...response.data,
+            lineType: rowUser.lineType,
+            employmentType: rowUser.employmentType,
+            code: rowUser.code,
+            location: rowUser.location,
+            supervisorName: rowUser.supervisorName,
+            photoUrl: rowUser.photoUrl,
+            status: rowUser.status,
+          });
+        } catch (err: any) {
+          // Was `duplicates++` for EVERY failure, so a validation error, a
+          // bad segment or a server outage were all reported to the admin as
+          // "duplicate".
+          failed.push(
+            `${rowUser.email} — ${err.response?.data?.error || 'сервертэй холбогдож чадсангүй'}`,
+          );
         }
-      } else {
-        alert(`Файлд тохирох мөр олдсонгүй. Формат: Код | Нэр | И-мэйл | Эрх | Сегмент | Цагийн төрөл`);
       }
+
+      if (createdUsers.length > 0) {
+        await fetchUsers();
+        await fetchLogs();
+        logAction('Bulk User Creation', `Uploaded ${createdUsers.length} users via Excel.`);
+      }
+
+      const summary = [`Амжилттай нэмэгдсэн: ${createdUsers.length}`];
+      if (failed.length > 0) {
+        summary.push(`Нэмэгдээгүй: ${failed.length}`, ...failed.slice(0, 15).map(f => `  • ${f}`));
+        if (failed.length > 15) summary.push(`  … бас ${failed.length - 15}`);
+      }
+      if (invalid.length > 0) {
+        summary.push(`Алгасагдсан мөр: ${invalid.length}`, ...invalid.slice(0, 15).map(f => `  • ${f}`));
+        if (invalid.length > 15) summary.push(`  … бас ${invalid.length - 15}`);
+      }
+      alert(summary.join('\n'));
+      if (createdUsers.length > 0) triggerSuccess();
+    } catch (error: any) {
+      console.error('Bulk upload failed:', error);
+      alert('Excel файл уншихад алдаа гарлаа. Загварын дагуу файл оруулна уу.');
+    } finally {
       setIsUploadingBulk(false);
-    };
-    reader.readAsBinaryString(file);
+    }
   };
 
   const handleAddMaterial = async (e: React.FormEvent) => {
