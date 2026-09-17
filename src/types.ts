@@ -197,6 +197,12 @@ export interface TrainingMaterial {
   thumbnailUrl?: string;
   deadline?: string;
   fileName?: string;
+  /**
+   * The payload lives in `training_attachments` and is fetched on demand via
+   * GET /broadcasts/trainings/:id/attachment, so `url` is empty until the
+   * material is opened. Keeps the polled list small.
+   */
+  hasStoredAttachment?: boolean;
   seenBy: {
     userId: string;
     userName: string;

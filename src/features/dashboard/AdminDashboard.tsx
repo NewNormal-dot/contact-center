@@ -1130,6 +1130,31 @@ export default function AdminDashboard() {
       : [],
   } as Notification);
 
+  const mapTrainingForUi = (raw: any): TrainingMaterial => ({
+    id: String(raw.id),
+    title: raw.title || "",
+    description: raw.description || "",
+    url: raw.attachmentUrl || raw.attachment_url || "",
+    type: raw.type || (raw.attachmentName || raw.attachment_name ? "File" : "Link"),
+    date: raw.createdAt || raw.created_at || new Date().toISOString(),
+    deadline: raw.deadline || "",
+    fileName: raw.attachmentName || raw.attachment_name || "",
+    hasStoredAttachment: Boolean(raw.hasStoredAttachment),
+    seenBy: [],
+  } as TrainingMaterial);
+
+  const fetchTrainingsFromDb = async () => {
+    try {
+      const response = await apiClient.get("/broadcasts/trainings");
+      const data = (response.data || []).map(mapTrainingForUi);
+      setTrainingMaterials(data);
+      return data;
+    } catch (error) {
+      console.error("Error fetching trainings:", error);
+      return [];
+    }
+  };
+
   const fetchNotificationsFromDb = async () => {
     try {
       const response = await apiClient.get('/broadcasts/notifications');
@@ -1173,7 +1198,7 @@ export default function AdminDashboard() {
     }).catch(() => undefined);
 
     fetchNotificationsFromDb().catch(() => setNotifications(getLocalData("notifications", [])));
-    setTrainingMaterials(getLocalData("trainingMaterials", []));
+    fetchTrainingsFromDb().catch(() => undefined);
     setVacationRequests(getLocalData("vacationRequests", []));
     setMonthlyQuotas(
       getLocalData("monthlyQuotas", {
@@ -1261,7 +1286,6 @@ export default function AdminDashboard() {
       // and supervisor name to flash correctly on load and then revert
       // to blank shortly after.
       const n = getLocalData("notifications", []);
-      const tm = getLocalData("trainingMaterials", []);
       const vr = getLocalData("vacationRequests", []);
       const mq = getLocalData("monthlyQuotas", {
         0: 5,
@@ -1289,7 +1313,6 @@ export default function AdminDashboard() {
 
       const currentHash = JSON.stringify({
         n,
-        tm,
         vr,
         mq,
         hl,
@@ -1297,7 +1320,6 @@ export default function AdminDashboard() {
       if (currentHash !== lastDataRef.current) {
         lastDataRef.current = currentHash;
         fetchNotificationsFromDb().catch(() => setNotifications(n));
-        setTrainingMaterials(tm);
         setVacationRequests(vr);
         setMonthlyQuotas(mq);
         fetchLeaveRequests().catch(() => setHourlyLeaveRequests(hl));
@@ -1324,10 +1346,10 @@ export default function AdminDashboard() {
     // localStorage happened to change. A new leave-request alert therefore
     // reached an admin only after a manual page reload - "the page doesn't
     // update / it only works after refresh".
-    const stopNotificationPoll = startPolling(
-      () => fetchNotificationsFromDb().catch(() => undefined),
-      POLLING_INTERVALS.NOTIFICATIONS,
-    );
+    const stopNotificationPoll = startPolling(() => {
+      fetchNotificationsFromDb().catch(() => undefined);
+      fetchTrainingsFromDb().catch(() => undefined);
+    }, POLLING_INTERVALS.NOTIFICATIONS);
 
     // Employee roster, segments and holidays were likewise fetched once at
     // mount, so another admin's changes never appeared.
@@ -1818,62 +1840,62 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleAddMaterial = (e: React.FormEvent) => {
+  const handleAddMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMaterial.title) {
-      const processSubmission = (url: string = "", type: string = "Link") => {
+    if (!newMaterial.title) return;
+
+    // This used to write ONLY to localStorage - nothing ever called
+    // POST /broadcasts/trainings, so CSRs read an always-empty list and the
+    // whole Training feature was non-functional for every role. Attachments
+    // over 255 characters (i.e. any real file) are stored server-side in
+    // training_attachments and fetched on demand.
+    const submit = async (url: string, type: string) => {
+      const payload = {
+        title: newMaterial.title,
+        description: newMaterial.description || "",
+        attachmentUrl: url || newMaterial.url || "",
+        attachmentName: newMaterial.fileName || selectedFile?.name || "",
+        deadline: newMaterial.deadline || "",
+      };
+
+      try {
         if (editingMaterial) {
-          const updatedMaterials = updateLocalItem(
-            "trainingMaterials",
-            editingMaterial.id,
-            {
-              ...newMaterial,
-              id: editingMaterial.id,
-              url: url || newMaterial.url || "",
-              type: type || newMaterial.type || "Link",
-            },
+          await apiClient.put(
+            `/broadcasts/trainings/${editingMaterial.id}`,
+            payload,
           );
-          setTrainingMaterials(updatedMaterials);
           logAction(
             "Material Updated",
             `Updated training material: ${newMaterial.title}`,
           );
         } else {
-          const material: TrainingMaterial = {
-            id: Math.random().toString(36).substr(2, 9),
-            title: newMaterial.title!,
-            description: newMaterial.description || "",
-            url: url,
-            type: type,
-            date: new Date().toISOString().split("T")[0],
-            deadline: newMaterial.deadline,
-            seenBy: [],
-          };
-          const updatedMaterials = addLocalItem("trainingMaterials", material);
-          setTrainingMaterials(updatedMaterials);
-          setShowSeenDetails(material);
+          await apiClient.post("/broadcasts/trainings", payload);
           logAction(
             "Material Added",
-            `Added training material: ${material.title}`,
+            `Added training material: ${newMaterial.title}`,
           );
 
-          const notification: Notification = {
-            id: Math.random().toString(36).substr(2, 9),
-            title: "Шинэ сургалтын материал",
-            content: `"${material.title}" нэртэй шинэ сургалтын материал нэмэгдлээ. Дуусах хугацаа: ${material.deadline}`,
-            createdAt: new Date().toISOString(),
-            deadline: material.deadline || "",
-            authorId: "admin",
-            authorName: "Admin",
-            type: "training",
-            seenBy: [],
-          };
-          const updatedNotifications = addLocalItem(
-            "notifications",
-            notification,
-          );
-          setNotifications(updatedNotifications);
+          // Announce it through the real notification pipeline so CSRs
+          // actually hear about it.
+          await apiClient
+            .post("/broadcasts/notifications", {
+              title: "Шинэ сургалтын материал",
+              content: `"${newMaterial.title}" нэртэй шинэ сургалтын материал нэмэгдлээ.${newMaterial.deadline ? ` Дуусах хугацаа: ${newMaterial.deadline}` : ""}`,
+              type: "training",
+              deadline: newMaterial.deadline || "",
+            })
+            .catch((err: any) =>
+              console.error("Training announcement failed:", err),
+            );
+          await fetchNotificationsFromDb().catch(() => undefined);
         }
+
+        const list = await fetchTrainingsFromDb();
+        const saved = list.find(
+          (item: TrainingMaterial) => item.title === newMaterial.title,
+        );
+        if (saved && !editingMaterial) setShowSeenDetails(saved);
+
         setIsAddingMaterial(false);
         setEditingMaterial(null);
         setSelectedFile(null);
@@ -1883,30 +1905,46 @@ export default function AdminDashboard() {
             .toISOString()
             .slice(0, 16),
         });
-      };
-
-      if (selectedFile) {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64 = reader.result as string;
-          let fileType = "File";
-          if (selectedFile.type.startsWith("image/")) fileType = "Image";
-          else if (selectedFile.type.startsWith("video/")) fileType = "Video";
-          else if (selectedFile.type === "application/pdf") fileType = "PDF";
-          processSubmission(base64, fileType);
-        };
-        reader.readAsDataURL(selectedFile);
-      } else {
-        processSubmission(newMaterial.url || "", newMaterial.type || "Article");
+      } catch (error: any) {
+        console.error("Error saving training material:", error);
+        alert(
+          error.response?.data?.error ||
+            "Сургалтын материал хадгалахад алдаа гарлаа.",
+        );
       }
+    };
+
+    if (selectedFile) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        let fileType = "File";
+        if (selectedFile.type.startsWith("image/")) fileType = "Image";
+        else if (selectedFile.type.startsWith("video/")) fileType = "Video";
+        else if (selectedFile.type === "application/pdf") fileType = "PDF";
+        void submit(base64, fileType);
+      };
+      reader.onerror = () => {
+        alert("Файл уншихад алдаа гарлаа.");
+      };
+      reader.readAsDataURL(selectedFile);
+    } else {
+      await submit(newMaterial.url || "", newMaterial.type || "Article");
     }
   };
 
-  const handleDeleteMaterial = (id: string) => {
-    const updatedMaterials = deleteLocalItem("trainingMaterials", id);
-    setTrainingMaterials(updatedMaterials);
-    setShowSeenDetails((prev) => (prev?.id === id ? null : prev));
-    logAction("Material Deleted", `Deleted material with ID: ${id}`);
+  const handleDeleteMaterial = async (id: string) => {
+    try {
+      await apiClient.delete(`/broadcasts/trainings/${id}`);
+      setTrainingMaterials((prev) => prev.filter((m) => m.id !== id));
+      setShowSeenDetails((prev) => (prev?.id === id ? null : prev));
+      logAction("Material Deleted", `Deleted material with ID: ${id}`);
+    } catch (error: any) {
+      console.error("Error deleting training material:", error);
+      alert(
+        error.response?.data?.error || "Материал устгахад алдаа гарлаа.",
+      );
+    }
   };
 
   const handleSendNotification = async (e: React.FormEvent) => {
@@ -1951,24 +1989,31 @@ export default function AdminDashboard() {
     }
   };
 
-  const markMaterialAsRead = (id: string) => {
+  const markMaterialAsRead = async (id: string) => {
+    if (!profile?.id) return;
     const mat = trainingMaterials.find((m) => m.id === id);
-    if (mat && !mat.seenBy?.some((s) => s.userId === "admin")) {
+    if (!mat || mat.seenBy?.some((s) => s.userId === profile.id)) return;
+
+    try {
+      await apiClient.post("/broadcasts/trainings/complete", {
+        training_id: id,
+      });
       const seenBy = [
         ...(mat.seenBy || []),
         {
-          userId: "admin",
-          userName: "Admin",
+          userId: profile.id,
+          userName: profile.name || "Admin",
           seenAt: new Date().toISOString(),
         },
       ];
-      const updatedMaterials = updateLocalItem("trainingMaterials", id, {
-        seenBy,
-      });
-      setTrainingMaterials(updatedMaterials);
+      setTrainingMaterials((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, seenBy } : m)),
+      );
       setShowSeenDetails((prev) =>
         prev?.id === id ? ({ ...prev, seenBy } as any) : prev,
       );
+    } catch (error) {
+      console.error("Error marking material as read:", error);
     }
   };
 

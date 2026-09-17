@@ -6,6 +6,7 @@ import { toSqlDateTime } from '../utils/sqlDate';
 import { logAction } from './audit';
 import { captureError } from '../utils/errorLog';
 import { createThrottledTask } from '../utils/throttledTask';
+import { tableExists } from '../database/schemaUtils';
 
 const router = express.Router();
 
@@ -24,6 +25,21 @@ function mapNotification(row: any) {
   };
 }
 
+// trainings.attachment_url is nvarchar(255); anything bigger (a base64 file
+// from the upload control) lives in training_attachments and is fetched on
+// demand. See migrations/20260918000000_create_training_attachments.
+const INLINE_ATTACHMENT_MAX = 255;
+const STORED_ATTACHMENT_MAX_CHARS = 5 * 1024 * 1024; // ~5MB of base64
+
+async function hasAttachmentTable() {
+  return tableExists(db, 'training_attachments');
+}
+
+function textField(value: unknown, max: number) {
+  const text = String(value ?? '').trim();
+  return text.length > max ? null : text;
+}
+
 function mapTraining(row: any) {
   return {
     ...row,
@@ -32,6 +48,9 @@ function mapTraining(row: any) {
     authorId: row.author_id,
     createdAt: row.created_at,
     completedAt: row.completed_at,
+    // True when the payload lives in training_attachments and has to be
+    // fetched through GET /trainings/:id/attachment.
+    hasStoredAttachment: Boolean(row.has_stored_attachment),
   };
 }
 
@@ -249,7 +268,23 @@ router.get('/trainings', authenticate, async (req: any, res) => {
       .leftJoin('users', 'trainings.author_id', '=', 'users.id')
       .select('trainings.*', 'training_completions.completed_at', 'users.name as author_name')
       .orderBy('trainings.created_at', 'desc');
-    res.json(trainings.map(mapTraining));
+
+    // Flag which materials carry a stored payload WITHOUT sending it - every
+    // dashboard polls this list, and a base64 file per row would make it
+    // enormous. The body is fetched from /trainings/:id/attachment when a
+    // material is actually opened.
+    let storedIds = new Set<string>();
+    if (trainings.length > 0 && (await hasAttachmentTable())) {
+      const rows = await db('training_attachments')
+        .whereIn('training_id', trainings.map((t: any) => t.id))
+        .select('training_id');
+      storedIds = new Set(rows.map((r: any) => String(r.training_id)));
+    }
+
+    res.json(trainings.map((row: any) => mapTraining({
+      ...row,
+      has_stored_attachment: storedIds.has(String(row.id)),
+    })));
   } catch (err) {
     console.error('Get trainings error:', err);
     captureError('broadcasts: Get trainings error:', err);
@@ -257,30 +292,149 @@ router.get('/trainings', authenticate, async (req: any, res) => {
   }
 });
 
+async function saveTrainingAttachment(trainingId: string, rawUrl: string, name: string | null) {
+  if (!rawUrl || rawUrl.length <= INLINE_ATTACHMENT_MAX) return { inline: rawUrl || null };
+
+  if (rawUrl.length > STORED_ATTACHMENT_MAX_CHARS) {
+    return { error: 'Хавсралт хэт том байна (дээд тал нь ~3.5MB файл).' };
+  }
+  if (!(await hasAttachmentTable())) {
+    return {
+      error:
+        'Файл хавсаргах боломж идэвхжээгүй байна (training_attachments migration хийгдээгүй). ' +
+        'Одоохондоо холбоос (URL) ашиглана уу.',
+    };
+  }
+
+  const contentType = rawUrl.startsWith('data:')
+    ? rawUrl.slice(5, Math.max(5, rawUrl.indexOf(';'))) || null
+    : null;
+
+  // NOT onConflict(): knex does not implement it for the mssql dialect, so
+  // it would throw on Azure SQL while working fine on the sqlite used in
+  // local development. Delete-then-insert is dialect-neutral, and this is a
+  // single-admin write path where the race is not meaningful.
+  await db('training_attachments').where({ training_id: trainingId }).delete();
+  await db('training_attachments').insert({
+    training_id: trainingId,
+    data: rawUrl,
+    name,
+    content_type: contentType,
+  });
+
+  return { inline: null, stored: true };
+}
+
 router.post('/trainings', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
   const { title, description, attachmentUrl, attachment_url, attachmentName, attachment_name, deadline } = req.body;
 
-  if (!title || !description) {
+  const finalTitle = textField(title, 200);
+  const finalDescription = String(description ?? '').trim();
+  const finalAttachmentName = textField(attachment_name ?? attachmentName, 200);
+
+  if (!finalTitle || !finalDescription) {
     return res.status(400).json({ error: 'Гарчиг болон тайлбар шаардлагатай' });
   }
+  if (finalTitle === null) return res.status(400).json({ error: 'Гарчиг хэт урт байна (200 тэмдэгт)' });
+  if (finalAttachmentName === null) return res.status(400).json({ error: 'Файлын нэр хэт урт байна' });
+
+  const rawUrl = String(attachment_url ?? attachmentUrl ?? '').trim();
 
   try {
     const id = uuidv4();
     await db('trainings').insert({
       id,
-      title,
-      description,
-      attachment_url: attachment_url || attachmentUrl || null,
-      attachment_name: attachment_name || attachmentName || null,
+      title: finalTitle,
+      description: finalDescription,
+      attachment_url: null,
+      attachment_name: finalAttachmentName || null,
       deadline: toSqlDateTime(deadline),
       author_id: req.user.id,
     });
-    await logAction(req.user.id, 'CREATE_TRAINING', 'trainings', id, title);
+
+    const attachment = await saveTrainingAttachment(id, rawUrl, finalAttachmentName || null);
+    if ('error' in attachment && attachment.error) {
+      await db('trainings').where({ id }).delete();
+      return res.status(400).json({ error: attachment.error });
+    }
+    if (attachment.inline) {
+      await db('trainings').where({ id }).update({ attachment_url: attachment.inline });
+    }
+
+    await logAction(req.user.id, 'CREATE_TRAINING', 'trainings', id, finalTitle);
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create training error:', err);
     captureError('broadcasts: Create training error:', err);
     res.status(500).json({ error: 'Сургалт үүсгэхэд алдаа гарлаа' });
+  }
+});
+
+router.put('/trainings/:id', authenticate, authorize(['admin', 'superadmin']), async (req: any, res) => {
+  const { id } = req.params;
+  const { title, description, attachmentUrl, attachment_url, attachmentName, attachment_name, deadline } = req.body;
+
+  const finalTitle = textField(title, 200);
+  const finalAttachmentName = textField(attachment_name ?? attachmentName, 200);
+  if (finalTitle === null) return res.status(400).json({ error: 'Гарчиг хэт урт байна (200 тэмдэгт)' });
+  if (finalAttachmentName === null) return res.status(400).json({ error: 'Файлын нэр хэт урт байна' });
+
+  try {
+    const existing = await db('trainings').where({ id }).first();
+    if (!existing) return res.status(404).json({ error: 'Сургалт олдсонгүй' });
+
+    const updates: any = { updated_at: db.fn.now() };
+    if (finalTitle) updates.title = finalTitle;
+    if (description !== undefined) updates.description = String(description ?? '').trim();
+    if (deadline !== undefined) updates.deadline = toSqlDateTime(deadline);
+    if (finalAttachmentName !== undefined) updates.attachment_name = finalAttachmentName || null;
+
+    const rawUrl = attachment_url ?? attachmentUrl;
+    if (rawUrl !== undefined) {
+      const attachment = await saveTrainingAttachment(id, String(rawUrl ?? '').trim(), finalAttachmentName || null);
+      if ('error' in attachment && attachment.error) {
+        return res.status(400).json({ error: attachment.error });
+      }
+      updates.attachment_url = attachment.inline || null;
+      if (!attachment.stored && (await hasAttachmentTable())) {
+        await db('training_attachments').where({ training_id: id }).delete();
+      }
+    }
+
+    await db('trainings').where({ id }).update(updates);
+    await logAction(req.user.id, 'UPDATE_TRAINING', 'trainings', id, updates.title || existing.title);
+    res.json({ id });
+  } catch (err) {
+    console.error('Update training error:', err);
+    captureError('broadcasts: Update training error:', err);
+    res.status(500).json({ error: 'Сургалт шинэчлэхэд алдаа гарлаа' });
+  }
+});
+
+// Fetched only when a material is actually opened, so the polled list stays
+// small even when a material carries a multi-megabyte file.
+router.get('/trainings/:id/attachment', authenticate, async (req: any, res) => {
+  const { id } = req.params;
+  try {
+    const training = await db('trainings').where({ id }).first();
+    if (!training) return res.status(404).json({ error: 'Сургалт олдсонгүй' });
+
+    if (training.attachment_url) {
+      return res.json({ attachmentUrl: training.attachment_url, attachmentName: training.attachment_name });
+    }
+    if (!(await hasAttachmentTable())) {
+      return res.json({ attachmentUrl: '', attachmentName: training.attachment_name });
+    }
+
+    const stored = await db('training_attachments').where({ training_id: id }).first();
+    res.json({
+      attachmentUrl: stored?.data || '',
+      attachmentName: stored?.name || training.attachment_name || '',
+    });
+  } catch (err) {
+    console.error('Get training attachment error:', err);
+    captureError('broadcasts: Get training attachment error:', err);
+    res.status(500).json({ error: 'Хавсралт татахад алдаа гарлаа' });
   }
 });
 

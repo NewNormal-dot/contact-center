@@ -183,6 +183,31 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const mapTrainingForUi = (raw: any): TrainingMaterial => ({
+    id: String(raw.id),
+    title: raw.title || '',
+    description: raw.description || '',
+    url: raw.attachmentUrl || raw.attachment_url || '',
+    type: raw.type || (raw.attachmentName || raw.attachment_name ? 'File' : 'Link'),
+    date: raw.createdAt || raw.created_at || new Date().toISOString(),
+    deadline: raw.deadline || '',
+    fileName: raw.attachmentName || raw.attachment_name || '',
+    hasStoredAttachment: Boolean(raw.hasStoredAttachment),
+    seenBy: [],
+  } as TrainingMaterial);
+
+  const fetchTrainingMaterials = async (): Promise<TrainingMaterial[]> => {
+    try {
+      const response = await apiClient.get('/broadcasts/trainings');
+      const data = (response.data || []).map(mapTrainingForUi);
+      setTrainingMaterials(data);
+      return data;
+    } catch (error) {
+      console.error('Error fetching training materials:', error);
+      return [];
+    }
+  };
+
   const fetchNotifications = async () => {
     try {
       const response = await apiClient.get('/broadcasts/notifications');
@@ -233,7 +258,7 @@ export default function SuperAdminDashboard() {
       setLocalData('segments', defaultSegments);
     }
     setSegments(initialSegments);
-    setTrainingMaterials(getLocalData('trainingMaterials', []));
+    fetchTrainingMaterials();
 
     fetchLogs();
     fetchNotifications();
@@ -246,7 +271,7 @@ export default function SuperAdminDashboard() {
       fetchUsers();
       fetchLogs();
       fetchNotifications();
-      setTrainingMaterials(getLocalData('trainingMaterials', []));
+      fetchTrainingMaterials();
     }, POLLING_INTERVALS.SUPERADMIN);
 
     const handleStorageUpdate = (event: StorageEvent) => {
@@ -256,9 +281,7 @@ export default function SuperAdminDashboard() {
       if (event.key === 'notifications') {
         fetchNotifications();
       }
-      if (event.key === 'trainingMaterials') {
-        setTrainingMaterials(getLocalData('trainingMaterials', []));
-      }
+
     };
 
     window.addEventListener('storage', handleStorageUpdate);
@@ -295,34 +318,25 @@ export default function SuperAdminDashboard() {
   const [isUploadingBulk, setIsUploadingBulk] = useState(false);
 
   const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && !n.seenBy?.some(s => String(s.userId) === String(profile?.id))).length;
-  const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === 'superadmin')).length;
+  const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => String(s.userId) === String(profile?.id))).length;
 
-  const markMaterialAsRead = (materialId: string) => {
+  const markMaterialAsRead = async (materialId: string) => {
+    if (!profile?.id) return;
     const material = trainingMaterials.find(m => m.id === materialId);
-    if (material) {
-      const alreadySeen = material.seenBy?.some(s => s.userId === 'superadmin');
-      if (!alreadySeen) {
-        const newSeenBy = [...(material.seenBy || []), {
-          userId: 'superadmin',
-          userName: 'Super Admin',
-          seenAt: new Date().toISOString()
-        }];
+    if (!material || material.seenBy?.some(s => String(s.userId) === String(profile.id))) return;
 
-        updateLocalItem('trainingMaterials', materialId, { seenBy: newSeenBy });
-
-        setTrainingMaterials(prev =>
-          prev.map(m =>
-            m.id === materialId
-              ? { ...m, seenBy: newSeenBy }
-              : m
-          )
-        );
-        setShowSeenDetails(prev => (
-          prev?.id === materialId ? { ...prev, seenBy: newSeenBy } as any : prev
-        ));
-
-        logAction('Material Viewed', `Viewed training material: ${material.title}`);
-      }
+    try {
+      await apiClient.post('/broadcasts/trainings/complete', { training_id: materialId });
+      const newSeenBy = [...(material.seenBy || []), {
+        userId: profile.id,
+        userName: profile.name || 'Super Admin',
+        seenAt: new Date().toISOString()
+      }];
+      setTrainingMaterials(prev => prev.map(m => m.id === materialId ? { ...m, seenBy: newSeenBy } : m));
+      setShowSeenDetails(prev => (prev?.id === materialId ? { ...prev, seenBy: newSeenBy } as any : prev));
+      logAction('Material Viewed', `Viewed training material: ${material.title}`);
+    } catch (error) {
+      console.error('Error marking material as read:', error);
     }
   };
 
@@ -729,61 +743,48 @@ export default function SuperAdminDashboard() {
 
   const handleAddMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMaterial.title && newMaterial.type) {
+    if (!newMaterial.title || !newMaterial.type) return;
+
+    // Was localStorage-only, exactly like the admin dashboard: nothing ever
+    // called POST /broadcasts/trainings, so no CSR could see a material.
+    const payload = {
+      title: newMaterial.title,
+      description: newMaterial.description || '',
+      attachmentUrl: newMaterial.url || '',
+      attachmentName: newMaterial.fileName || '',
+      deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
+    };
+
+    try {
       if (editingMaterial) {
-        // Update existing
-        const updates = {
-          title: newMaterial.title!,
-          description: newMaterial.description || '',
-          type: newMaterial.type as any,
-          url: newMaterial.url || editingMaterial.url,
-          thumbnailUrl: newMaterial.thumbnailUrl || editingMaterial.thumbnailUrl,
-          deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
-          seenBy: []
-        };
-        const updatedMaterials = updateLocalItem('trainingMaterials', editingMaterial.id, updates);
-        setTrainingMaterials(updatedMaterials);
+        await apiClient.put(`/broadcasts/trainings/${editingMaterial.id}`, payload);
         logAction('Material Updated', `Updated training material: ${newMaterial.title}`);
         setEditingMaterial(null);
       } else {
-        // Add new
-        const material: TrainingMaterial = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: newMaterial.title!,
-          description: newMaterial.description || '',
-          type: newMaterial.type as any,
-          url: newMaterial.url || '#',
-          date: new Date().toISOString().split('T')[0],
-          thumbnailUrl: newMaterial.thumbnailUrl,
-          deadline: newMaterial.deadline || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16),
-          seenBy: []
-        };
-        const updatedMaterials = addLocalItem('trainingMaterials', material);
-        setTrainingMaterials(updatedMaterials);
-        setShowSeenDetails(material);
-        
-        // Create a notification for the new training material
-        const notification: Notification = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: 'Шинэ сургалт: ' + material.title,
-          content: `Шинэ сургалтын материал нэмэгдлээ. ${material.description}`,
-          deadline: material.deadline,
-          createdAt: new Date().toISOString(),
-          authorId: 'superadmin',
-          authorName: 'Super Admin',
+        await apiClient.post('/broadcasts/trainings', payload);
+        await apiClient.post('/broadcasts/notifications', {
+          title: 'Шинэ сургалт: ' + newMaterial.title,
+          content: `Шинэ сургалтын материал нэмэгдлээ. ${newMaterial.description || ''}`.trim(),
           type: 'training',
-          seenBy: []
-        };
-        addLocalItem('notifications', notification);
-        
-        logAction('Material Added', `Added training material: ${material.title}`);
+          deadline: payload.deadline,
+        }).catch((err: any) => console.error('Training announcement failed:', err));
+        logAction('Material Added', `Added training material: ${newMaterial.title}`);
       }
+
+      const list = await fetchTrainingMaterials();
+      const saved = list.find((item: TrainingMaterial) => item.title === newMaterial.title);
+      if (saved && !editingMaterial) setShowSeenDetails(saved);
+      await fetchNotifications();
+
       setIsAddingMaterial(false);
-      setNewMaterial({ 
+      setNewMaterial({
         type: 'PDF',
         deadline: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)
       });
       triggerSuccess();
+    } catch (error: any) {
+      console.error('Error saving training material:', error);
+      alert(error.response?.data?.error || 'Сургалтын материал хадгалахад алдаа гарлаа.');
     }
   };
 
