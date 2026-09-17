@@ -29,24 +29,56 @@ function parseDate(value: unknown) {
 }
 
 function monthKeyFromDate(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  const local = toMongoliaParts(date);
+  return `${local.getUTCFullYear()}-${String(local.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// Mongolia is UTC+8 with no DST. Azure App Service runs in UTC, so reading
+// the calendar fields off a Date with getFullYear()/getHours() gave the UTC
+// wall clock, not the Mongolian one - an 09:00 reading was stored as 01:00.
+// Everything here is expressed in Mongolian local time, consistently, in
+// both directions.
+const ULAANBAATAR_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+function toMongoliaParts(date: Date) {
+  return new Date(date.getTime() + ULAANBAATAR_UTC_OFFSET_MS);
 }
 
 function toDbDateTime(date: Date) {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mi = String(date.getMinutes()).padStart(2, '0');
-  const ss = String(date.getSeconds()).padStart(2, '0');
+  const local = toMongoliaParts(date);
+  const yyyy = local.getUTCFullYear();
+  const mm = String(local.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(local.getUTCDate()).padStart(2, '0');
+  const hh = String(local.getUTCHours()).padStart(2, '0');
+  const mi = String(local.getUTCMinutes()).padStart(2, '0');
+  const ss = String(local.getUTCSeconds()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
 
+// Rows are stored as a NAIVE Mongolian wall clock ("2026-09-01 09:00:00").
+// Returning them as an ISO instant requires subtracting the offset back off,
+// otherwise the client re-reads 09:00 Mongolia as 09:00 UTC.
 function toIsoDateTime(value: unknown) {
   if (!value) return '';
-  const raw = String(value);
-  const parsed = new Date(raw.includes('T') ? raw : raw.replace(' ', 'T'));
-  return Number.isNaN(parsed.getTime()) ? raw : parsed.toISOString();
+
+  // The mssql driver (useUTC: true) hands back a Date whose UTC fields ARE
+  // the stored wall clock; sqlite hands back the raw string.
+  const naive = value instanceof Date
+    ? `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}` +
+      `T${String(value.getUTCHours()).padStart(2, '0')}:${String(value.getUTCMinutes()).padStart(2, '0')}:${String(value.getUTCSeconds()).padStart(2, '0')}`
+    : String(value).trim().replace(' ', 'T');
+
+  const match = naive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) {
+    const parsed = new Date(naive);
+    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString();
+  }
+
+  const asIfUtc = Date.UTC(
+    Number(match[1]), Number(match[2]) - 1, Number(match[3]),
+    Number(match[4]), Number(match[5]), Number(match[6] || 0),
+  );
+  return new Date(asIfUtc - ULAANBAATAR_UTC_OFFSET_MS).toISOString();
 }
 
 async function ensureForecastTable() {
