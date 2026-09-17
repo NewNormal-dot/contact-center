@@ -181,9 +181,15 @@ async function startServer() {
         // loader were moved out of index.html into public/*.js precisely so
         // this can stay free of 'unsafe-inline'.
         scriptSrc: ["'self'", 'https://chat.agents.mn'],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        // chat.agents.mn belongs here too. It was allowed for scripts,
+        // images, fonts, connections and frames but NOT stylesheets, so the
+        // widget's own https://chat.agents.mn/css/webchat-styles.css was
+        // blocked in production and it failed to render ("Failed to load
+        // CSS from ... / Error: CSS loading failed").
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://chat.agents.mn'],
         imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://api.dicebear.com', 'https://chat.agents.mn'],
-        mediaSrc: ["'self'", 'data:', 'blob:'],
+        // Same origin, same reason - notification sounds would be blocked.
+        mediaSrc: ["'self'", 'data:', 'blob:', 'https://chat.agents.mn'],
         fontSrc: ["'self'", 'data:', 'https://chat.agents.mn'],
         connectSrc: ["'self'", 'https://chat.agents.mn', 'wss://chat.agents.mn'],
         frameSrc: ["'self'", 'https://chat.agents.mn'],
