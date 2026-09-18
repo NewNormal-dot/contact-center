@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LazyMedia } from '../../components/LazyMedia';
 import Sidebar from '../../components/Sidebar';
@@ -478,7 +478,7 @@ function formatDateHeader(date: Date) {
 
 const DayRow = React.memo(({ 
   date, isToday, isTomorrow, isYesterday, isPast, 
-  dayData, csrProfile, isSubmitted, 
+  dayData, csrProfile,
   onBookShift, onTradeShift, nowTick,
   onCancelShift,
 }: any) => {
@@ -651,7 +651,7 @@ const DayRow = React.memo(({
                           <p className="text-xs font-bold text-white">{formatShiftTimeForDisplay(myBookedShift.time)}</p>
                         </div>
                       </div>
-                      {!isSubmitted && canEditBooking && (
+                      {canEditBooking && (
                         <button 
                           onClick={() => onBookShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
@@ -660,7 +660,7 @@ const DayRow = React.memo(({
                           Edit
                         </button>
                       )}
-                      {!isSubmitted && !isPast && (
+                      {!isPast && (
                         <button
                           onClick={() => onCancelShift(dateKey, myBookedShift.id)}
                           className="px-4 py-2.5 rounded-xl bg-red-600/15 border border-red-500/30 text-red-300 font-bold hover:bg-red-600 hover:text-white transition-all flex items-center gap-2"
@@ -669,7 +669,7 @@ const DayRow = React.memo(({
                           Цуцлах
                         </button>
                       )}
-                      {!isSubmitted && !isBookingOpen && bookingAccess.state === 'expired' && (
+                      {!isBookingOpen && bookingAccess.state === 'expired' && (
                         <button 
                           onClick={() => onTradeShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
@@ -680,7 +680,7 @@ const DayRow = React.memo(({
                       )}
                     </>
                   ) : (
-                    !isSubmitted && (
+                    (
                       isBookingOpen ? (
                         <button
                           onClick={() => onBookShift(dateKey)}
@@ -704,7 +704,7 @@ const DayRow = React.memo(({
               )}
             </div>
           ) : (
-            !isPast && !isSubmitted && (
+            !isPast && (
               <button 
                 disabled
                 className="px-6 py-2.5 rounded-xl bg-gray-800/50 text-gray-600 font-bold border border-gray-800 flex items-center gap-2 cursor-not-allowed opacity-50"
@@ -742,7 +742,6 @@ export default function CsrDashboard() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [tradeRequests, setTradeRequests] = useState<TradeRequest[]>([]);
   const [hourlyLeaveRequests, setHourlyLeaveRequests] = useState<HourlyLeaveRequest[]>([]);
-  const lastDataRef = useRef<string>('');
   const [vacationRequests, setVacationRequests] = useState<VacationRequest[]>([]);
   const [vacationQuotas, setVacationQuotas] = useState<VacationQuota[]>([]);
 
@@ -752,7 +751,6 @@ export default function CsrDashboard() {
   }, []);
   const [trainingMaterials, setTrainingMaterials] = useState<TrainingMaterial[]>([]);
   const [isStatsExpanded, setIsStatsExpanded] = useState(false);
-  const [submittedMonths, setSubmittedMonths] = useState<string[]>([]);
   const [vacationYear, setVacationYear] = useState(new Date().getFullYear());
   const [isVacationFilterOpen, setIsVacationFilterOpen] = useState(false);
   const [holidays, setHolidays] = useState<{date: string, name: string}[]>([]);
@@ -1275,28 +1273,15 @@ export default function CsrDashboard() {
     // never stored in state, never rendered, and likewise never written. It
     // has been removed rather than carried forward.
     //
-    // 'csrSubmittedMonths' remains local-only. Unlike the other two it is
-    // genuinely consumed (it locks a month against further booking), but
-    // nothing anywhere writes it either, so the lock never engages. Giving it
-    // a table would mean designing who may submit a month and whether it can
-    // be reopened - a product decision, not a persistence fix, so it is left
-    // visible here rather than quietly invented.
-    const loadData = () => {
-      const allSubmitted = getLocalData('csrSubmittedMonths', {});
-
-      // Create a hash of the data to prevent unnecessary re-renders
-      const dataHash = JSON.stringify({
-        allSubmitted,
-        profileId: csrProfile.id
-      });
-
-      if (dataHash === lastDataRef.current) return;
-      lastDataRef.current = dataHash;
-
-      setSubmittedMonths(allSubmitted[csrProfile.id] || []);
-    };
-
-    loadData();
+    // 'csrSubmittedMonths' is gone too. It was read here and fed a month
+    // "lock" that hid the book/edit/cancel/trade buttons - but nothing
+    // anywhere ever wrote it, so the lock never engaged once. It was also
+    // redundant: work_slots.booking_deadline already closes booking,
+    // editing and cancelling on its own, leaving trade open on purpose
+    // ("Цуцлах хугацаа дууссан байна. Зөвхөн арилжаа хийх боломжтой."), and
+    // the only thing the month lock added on top was blocking trade as well.
+    // Removed rather than finished: eight live checks against a flag that is
+    // always false is a standing question for whoever reads this next.
     fetchNotifications();
     fetchVacationQuotas();
     fetchVacationRequests();
@@ -1311,10 +1296,6 @@ export default function CsrDashboard() {
     // src/config/polling.ts for why those intervals could not survive a
     // booking rush, and src/lib/startPolling.ts for what startPolling adds
     // (pause while hidden, no overlapping runs, staggered start).
-    //
-    // loadData() is deliberately kept separate and fast: it only reads
-    // localStorage, so it costs the server nothing.
-    const stopLocalData = startPolling(loadData, POLLING_INTERVALS.LOCAL_DATA);
     const stopSchedule = startPolling(fetchDbSchedule, POLLING_INTERVALS.SCHEDULE);
     const stopNotifications = startPolling(() => {
       fetchNotifications();
@@ -1327,15 +1308,7 @@ export default function CsrDashboard() {
     const stopVacationQuotas = startPolling(fetchVacationQuotas, POLLING_INTERVALS.SHARED_SETTINGS);
     const stopHourlyLeave = startPolling(fetchHourlyLeaveRequests, POLLING_INTERVALS.REQUESTS);
 
-    const handleStorageUpdate = (event: StorageEvent) => {
-      if (event.key === 'notifications') {
-        loadData();
-      }
-    };
-
-    window.addEventListener('storage', handleStorageUpdate);
     return () => {
-      stopLocalData();
       stopSchedule();
       stopNotifications();
       stopVacation();
@@ -1344,7 +1317,6 @@ export default function CsrDashboard() {
       stopHolidays();
       stopVacationQuotas();
       stopHourlyLeave();
-      window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [csrProfile]);
 
@@ -1618,11 +1590,6 @@ export default function CsrDashboard() {
     const dayData = schedule[dateKey];
     if (!dayData) return;
 
-    if (submittedMonths.includes(currentMonthKey)) {
-      alert('Таны энэ сарын хуваарь баталгаажсан тул өөрчлөх боломжгүй.');
-      return;
-    }
-
     // Find my existing confirmed booking on this date, if any - needed to
     // distinguish "editing my current booking" from "trying to book a
     // second shift the same day" (the latter stays blocked).
@@ -1740,16 +1707,11 @@ export default function CsrDashboard() {
       console.error('Error booking shift:', error);
       alert(error.response?.data?.error || 'Ээлж захиалахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile, nowTick, validateShiftRuleBeforeBooking, fetchDbSchedule]);
+  }, [schedule, csrProfile, nowTick, validateShiftRuleBeforeBooking, fetchDbSchedule]);
 
   const handleCancelShift = React.useCallback(async (dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
-
-    if (submittedMonths.includes(currentMonthKey)) {
-      alert('Таны энэ сарын хуваарь баталгаажсан тул өөрчлөх боломжгүй.');
-      return;
-    }
 
     try {
       await apiClient.post(`/slots/${shiftId}/cancel`, { slotId: shiftId });
@@ -1760,14 +1722,13 @@ export default function CsrDashboard() {
       console.error('Error cancelling shift:', error);
       alert(error.response?.data?.error || 'Ээлж цуцлахад алдаа гарлаа.');
     }
-  }, [schedule, submittedMonths, currentMonthKey, csrProfile, fetchDbSchedule]);
+  }, [schedule, csrProfile, fetchDbSchedule]);
 
   const handleTradeShift = React.useCallback((dateKey: string) => {
     setTradingModal({ isOpen: true, dateKey, step: 'times' });
   }, []);
 
   const renderScheduleView = () => {
-    const isSubmitted = submittedMonths.includes(currentMonthKey);
     const [year, month] = selectedMonth.split('-').map(Number);
     const currentMonthName = ENG_MONTHS[month - 1];
 
@@ -1896,7 +1857,6 @@ export default function CsrDashboard() {
           {displayDays.map(({ date, isToday, isTomorrow, isYesterday, isPast }, idx) => {
             const dateKey = formatDateKey(date);
             const dayData = schedule[dateKey] || { shifts: [] };
-            const isSubmitted = submittedMonths.includes(currentMonthKey);
 
             return (
               <DayRow 
@@ -1908,7 +1868,6 @@ export default function CsrDashboard() {
                 isPast={isPast}
                 dayData={dayData}
                 csrProfile={csrProfile}
-                isSubmitted={isSubmitted}
                 onBookShift={handleBookShift}
                 onTradeShift={handleTradeShift}
                 onCancelShift={handleCancelShift}
