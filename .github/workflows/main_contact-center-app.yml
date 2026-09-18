@@ -237,3 +237,130 @@ jobs:
             echo "::error title=Deploy did not come up::The package deployed but ${URL} never returned 200 within 5 minutes. The app is very likely crash-looping - check Log stream (Azure Portal -> contact-center-app -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
           fi
           exit 1
+
+  # ===== Migration target, temporary =====
+  #
+  # contact-center-app's wwwroot/node_modules has been frozen since
+  # 2026-06-07 and no deploy refreshes it, so a newly added npm dependency is
+  # missing at runtime (docs/DEPLOYMENT.md). contact-center-web is a fresh App
+  # Service created to escape that; the plan is docs/APP-SERVICE-MIGRATION.md.
+  #
+  # Both apps are deployed from this one build while the new one is being
+  # verified: the old keeps serving users, the new gets the same code. Once
+  # the new app is confirmed good and users have moved, DELETE the `deploy`
+  # job above and this comment, leaving only this one.
+  #
+  # If this job goes red while `deploy` is green, production is fine and the
+  # migration is not. That is the distinction to look at first.
+  deploy-new:
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    # HARD GATE. The workflow now also runs on pull_request, and a pull
+    # request must NEVER be able to deploy to production. An explicit
+    # allow-list of the two events that may deploy - not a `!=` - so that
+    # adding a future trigger cannot silently grant deploy rights.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: node-app
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_2173911DA914492EB087514A55CBE992 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_873A5F2F2D8D4C7FA4177ECEDBA6B7AF }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_E5835CD4576B4CF9B70BE79743DEC99D }}
+
+      - name: Check and enable Always On (prevents cold-start login errors)
+        continue-on-error: true
+        run: |
+          RG=$(az webapp list --query "[?name=='contact-center-web'].resourceGroup" -o tsv)
+          echo "Resource group: $RG"
+          echo "--- Always On BEFORE ---"
+          az webapp config show --name contact-center-web --resource-group "$RG" --query "alwaysOn" -o tsv
+          echo "--- App Service Plan tier ---"
+          PLAN_ID=$(az webapp show --name contact-center-web --resource-group "$RG" --query "appServicePlanId" -o tsv)
+          az appservice plan show --ids "$PLAN_ID" --query "{tier:sku.tier, name:sku.name}" -o table
+          echo "--- Attempting to enable Always On ---"
+          az webapp config set --name contact-center-web --resource-group "$RG" --always-on true || echo "FAILED - likely unsupported on this tier (e.g. Free F1). See tier above."
+          echo "--- Always On AFTER ---"
+          az webapp config show --name contact-center-web --resource-group "$RG" --query "alwaysOn" -o tsv
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'contact-center-web'
+          slot-name: 'Production'
+          package: release.zip
+
+      # This app is the whole point: a wwwroot that has never been written to,
+      # so the deploy should replace node_modules instead of leaving June's
+      # copy in place (docs/DEPLOYMENT.md, docs/APP-SERVICE-MIGRATION.md).
+      # Proving that is step 6 of the migration - add a dependency and see
+      # whether this app still answers.
+
+      # "Successfully deployed" only means the files arrived. It says nothing
+      # about whether the process actually started. On 2026-09-16 a deploy
+      # reported success while the app was crash-looping on startup, and the
+      # outage was only noticed hours later. This step closes that gap: if the
+      # app does not answer /api/health, the run goes red within minutes.
+      - name: Verify the app actually came back up
+        run: |
+          set -u
+          RG=$(az webapp list --query "[?name=='contact-center-web'].resourceGroup" -o tsv)
+          HOST=$(az webapp show --name contact-center-web --resource-group "$RG" --query defaultHostName -o tsv)
+          URL="https://${HOST}/api/health"
+          echo "Polling ${URL} for up to 5 minutes, waiting for commit ${GITHUB_SHA}..."
+
+          SAW_OLD_BUILD=0
+
+          for i in $(seq 1 30); do
+            # Clear the body file first, so a failure never reports a stale
+            # body left over from an earlier attempt as if it were current.
+            rm -f /tmp/health.json
+            # curl already prints 000 to stdout when it cannot connect, so use
+            # `|| true` rather than appending another 000 to it.
+            CODE=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$URL" 2>/dev/null || true)
+            CODE=${CODE:-000}
+
+            if [ "$CODE" = "200" ]; then
+              # A 200 is NOT enough on its own. App Service takes 30-60s to
+              # restart into the uploaded package, so for that window the old
+              # process is still answering - on 2026-09-17 this check passed
+              # six seconds after upload, against the previous build. Wait
+              # until the app reports the commit we just shipped.
+              RUNNING=$(jq -r '.commit // empty' /tmp/health.json 2>/dev/null || true)
+
+              if [ "$RUNNING" = "$GITHUB_SHA" ]; then
+                echo "App is healthy AND running this build after ~$((i * 10))s:"
+                cat /tmp/health.json; echo
+                exit 0
+              fi
+
+              SAW_OLD_BUILD=1
+              if [ -z "$RUNNING" ]; then
+                echo "[$i/30] HTTP 200 but no commit reported - still the pre-build-stamp process, waiting for restart"
+              else
+                echo "[$i/30] HTTP 200 but running ${RUNNING} - waiting for restart into ${GITHUB_SHA}"
+              fi
+            else
+              echo "[$i/30] HTTP ${CODE} - not healthy yet, retrying in 10s"
+            fi
+            sleep 10
+          done
+
+          echo "Last response body (if any):"
+          if [ -s /tmp/health.json ]; then cat /tmp/health.json; echo; else echo "(no response body - the app did not answer at all)"; fi
+
+          if [ "$SAW_OLD_BUILD" = "1" ]; then
+            echo "::error title=Deploy did not take effect::${URL} answers, but never reported commit ${GITHUB_SHA} within 5 minutes. The package uploaded but the app did not restart into it - it is still serving the previous build, or the new one is crash-looping and App Service kept the old process. Check Log stream (Azure Portal -> contact-center-web -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
+          else
+            echo "::error title=Deploy did not come up::The package deployed but ${URL} never returned 200 within 5 minutes. The app is very likely crash-looping - check Log stream (Azure Portal -> contact-center-web -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
+          fi
+          exit 1
