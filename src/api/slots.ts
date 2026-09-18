@@ -4,6 +4,7 @@ import db, { withDbRetry } from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlDateTime, toSqlTime, displayDate, displayTime } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
+import { isDuplicateKeyError } from '../utils/dbErrors';
 import { logAction } from './audit';
 import { columnExists } from '../database/schemaUtils';
 
@@ -765,6 +766,13 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
     );
     res.status(201).json({ id });
   } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      // The unique index did its job. "This shift already exists" is an
+      // answer the admin can act on; a 500 is not.
+      return res.status(409).json({
+        error: 'Энэ ээлж аль хэдийн үүссэн байна (ижил өдөр, цаг, segment, ажлын төрөл, байршил).',
+      });
+    }
     console.error('Create slot error:', err);
     captureError('slots: Create slot error:', err);
     res.status(500).json({ error: 'Слот үүсгэхэд алдаа гарлаа' });
@@ -880,8 +888,35 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
               await trx('work_slots').where({ id: existing.id }).update(updateData);
               keptIds.add(String(existing.id));
             } else {
-              await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
-              keptIds.add(String(payload.id));
+              try {
+                await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
+                keptIds.add(String(payload.id));
+              } catch (insertErr: any) {
+                // work_slots now carries a unique index on the shift's
+                // natural key. Another admin saving an overlapping schedule
+                // can therefore insert the same shift between our SELECT
+                // above and this INSERT. That is a race, not a conflict of
+                // intent - both sides want this shift to exist - so resolve
+                // it the way the non-racing path would: take their row and
+                // apply our update to it. Rethrowing would abort the entire
+                // transaction and lose an admin's whole save.
+                if (!isDuplicateKeyError(insertErr)) throw insertErr;
+                const raced = await trx('work_slots')
+                  .where({
+                    date: payload.date,
+                    start_time: payload.start_time,
+                    end_time: payload.end_time,
+                    segment: payload.segment,
+                    employment_type: payload.employment_type,
+                    location: payload.location,
+                    is_rest: payload.is_rest,
+                  })
+                  .first();
+                if (!raced) throw insertErr;
+                const { id: _raced, ...updateData } = payload;
+                await trx('work_slots').where({ id: raced.id }).update(updateData);
+                keptIds.add(String(raced.id));
+              }
             }
             synced += 1;
           } catch (slotErr: any) {

@@ -64,6 +64,11 @@ async function createSchema() {
     t.string('location').notNullable().defaultTo('Ulaanbaatar');
     t.boolean('is_rest').notNullable().defaultTo(false);
     t.text('booking_waves');
+    // The other constraint these tests exist to pin down. work_slots had no
+    // unique key on a shift's identity, so "the same shift must not exist
+    // twice" rested entirely on application code that reads, decides, then
+    // writes - with a window in between.
+    t.unique(['date', 'start_time', 'end_time', 'segment', 'employment_type', 'location', 'is_rest'], { indexName: 'uq_work_slots_identity' });
     t.timestamps(true, true);
   });
 
@@ -400,5 +405,74 @@ describe('GET /api/slots - audience filtering', () => {
       expect(slot.employmentType).toBe('Full Time');
       expect(slot.location).toBe('Ulaanbaatar');
     }
+  });
+});
+
+describe('work_slots identity - one shift, one row', () => {
+  const shift = () => ({
+    date: futureDate(30),
+    startTime: '09:00',
+    endTime: '18:00',
+    capacity: 3,
+    segment: 'Postpaid',
+    employmentType: 'Full Time',
+    location: 'Ulaanbaatar',
+    bookingDeadline: new Date(Date.now() + 20 * 86_400_000).toISOString(),
+  });
+
+  it('updates in place when the same shift is created twice', async () => {
+    // Normal behaviour must be unchanged by the new constraint: POST /slots
+    // looks the shift up first and updates it, so a re-save adjusts capacity
+    // rather than creating a second row or failing.
+    const body = shift();
+    const first = await api('POST', '/api/slots', adminToken, body);
+    expect(first.status).toBe(201);
+
+    const second = await api('POST', '/api/slots', adminToken, { ...body, capacity: 7 });
+    expect(second.status).toBe(200);
+    expect(second.body.id).toBe(first.body.id);
+
+    const rows = await db('work_slots').where({ date: body.date, start_time: '09:00:00', end_time: '18:00:00' });
+    expect(rows).toHaveLength(1);
+    expect(Number(rows[0].capacity)).toBe(7);
+  });
+
+  it('is enforced by the database, not only by the handler', async () => {
+    // The point of the constraint: even a writer that skips the lookup - or
+    // loses the race between SELECT and INSERT - cannot create the duplicate.
+    const body = shift();
+    await api('POST', '/api/slots', adminToken, body);
+
+    const row = await db('work_slots').where({ date: body.date, start_time: '09:00:00' }).first();
+    const { id: _id, created_at: _c, updated_at: _u, ...identity } = row;
+
+    // A FRESH id, asserted unused first. An earlier version of this test
+    // reused an id another test in this file already inserts, so the insert
+    // failed on a PRIMARY KEY violation and the test passed whether or not
+    // the identity constraint existed at all - green for the wrong reason.
+    const freshId = '01234567-89ab-4cde-8f01-234567890abc';
+    expect(await db('work_slots').where({ id: freshId })).toHaveLength(0);
+
+    let thrown: any = null;
+    try {
+      await db('work_slots').insert({ id: freshId, ...identity });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeTruthy();
+    // Specifically a uniqueness violation, and specifically NOT the primary
+    // key - otherwise this asserts nothing about the new index.
+    expect(String(thrown.code || thrown.message)).toMatch(/UNIQUE|2627|2601|23505|unique constraint/i);
+    expect(String(thrown.code || '')).not.toMatch(/PRIMARYKEY/i);
+    // And the duplicate really did not land.
+    expect(await db('work_slots').where(identity)).toHaveLength(1);
+  });
+
+  it('still allows a genuinely different shift on the same day', async () => {
+    const body = shift();
+    await api('POST', '/api/slots', adminToken, body);
+    const other = await api('POST', '/api/slots', adminToken, { ...body, startTime: '10:00', endTime: '19:00' });
+    expect(other.status).toBe(201);
   });
 });

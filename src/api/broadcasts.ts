@@ -4,6 +4,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDateTime } from '../utils/sqlDate';
 import { logAction } from './audit';
+import { isDuplicateKeyError } from '../utils/dbErrors';
 import { captureError } from '../utils/errorLog';
 import { createThrottledTask } from '../utils/throttledTask';
 import { tableExists } from '../database/schemaUtils';
@@ -42,14 +43,6 @@ async function hasAttachmentTable() {
  * double-click or two open tabs raced and surfaced the violation as a bare
  * 500. The row already existing is the desired end state, so swallow it.
  */
-function isDuplicateKeyError(err: any): boolean {
-  const number = err?.number ?? err?.originalError?.info?.number;
-  if (number === 2627 || number === 2601) return true; // mssql PK / unique index
-  const code = String(err?.code || '');
-  if (code === 'SQLITE_CONSTRAINT' || code === '23505') return true; // sqlite / postgres
-  return /duplicate|unique constraint|primary key/i.test(String(err?.message || ''));
-}
-
 function textField(value: unknown, max: number) {
   const text = String(value ?? '').trim();
   return text.length > max ? null : text;
