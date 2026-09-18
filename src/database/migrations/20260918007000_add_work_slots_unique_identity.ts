@@ -1,6 +1,7 @@
 import type { Knex } from "knex";
 import { v4 as uuidv4 } from "uuid";
 import { tableExists } from "../schemaUtils";
+import { displayDate, displayTime } from "../../utils/sqlDate";
 
 /**
  * A unique index on the natural key of a shift.
@@ -62,11 +63,21 @@ export async function up(knex: Knex): Promise<void> {
   if (duplicateGroups > 0) {
     const sample = grouped
       .slice(0, 10)
-      .map(
-        (row: any) =>
-          `${row.date} ${row.start_time}-${row.end_time} ` +
-          `${row.segment}/${row.employment_type}/${row.location} x${row.n}`,
-      )
+      .map((row: any) => {
+        // displayDate/displayTime, not raw interpolation. The driver returns
+        // a DATE as a Date object and a TIME as 1970-01-01T<t>Z, so string
+        // interpolation produced lines like
+        //   "Thu Sep 03 2026 00:00:00 GMT+0000 (Coordinated Universal Time)
+        //    Thu Jan 01 1970 09:00:00 GMT+0000 (Coordinated Universal Time)-..."
+        // for every entry - technically correct and unreadable, in the one
+        // message whose entire purpose is telling a human which rows to fix.
+        const rest = row.is_rest === true || row.is_rest === 1;
+        const when = rest
+          ? 'Амралт'
+          : `${displayTime(row.start_time)}-${displayTime(row.end_time)}`;
+        return `${displayDate(row.date)} ${when} ` +
+          `${row.segment}/${row.employment_type}/${row.location} x${row.n}`;
+      })
       .join("; ");
 
     console.error(
@@ -74,6 +85,8 @@ export async function up(knex: Knex): Promise<void> {
         `${duplicateGroups} duplicate identity group(s). A non-unique index ` +
         `was created instead. These rows must be merged by hand - deleting ` +
         `them automatically could destroy shifts people are booked onto. ` +
+        `Inspect with GET /api/admin/duplicate-slots and merge with ` +
+        `POST /api/admin/merge-duplicate-slots. ` +
         `Columns: ${columnList}. Sample: ${sample}`,
     );
 
