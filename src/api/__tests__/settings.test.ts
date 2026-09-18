@@ -56,6 +56,13 @@ async function createSchema() {
     t.timestamps(true, true);
   });
 
+  await db.schema.createTable('holidays', (t: any) => {
+    t.uuid('id').primary();
+    t.string('date').notNullable().unique();
+    t.string('name').notNullable();
+    t.timestamps(true, true);
+  });
+
   await db.schema.createTable('shift_templates', (t: any) => {
     t.uuid('id').primary();
     t.string('time', 32).notNullable().unique();
@@ -112,7 +119,23 @@ afterAll(async () => {
 beforeEach(async () => {
   await db('vacation_quotas').del();
   await db('shift_templates').del();
+  await db('holidays').del();
 });
+
+/** Raw fetch, so an If-Match header can be set (or deliberately omitted). */
+async function rawApi(method: string, route: string, token: string, body?: unknown, headers: Record<string, string> = {}) {
+  const response = await fetch(`${baseUrl}${route}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    etag: response.headers.get('etag'),
+    body: text ? JSON.parse(text) : null,
+  };
+}
 
 describe('vacation quotas - the control that never reached anyone', () => {
   it('round-trips a quota from the admin to any reader', async () => {
@@ -292,5 +315,104 @@ describe('audit trail - the record that was not being kept', () => {
     // the table is not polluted with a success entry for a save that failed.
     const rows = await db('audit_logs').where({ action: 'UPDATE_VACATION_QUOTAS' });
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe('concurrent edits - two admins must not silently overwrite each other', () => {
+  // THE BUG (F-09): these collections are saved by deleting what is stored and
+  // inserting the list the client computed from whatever it fetched on load.
+  //
+  //   09:00  admin A loads the page
+  //   09:05  admin B loads the page
+  //   09:10  A adds a holiday and saves
+  //   09:12  B adds a different one and saves
+  //
+  // B's list came from the 09:05 snapshot, which never contained A's entry, so
+  // A's work disappears. Nothing errors. This is a minutes-wide window, not a
+  // millisecond race.
+
+  it('hands out a version with the list', async () => {
+    const read = await rawApi('GET', '/api/settings/holidays', adminToken);
+    expect(read.status).toBe(200);
+    expect(read.etag).toBeTruthy();
+  });
+
+  it('accepts a save built from the current version', async () => {
+    const read = await rawApi('GET', '/api/settings/holidays', adminToken);
+    const saved = await rawApi('PUT', '/api/settings/holidays', adminToken,
+      { holidays: [{ date: '2026-07-11', name: 'Наадам' }] },
+      { 'If-Match': read.etag! });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toHaveLength(1);
+  });
+
+  it('refuses a save built from a version that has since moved', async () => {
+    // Both admins load the same empty list.
+    const adminA = await rawApi('GET', '/api/settings/holidays', adminToken);
+    const adminB = await rawApi('GET', '/api/settings/holidays', adminToken);
+    expect(adminA.etag).toBe(adminB.etag);
+
+    // A saves first and succeeds.
+    const aSave = await rawApi('PUT', '/api/settings/holidays', adminToken,
+      { holidays: [{ date: '2026-07-11', name: 'Наадам' }] },
+      { 'If-Match': adminA.etag! });
+    expect(aSave.status).toBe(200);
+
+    // B saves a list that never contained A's entry.
+    const bSave = await rawApi('PUT', '/api/settings/holidays', adminToken,
+      { holidays: [{ date: '2026-12-31', name: 'Шинэ жил' }] },
+      { 'If-Match': adminB.etag! });
+    expect(bSave.status).toBe(409);
+    expect(bSave.body.conflict).toBe(true);
+
+    // The decisive assertion: A's holiday is still there.
+    const after = await rawApi('GET', '/api/settings/holidays', adminToken);
+    expect(after.body.map((h: any) => h.name)).toEqual(['Наадам']);
+  });
+
+  it('tells the rejected admin what is actually stored', async () => {
+    const stale = await rawApi('GET', '/api/settings/holidays', adminToken);
+    await rawApi('PUT', '/api/settings/holidays', adminToken,
+      { holidays: [{ date: '2026-07-11', name: 'Наадам' }] }, { 'If-Match': stale.etag! });
+
+    const rejected = await rawApi('PUT', '/api/settings/holidays', adminToken,
+      { holidays: [{ date: '2026-12-31', name: 'Шинэ жил' }] }, { 'If-Match': stale.etag! });
+    // Without this the client can only say "it failed" and leave a refused
+    // edit on screen.
+    expect(rejected.body.current.map((h: any) => h.name)).toEqual(['Наадам']);
+  });
+
+  it('changes the version once the list changes', async () => {
+    const before = await rawApi('GET', '/api/settings/holidays', adminToken);
+    await rawApi('PUT', '/api/settings/holidays', adminToken,
+      { holidays: [{ date: '2026-07-11', name: 'Наадам' }] }, { 'If-Match': before.etag! });
+    const after = await rawApi('GET', '/api/settings/holidays', adminToken);
+    expect(after.etag).not.toBe(before.etag);
+  });
+
+  it('still saves when no version is sent at all', async () => {
+    // The check is advisory on purpose: a tab left open across a deploy has
+    // never heard of If-Match, and must not have every save start failing.
+    const saved = await rawApi('PUT', '/api/settings/holidays', adminToken,
+      { holidays: [{ date: '2026-07-11', name: 'Наадам' }] });
+    expect(saved.status).toBe(200);
+  });
+
+  it('covers the quota and template lists too, not just holidays', async () => {
+    // Both were added with the same replace-the-whole-list shape, so both had
+    // the same hole.
+    const q = await rawApi('GET', '/api/settings/vacation-quotas', adminToken);
+    await rawApi('PUT', '/api/settings/vacation-quotas', adminToken,
+      { quotas: [{ month: 1, limit: 3 }] }, { 'If-Match': q.etag! });
+    const qStale = await rawApi('PUT', '/api/settings/vacation-quotas', adminToken,
+      { quotas: [{ month: 2, limit: 9 }] }, { 'If-Match': q.etag! });
+    expect(qStale.status).toBe(409);
+
+    const t = await rawApi('GET', '/api/settings/shift-templates', adminToken);
+    await rawApi('PUT', '/api/settings/shift-templates', adminToken,
+      { templates: [{ time: '09-18' }] }, { 'If-Match': t.etag! });
+    const tStale = await rawApi('PUT', '/api/settings/shift-templates', adminToken,
+      { templates: [{ time: '10-19' }] }, { 'If-Match': t.etag! });
+    expect(tStale.status).toBe(409);
   });
 });

@@ -76,6 +76,7 @@ import {
 } from "../../utils/notificationGroups";
 import ForecastDashboard from "./ForecastDashboard";
 import { POLLING_INTERVALS } from "../../config/polling";
+import { rememberVersion, versionHeader, forgetVersion } from "../../lib/collectionVersions";
 import { startPolling } from "../../lib/startPolling";
 
 const ENG_MONTHS = [
@@ -882,6 +883,7 @@ export default function AdminDashboard() {
   const fetchHolidaysFromDb = async () => {
     try {
       const response = await apiClient.get("/settings/holidays");
+      rememberVersion("/settings/holidays", response.headers);
       const list = Array.isArray(response.data) ? response.data : [];
       setHolidays(list);
       return list;
@@ -893,12 +895,29 @@ export default function AdminDashboard() {
 
   const saveHolidaysToDb = async (updated: any[]) => {
     try {
-      const response = await apiClient.put("/settings/holidays", { holidays: updated });
+      const response = await apiClient.put(
+        "/settings/holidays",
+        { holidays: updated },
+        { headers: versionHeader("/settings/holidays") },
+      );
+      rememberVersion("/settings/holidays", response.headers);
       const list = Array.isArray(response.data) ? response.data : updated;
       setHolidays(list);
       return list;
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving holidays:", error);
+      // 409 means someone else changed this list since this page loaded.
+      // Show THEIR list rather than leaving an edit on screen that was
+      // refused, and drop the stale version so the next save re-reads.
+      if (error.response?.status === 409) {
+        forgetVersion("/settings/holidays");
+        const current = Array.isArray(error.response.data?.current)
+          ? error.response.data.current
+          : await fetchHolidaysFromDb().catch(() => holidays);
+        setHolidays(current);
+        alert(error.response.data?.error || "Амралтын өдрүүд өөрчлөгдсөн байна.");
+        return current;
+      }
       alert("Амралтын өдрийг хадгалахад алдаа гарлаа. Дахин оролдоно уу.");
       return holidays;
     }
@@ -907,6 +926,7 @@ export default function AdminDashboard() {
   const fetchSegmentsFromDb = async () => {
     try {
       const response = await apiClient.get("/settings/segments");
+      rememberVersion("/settings/segments", response.headers);
       const list = Array.isArray(response.data) ? response.data : [];
       setSegments(list);
       return list;
@@ -918,12 +938,18 @@ export default function AdminDashboard() {
 
   const saveSegmentsToDb = async (updated: string[]) => {
     try {
-      const response = await apiClient.put("/settings/segments", { segments: updated });
+      const response = await apiClient.put(
+        "/settings/segments",
+        { segments: updated },
+        { headers: versionHeader("/settings/segments") },
+      );
+      rememberVersion("/settings/segments", response.headers);
       const list = Array.isArray(response.data) ? response.data : updated;
       setSegments(list);
       return list;
     } catch (error: any) {
       console.error("Error saving segments:", error);
+      if (error.response?.status === 409) forgetVersion("/settings/segments");
       // The server refuses to drop a segment that CSRs or shifts still point
       // at, and says which - surface that instead of a generic message.
       alert(
@@ -1033,6 +1059,7 @@ export default function AdminDashboard() {
   const fetchShiftTemplates = async () => {
     try {
       const response = await apiClient.get("/settings/shift-templates");
+      rememberVersion("/settings/shift-templates", response.headers);
       const rows = Array.isArray(response.data) ? response.data : [];
       // An empty answer means "nobody has saved a list yet" (or the migration
       // has not been applied). Show the built-in defaults rather than an
@@ -1054,13 +1081,25 @@ export default function AdminDashboard() {
     const previous = shiftTemplates;
     setShiftTemplates(list); // optimistic: the editor should feel immediate
     try {
-      const response = await apiClient.put("/settings/shift-templates", {
-        templates: list.map((t: any) => ({ time: t.time, label: t.label })),
-      });
+      const response = await apiClient.put(
+        "/settings/shift-templates",
+        { templates: list.map((t: any) => ({ time: t.time, label: t.label })) },
+        { headers: versionHeader("/settings/shift-templates") },
+      );
+      rememberVersion("/settings/shift-templates", response.headers);
       const rows = Array.isArray(response.data) ? response.data : [];
       if (rows.length > 0) setShiftTemplates(normalizeTemplateList(rows));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving shift templates:", error);
+      if (error.response?.status === 409) {
+        forgetVersion("/settings/shift-templates");
+        const current = Array.isArray(error.response.data?.current)
+          ? normalizeTemplateList(error.response.data.current)
+          : previous;
+        setShiftTemplates(current);
+        alert(error.response.data?.error || "Ээлжийн загвар өөрчлөгдсөн байна.");
+        return;
+      }
       // Put the old list back. Leaving the optimistic one on screen would
       // show the admin a change that no other admin can see - which is the
       // exact failure this whole change is meant to end.
@@ -1072,6 +1111,7 @@ export default function AdminDashboard() {
   const fetchVacationQuotas = async () => {
     try {
       const response = await apiClient.get("/settings/vacation-quotas");
+      rememberVersion("/settings/vacation-quotas", response.headers);
       const rows = Array.isArray(response.data) ? response.data : [];
       const next: Record<number, number> = { ...DEFAULT_MONTHLY_QUOTAS };
       rows.forEach((row: any) => {
@@ -1741,12 +1781,17 @@ export default function AdminDashboard() {
       // PUT /settings/holidays before it: twelve rows is not worth a
       // per-field protocol, and sending them together means a half-applied
       // save cannot leave some months on the old value and some on the new.
-      const response = await apiClient.put("/settings/vacation-quotas", {
-        quotas: Object.entries(updated).map(([index, value]) => ({
-          month: Number(index) + 1,
-          limit: Number(value),
-        })),
-      });
+      const response = await apiClient.put(
+        "/settings/vacation-quotas",
+        {
+          quotas: Object.entries(updated).map(([index, value]) => ({
+            month: Number(index) + 1,
+            limit: Number(value),
+          })),
+        },
+        { headers: versionHeader("/settings/vacation-quotas") },
+      );
+      rememberVersion("/settings/vacation-quotas", response.headers);
       const rows = Array.isArray(response.data) ? response.data : [];
       if (rows.length > 0) {
         const next: Record<number, number> = { ...DEFAULT_MONTHLY_QUOTAS };
@@ -1759,9 +1804,15 @@ export default function AdminDashboard() {
         });
         setMonthlyQuotas(next);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving vacation quota:", error);
       setMonthlyQuotas(previous);
+      if (error.response?.status === 409) {
+        forgetVersion("/settings/vacation-quotas");
+        await fetchVacationQuotas().catch(() => undefined);
+        alert(error.response.data?.error || "Амралтын квот өөрчлөгдсөн байна.");
+        return;
+      }
       alert("Амралтын квотыг хадгалж чадсангүй. Дахин оролдоно уу.");
     }
   };
