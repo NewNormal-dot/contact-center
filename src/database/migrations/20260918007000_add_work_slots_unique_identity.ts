@@ -1,4 +1,5 @@
 import type { Knex } from "knex";
+import { v4 as uuidv4 } from "uuid";
 import { tableExists } from "../schemaUtils";
 
 /**
@@ -49,12 +50,6 @@ const INDEX_NAME = "uq_work_slots_identity";
 export async function up(knex: Knex): Promise<void> {
   if (!(await tableExists(knex, "work_slots"))) return;
 
-  // Re-running must be a no-op: production may apply this by hand more than
-  // once, and knex's own bookkeeping is not the only thing that can get out
-  // of step with reality here.
-  const existing = await knex.schema.hasColumn("work_slots", "id");
-  if (!existing) return;
-
   const columnList = IDENTITY_COLUMNS.map((c) => `"${c}"`).join(", ");
   const grouped = await knex("work_slots")
     .select(IDENTITY_COLUMNS)
@@ -88,7 +83,11 @@ export async function up(knex: Knex): Promise<void> {
     if (await tableExists(knex, "server_errors")) {
       await knex("server_errors")
         .insert({
-          id: knex.raw("lower(hex(randomblob(16)))") as any,
+          // uuid, not lower(hex(randomblob(16))): randomblob is a SQLite
+          // builtin and does not exist on Azure SQL, so on the one database
+          // this branch actually matters for, the write would fail and the
+          // superadmin would be told nothing at all.
+          id: uuidv4(),
           context: `migration ${INDEX_NAME}`,
           message:
             `work_slots has ${duplicateGroups} duplicate identity group(s); ` +
@@ -99,15 +98,37 @@ export async function up(knex: Knex): Promise<void> {
         .catch(() => undefined);
     }
 
-    await knex.schema.alterTable("work_slots", (table) => {
-      table.index(IDENTITY_COLUMNS, `ix_work_slots_identity`);
-    });
+    await createIndex(knex, false);
     return;
   }
 
-  await knex.schema.alterTable("work_slots", (table) => {
-    table.unique(IDENTITY_COLUMNS, { indexName: INDEX_NAME });
-  });
+  await createIndex(knex, true);
+}
+
+/**
+ * Creates the index, tolerating it already being there.
+ *
+ * Production applies migrations by hand through run-migrations, so this can
+ * legitimately run against a database where an earlier attempt already
+ * succeeded - knex's bookkeeping is not the only thing that can get out of
+ * step with reality here. An "already exists" error would abort the batch
+ * and stop every later migration, which is the precise failure this
+ * migration's whole duplicate-counting dance exists to avoid.
+ */
+async function createIndex(knex: Knex, unique: boolean) {
+  try {
+    await knex.schema.alterTable("work_slots", (table) => {
+      if (unique) table.unique(IDENTITY_COLUMNS, { indexName: INDEX_NAME });
+      else table.index(IDENTITY_COLUMNS, "ix_work_slots_identity");
+    });
+  } catch (err: any) {
+    const message = String(err?.message || err);
+    if (/already exists|duplicate key name|is already/i.test(message)) {
+      console.log(`[${INDEX_NAME}] index already present, nothing to do`);
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {
