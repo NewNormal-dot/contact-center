@@ -4,6 +4,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
+import { etagFor, versionMatches } from '../utils/collectionVersion';
 import { logAction } from './audit';
 import { makeRuleId } from './rules';
 import { tableExists } from '../database/schemaUtils';
@@ -15,14 +16,60 @@ import {
 
 const router = express.Router();
 
+// ===== Optimistic concurrency for the replace-the-whole-list endpoints =====
+//
+// Each of these collections is saved by deleting what is stored and inserting
+// the list the client computed from whatever it fetched on page load. Two
+// admins editing minutes apart therefore silently overwrite each other (F-09).
+//
+// Each GET now carries an ETag over the stored rows; a PUT may send it back
+// as If-Match and is refused with 409 if the state moved underneath it. The
+// check lives INSIDE the write transaction, so it reflects what the write is
+// about to replace. Advisory by design: a request without If-Match behaves
+// exactly as before, so a tab left open across a deploy still saves.
+//
+// The readers below are used by BOTH the GET and the check, so the two can
+// never disagree about what the current state is - a hash computed from a
+// differently-shaped read would mismatch on every save.
+
+async function readHolidays(conn: any = db) {
+  const rows = await conn('holidays').select('id', 'date', 'name').orderBy('date', 'asc');
+  return rows.map((r: any) => ({ id: r.id, date: r.date, name: r.name }));
+}
+
+async function readSegments(conn: any = db) {
+  const rows = await conn('segments').select('name').orderBy('display_order', 'asc');
+  return rows.map((r: any) => r.name);
+}
+
+async function readVacationQuotas(conn: any = db) {
+  const rows = await conn('vacation_quotas').select('month', 'quota_limit').orderBy('month', 'asc');
+  return rows.map((r: any) => ({ month: Number(r.month), limit: Number(r.quota_limit) }));
+}
+
+async function readShiftTemplates(conn: any = db) {
+  const rows = await conn('shift_templates').select('id', 'time', 'label').orderBy('display_order', 'asc');
+  return rows.map((r: any) => ({ id: String(r.id), time: r.time, label: r.label }));
+}
+
+/** 409 body: the caller needs the current list to show what they would lose. */
+function conflict(res: any, current: unknown[], what: string) {
+  return res.status(409).json({
+    error: `${what} энэ хооронд өөр хүн өөрчилсөн байна. Хуудсаа сэргээгээд дахин оролдоно уу.`,
+    conflict: true,
+    current,
+  });
+}
+
 // ===== Holidays =====
 // Read: any authenticated user (CSR dashboards need to see holidays too).
 // Write: admin/superadmin only.
 
 router.get('/holidays', authenticate, async (_req, res) => {
   try {
-    const rows = await db('holidays').select('id', 'date', 'name').orderBy('date', 'asc');
-    res.json(rows.map((r: any) => ({ id: r.id, date: r.date, name: r.name })));
+    const items = await readHolidays();
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Get holidays error:', err);
     captureError('settings: Get holidays error:', err);
@@ -55,7 +102,15 @@ router.put('/holidays', authenticate, authorize(['admin', 'superadmin']), async 
       normalized.push({ id, date, name });
     }
 
+    let stale: unknown[] | null = null;
     await db.transaction(async (trx) => {
+      // Inside the transaction: this is the state the delete below is about
+      // to replace, not a snapshot read some milliseconds earlier.
+      const current = await readHolidays(trx);
+      if (!versionMatches(req, current)) {
+        stale = current;
+        return;
+      }
       await trx('holidays').del();
       if (normalized.length > 0) {
         await trx('holidays').insert(normalized.map((h) => ({
@@ -67,7 +122,9 @@ router.put('/holidays', authenticate, authorize(['admin', 'superadmin']), async 
       }
     });
 
-    const rows = await db('holidays').select('id', 'date', 'name').orderBy('date', 'asc');
+    if (stale) return conflict(res, stale, 'Амралтын өдрүүдийг');
+
+    const items = await readHolidays();
     await logAction(
       req.user.id,
       'UPDATE_HOLIDAYS',
@@ -76,7 +133,8 @@ router.put('/holidays', authenticate, authorize(['admin', 'superadmin']), async 
       `Holiday list saved (${normalized.length} entr${normalized.length === 1 ? 'y' : 'ies'})`,
       req,
     );
-    res.json(rows.map((r: any) => ({ id: r.id, date: r.date, name: r.name })));
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Save holidays error:', err);
     captureError('settings: Save holidays error:', err);
@@ -89,8 +147,9 @@ router.put('/holidays', authenticate, authorize(['admin', 'superadmin']), async 
 
 router.get('/segments', authenticate, async (_req, res) => {
   try {
-    const rows = await db('segments').select('name').orderBy('display_order', 'asc');
-    res.json(rows.map((r: any) => r.name));
+    const items = await readSegments();
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Get segments error:', err);
     captureError('settings: Get segments error:', err);
@@ -224,7 +283,14 @@ router.put('/segments', authenticate, authorize(['admin', 'superadmin']), async 
       }
     }
 
+    let stale: unknown[] | null = null;
     await db.transaction(async (trx) => {
+      // Inside the transaction, for the same reason as holidays above.
+      const current = await readSegments(trx);
+      if (!versionMatches(req, current)) {
+        stale = current;
+        return;
+      }
       await trx('segments').del();
       if (normalized.length > 0) {
         await trx('segments').insert(normalized.map((name, index) => ({
@@ -236,7 +302,9 @@ router.put('/segments', authenticate, authorize(['admin', 'superadmin']), async 
       }
     });
 
-    const rows = await db('segments').select('name').orderBy('display_order', 'asc');
+    if (stale) return conflict(res, stale, 'Segment жагсаалтыг');
+
+    const items = await readSegments();
     await logAction(
       req.user.id,
       'UPDATE_SEGMENTS',
@@ -246,7 +314,8 @@ router.put('/segments', authenticate, authorize(['admin', 'superadmin']), async 
       `${removed.length > 0 ? ` | removed: ${removed.join(', ')}` : ''}`,
       req,
     );
-    res.json(rows.map((r: any) => r.name));
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Save segments error:', err);
     captureError('settings: Save segments error:', err);
@@ -282,8 +351,9 @@ router.get('/vacation-quotas', authenticate, async (_req, res) => {
       // client fall back to its default rather than failing the dashboard.
       return res.json([]);
     }
-    const rows = await db('vacation_quotas').select('month', 'quota_limit').orderBy('month', 'asc');
-    res.json(rows.map((r: any) => ({ month: Number(r.month), limit: Number(r.quota_limit) })));
+    const items = await readVacationQuotas();
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Get vacation quotas error:', err);
     captureError('settings: Get vacation quotas error:', err);
@@ -325,7 +395,13 @@ router.put('/vacation-quotas', authenticate, authorize(['admin', 'superadmin']),
     // Delete-then-insert inside one transaction. NOT onConflict: knex does
     // not implement it for the mssql dialect, so it throws in production
     // while passing locally on SQLite.
+    let stale: unknown[] | null = null;
     await db.transaction(async (trx) => {
+      const current = await readVacationQuotas(trx);
+      if (!versionMatches(req, current)) {
+        stale = current;
+        return;
+      }
       await trx('vacation_quotas').whereIn('month', [...byMonth.keys()]).del();
       await trx('vacation_quotas').insert(
         [...byMonth.entries()].map(([month, limit]) => ({
@@ -337,7 +413,9 @@ router.put('/vacation-quotas', authenticate, authorize(['admin', 'superadmin']),
       );
     });
 
-    const rows = await db('vacation_quotas').select('month', 'quota_limit').orderBy('month', 'asc');
+    if (stale) return conflict(res, stale, 'Амралтын квотыг');
+
+    const items = await readVacationQuotas();
     await logAction(
       req.user.id,
       'UPDATE_VACATION_QUOTAS',
@@ -346,7 +424,8 @@ router.put('/vacation-quotas', authenticate, authorize(['admin', 'superadmin']),
       [...byMonth.entries()].map(([m, l]) => `${m}:${l}`).join(', '),
       req,
     );
-    res.json(rows.map((r: any) => ({ month: Number(r.month), limit: Number(r.quota_limit) })));
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Save vacation quotas error:', err);
     captureError('settings: Save vacation quotas error:', err);
@@ -367,10 +446,9 @@ async function hasShiftTemplates() {
 router.get('/shift-templates', authenticate, async (_req, res) => {
   try {
     if (!(await hasShiftTemplates())) return res.json([]);
-    const rows = await db('shift_templates')
-      .select('id', 'time', 'label')
-      .orderBy('display_order', 'asc');
-    res.json(rows.map((r: any) => ({ id: String(r.id), time: r.time, label: r.label })));
+    const items = await readShiftTemplates();
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Get shift templates error:', err);
     captureError('settings: Get shift templates error:', err);
@@ -410,7 +488,13 @@ router.put('/shift-templates', authenticate, authorize(['admin', 'superadmin']),
       normalized.push({ time: REST_SHIFT_LABEL, label: REST_SHIFT_LABEL });
     }
 
+    let stale: unknown[] | null = null;
     await db.transaction(async (trx) => {
+      const current = await readShiftTemplates(trx);
+      if (!versionMatches(req, current)) {
+        stale = current;
+        return;
+      }
       await trx('shift_templates').del();
       await trx('shift_templates').insert(
         normalized.map((t, index) => ({
@@ -423,9 +507,9 @@ router.put('/shift-templates', authenticate, authorize(['admin', 'superadmin']),
       );
     });
 
-    const rows = await db('shift_templates')
-      .select('id', 'time', 'label')
-      .orderBy('display_order', 'asc');
+    if (stale) return conflict(res, stale, 'Ээлжийн загварыг');
+
+    const items = await readShiftTemplates();
     await logAction(
       req.user.id,
       'UPDATE_SHIFT_TEMPLATES',
@@ -434,7 +518,8 @@ router.put('/shift-templates', authenticate, authorize(['admin', 'superadmin']),
       `${normalized.length} загвар хадгалагдлаа`,
       req,
     );
-    res.json(rows.map((r: any) => ({ id: String(r.id), time: r.time, label: r.label })));
+    res.setHeader('ETag', etagFor(items));
+    res.json(items);
   } catch (err: any) {
     console.error('Save shift templates error:', err);
     captureError('settings: Save shift templates error:', err);
