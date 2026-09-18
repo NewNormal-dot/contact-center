@@ -4,6 +4,7 @@ import db from '../database/db';
 import { tableExists } from '../database/schemaUtils';
 import { authenticate, authorize } from '../middleware/auth';
 import { captureError } from '../utils/errorLog';
+import { logAction } from './audit';
 
 const router = express.Router();
 
@@ -173,6 +174,20 @@ router.post('/upload', authenticate, authorize(['superadmin', 'admin']), async (
         await trx('forecast_data').insert(parsedRows.slice(index, index + chunkSize));
       }
     });
+
+    // This upload DELETES every existing row for each month/segment pair it
+    // touches before inserting. That is the intended behaviour - a re-upload
+    // replaces a month - but it means a wrong file silently discards the
+    // previous plan, and until now nothing recorded that it had happened.
+    await logAction(
+      req.user?.id,
+      'UPLOAD_FORECAST',
+      'forecast_data',
+      null,
+      `Replaced ${replacePairs.map((p) => `${p.monthKey}/${p.segment}`).join(', ')} ` +
+      `with ${parsedRows.length} row(s)`,
+      req,
+    );
 
     const rows = await db('forecast_data')
       .select('*')

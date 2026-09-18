@@ -74,6 +74,7 @@ router.put('/holidays', authenticate, authorize(['admin', 'superadmin']), async 
       'holidays',
       null,
       `Holiday list saved (${normalized.length} entr${normalized.length === 1 ? 'y' : 'ies'})`,
+      req,
     );
     res.json(rows.map((r: any) => ({ id: r.id, date: r.date, name: r.name })));
   } catch (err: any) {
@@ -168,6 +169,7 @@ router.post('/segments/rename', authenticate, authorize(['admin', 'superadmin'])
       'segments',
       null,
       `Renamed segment "${from}" -> "${to}" (${result.users} user(s), ${result.slots} shift(s), ${result.rules} rule(s))`,
+      req,
     );
 
     const rows = await db('segments').select('name').orderBy('display_order', 'asc');
@@ -242,6 +244,7 @@ router.put('/segments', authenticate, authorize(['admin', 'superadmin']), async 
       null,
       `Segment list saved (${normalized.length}): ${normalized.join(', ')}` +
       `${removed.length > 0 ? ` | removed: ${removed.join(', ')}` : ''}`,
+      req,
     );
     res.json(rows.map((r: any) => r.name));
   } catch (err: any) {
@@ -341,6 +344,7 @@ router.put('/vacation-quotas', authenticate, authorize(['admin', 'superadmin']),
       'vacation_quotas',
       null,
       [...byMonth.entries()].map(([m, l]) => `${m}:${l}`).join(', '),
+      req,
     );
     res.json(rows.map((r: any) => ({ month: Number(r.month), limit: Number(r.quota_limit) })));
   } catch (err: any) {
@@ -428,6 +432,7 @@ router.put('/shift-templates', authenticate, authorize(['admin', 'superadmin']),
       'shift_templates',
       null,
       `${normalized.length} загвар хадгалагдлаа`,
+      req,
     );
     res.json(rows.map((r: any) => ({ id: String(r.id), time: r.time, label: r.label })));
   } catch (err: any) {

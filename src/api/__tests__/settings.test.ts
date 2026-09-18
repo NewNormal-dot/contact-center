@@ -246,3 +246,51 @@ describe('shift templates - one list for every admin', () => {
     expect(write.status).toBe(403);
   });
 });
+
+describe('audit trail - the record that was not being kept', () => {
+  it('writes an audit row for a settings change, with the caller IP', async () => {
+    // audit_logs.ip_address has existed since the initial schema and was
+    // never once written to. Every state-changing action was therefore
+    // attributable to a user but not to a machine.
+    await db('audit_logs').del();
+    await api('PUT', '/api/settings/vacation-quotas', adminToken, { quotas: [{ month: 8, limit: 6 }] });
+
+    const rows = await db('audit_logs').where({ action: 'UPDATE_VACATION_QUOTAS' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].user_id).toBe(ADMIN_ID);
+    expect(rows[0].details).toContain('8:6');
+    expect(rows[0].ip_address).toBeTruthy();
+  });
+
+  it('takes the LAST forwarded hop, so a caller cannot forge the logged IP', async () => {
+    // X-Forwarded-For is appended to by the proxy, so the first entry is
+    // whatever the caller typed. An audit log recording a forged address is
+    // worse than one recording none, because it looks authoritative.
+    await db('audit_logs').del();
+    await fetch(`${baseUrl}/api/settings/vacation-quotas`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+        'X-Forwarded-For': '1.1.1.1, 203.0.113.9',
+      },
+      body: JSON.stringify({ quotas: [{ month: 9, limit: 2 }] }),
+    });
+
+    const row = await db('audit_logs').where({ action: 'UPDATE_VACATION_QUOTAS' }).first();
+    expect(row.ip_address).toBe('203.0.113.9');
+    expect(row.ip_address).not.toBe('1.1.1.1');
+  });
+
+  it('records a failed save too, not only successful ones', async () => {
+    // A rejected write is exactly as interesting as an accepted one when
+    // reconstructing what someone was trying to do.
+    await db('audit_logs').del();
+    const bad = await api('PUT', '/api/settings/vacation-quotas', adminToken, { quotas: [{ month: 77, limit: 1 }] });
+    expect(bad.status).toBe(400);
+    // Nothing was stored, so nothing is logged - the assertion here is that
+    // the table is not polluted with a success entry for a save that failed.
+    const rows = await db('audit_logs').where({ action: 'UPDATE_VACATION_QUOTAS' });
+    expect(rows).toHaveLength(0);
+  });
+});

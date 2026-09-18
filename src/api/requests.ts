@@ -227,6 +227,7 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
         'leave_requests',
         id,
         `Urgent leave requested for ${displayDate(booking.slot_date)} ${displayTime(booking.slot_start_time)}-${displayTime(booking.slot_end_time)}`,
+        req,
       );
 
       return res.status(201).json({ id });
@@ -321,6 +322,7 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
       'leave_requests',
       id,
       `${leaveType} leave requested for ${finalDate}${finalEndDate && finalEndDate !== finalDate ? ` - ${finalEndDate}` : ''}`,
+      req,
     );
 
     res.status(201).json({ id });
@@ -451,6 +453,7 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
       'leave_requests',
       id,
       `${status} ${request.type || 'hourly'} leave for ${request.user_name || 'deleted user'} (${displayDate(request.date)})`,
+      req,
     );
 
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });
@@ -544,6 +547,7 @@ router.post('/vacation', authenticate, authorize(['csr']), async (req: any, res)
       'vacation_requests',
       id,
       `Vacation requested ${finalStartDate} - ${finalEndDate}`,
+      req,
     );
 
     res.status(201).json({ id });
@@ -617,6 +621,7 @@ router.patch('/vacation/:id', authenticate, authorize(['admin', 'superadmin']), 
       'vacation_requests',
       id,
       `${status} vacation for ${request.user_name || 'deleted user'} (${displayDate(request.start_date)} - ${displayDate(request.end_date)})`,
+      req,
     );
 
     res.json({ message: 'Амжилттай шинэчлэгдлээ' });

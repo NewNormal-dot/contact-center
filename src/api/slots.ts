@@ -4,6 +4,7 @@ import db, { withDbRetry } from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDate, toSqlDateTime, toSqlTime, displayDate, displayTime } from '../utils/sqlDate';
 import { captureError } from '../utils/errorLog';
+import { isDuplicateKeyError } from '../utils/dbErrors';
 import { logAction } from './audit';
 import { columnExists } from '../database/schemaUtils';
 
@@ -754,8 +755,24 @@ router.post('/', authenticate, authorize(['admin', 'superadmin']), async (req: a
       location: finalLocation,
       is_rest: rest ? 1 : 0,
     });
+    await logAction(
+      (req as any).user?.id,
+      'CREATE_SLOT',
+      'work_slots',
+      id,
+      `${displayDate(sqlSlotDate)} ${rest ? 'Амралт' : `${displayTime(sqlStartTime)}-${displayTime(sqlEndTime)}`} ` +
+      `${finalSegment}/${finalEmploymentType}/${finalLocation} capacity=${finalCapacity}`,
+      req,
+    );
     res.status(201).json({ id });
   } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      // The unique index did its job. "This shift already exists" is an
+      // answer the admin can act on; a 500 is not.
+      return res.status(409).json({
+        error: 'Энэ ээлж аль хэдийн үүссэн байна (ижил өдөр, цаг, segment, ажлын төрөл, байршил).',
+      });
+    }
     console.error('Create slot error:', err);
     captureError('slots: Create slot error:', err);
     res.status(500).json({ error: 'Слот үүсгэхэд алдаа гарлаа' });
@@ -871,8 +888,35 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
               await trx('work_slots').where({ id: existing.id }).update(updateData);
               keptIds.add(String(existing.id));
             } else {
-              await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
-              keptIds.add(String(payload.id));
+              try {
+                await trx('work_slots').insert({ ...payload, created_at: trx.fn.now() });
+                keptIds.add(String(payload.id));
+              } catch (insertErr: any) {
+                // work_slots now carries a unique index on the shift's
+                // natural key. Another admin saving an overlapping schedule
+                // can therefore insert the same shift between our SELECT
+                // above and this INSERT. That is a race, not a conflict of
+                // intent - both sides want this shift to exist - so resolve
+                // it the way the non-racing path would: take their row and
+                // apply our update to it. Rethrowing would abort the entire
+                // transaction and lose an admin's whole save.
+                if (!isDuplicateKeyError(insertErr)) throw insertErr;
+                const raced = await trx('work_slots')
+                  .where({
+                    date: payload.date,
+                    start_time: payload.start_time,
+                    end_time: payload.end_time,
+                    segment: payload.segment,
+                    employment_type: payload.employment_type,
+                    location: payload.location,
+                    is_rest: payload.is_rest,
+                  })
+                  .first();
+                if (!raced) throw insertErr;
+                const { id: _raced, ...updateData } = payload;
+                await trx('work_slots').where({ id: raced.id }).update(updateData);
+                keptIds.add(String(raced.id));
+              }
             }
             synced += 1;
           } catch (slotErr: any) {
@@ -976,6 +1020,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
         `${syncScope?.location}/${syncScope?.segment}/${syncScope?.employmentType}: ` +
         `${deletedDescriptions.slice(0, 40).join(', ')}` +
         `${deletedDescriptions.length > 40 ? ` (+${deletedDescriptions.length - 40} more)` : ''}`,
+        req,
       );
     }
 
@@ -1007,12 +1052,38 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
 
 router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
   try {
+    // Read the shift and its bookings BEFORE destroying them. This endpoint
+    // deletes a shift, everyone booked onto it and any trade referencing it,
+    // and until now left nothing behind to say what was lost or who did it -
+    // which is precisely why the schedule-save data loss went unnoticed for
+    // so long.
+    const slot = await db('work_slots').where({ id: req.params.id }).first();
+    const victims = await db('slot_bookings')
+      .leftJoin('users', 'slot_bookings.user_id', 'users.id')
+      .where('slot_bookings.slot_id', req.params.id)
+      .andWhere('slot_bookings.status', 'confirmed')
+      .select('users.email as email', 'users.name as name');
+
     await db('trade_requests')
       .where({ sender_slot_id: req.params.id })
       .orWhere({ receiver_slot_id: req.params.id })
       .delete();
     await db('slot_bookings').where({ slot_id: req.params.id }).delete();
     await db('work_slots').where({ id: req.params.id }).delete();
+
+    await logAction(
+      (req as any).user?.id,
+      'DELETE_SLOT',
+      'work_slots',
+      req.params.id,
+      slot
+      ? `${displayDate(slot.date)} ${boolValue(slot.is_rest) ? 'Амралт' : `${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`} ` +
+      `${slot.segment}/${slot.employment_type}/${slot.location} | ` +
+      `${victims.length} booking(s) removed: ${victims.map((v: any) => v.email || v.name || '?').slice(0, 30).join(', ')}` +
+      `${victims.length > 30 ? ` (+${victims.length - 30} more)` : ''}`
+      : 'slot not found (already deleted)',
+      req,
+    );
     res.json({ message: 'Слот устгагдлаа' });
   } catch (err) {
     console.error('Delete slot error:', err);
@@ -1024,6 +1095,9 @@ router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (r
 router.delete('/:slotId/bookings/:userId', authenticate, authorize(['admin', 'superadmin']), async (req, res) => {
   const { slotId, userId } = req.params;
   try {
+    const target = await db('users').where({ id: userId }).first();
+    const slot = await db('work_slots').where({ id: slotId }).first();
+
     const deleted = await db('slot_bookings')
       .where({ slot_id: slotId, user_id: userId, status: 'confirmed' })
       .delete();
@@ -1032,6 +1106,17 @@ router.delete('/:slotId/bookings/:userId', authenticate, authorize(['admin', 'su
       return res.status(404).json({ error: 'Захиалга олдсонгүй' });
     }
 
+    // The CSR is not notified of this, so the audit entry is the only record
+    // that their shift was taken away rather than lost to a bug.
+    await logAction(
+      (req as any).user?.id,
+      'REMOVE_BOOKING',
+      'slot_bookings',
+      slotId,
+      `${target?.email || userId} removed from ` +
+      `${slot ? `${displayDate(slot.date)} ${displayTime(slot.start_time)}-${displayTime(slot.end_time)}` : slotId}`,
+      req,
+    );
     res.json({ message: 'Захиалга хасагдлаа' });
   } catch (err) {
     console.error('Remove booking error:', err);
@@ -1079,15 +1164,15 @@ const bookHandler = async (req: any, res: any) => {
     // their own segment. (Previously slot.segment === 'All' let ANY CSR
     // from ANY segment book it, which is not the intended business rule.)
     if (!segmentsMatch(slot.segment, user.segment)) {
-      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: segment mismatch (slot=${slot.segment}, user=${user.segment})`);
+      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: segment mismatch (slot=${slot.segment}, user=${user.segment})`, req);
       return res.status(403).json({ error: 'Өөр segment-ийн хуваарь сонгох боломжгүй' });
     }
     if (normalizeEmploymentType(slot.employment_type) !== normalizeEmploymentType(user.employment_type)) {
-      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: employment type mismatch (slot=${slot.employment_type}, user=${user.employment_type})`);
+      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: employment type mismatch (slot=${slot.employment_type}, user=${user.employment_type})`, req);
       return res.status(403).json({ error: 'Full/Part төрөл таарахгүй байна' });
     }
     if (normalizeLocation(slot.location) !== normalizeLocation(user.location)) {
-      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: location mismatch (slot=${slot.location}, user=${user.location})`);
+      await logAction(userId, 'BOOKING_REJECTED', 'work_slots', slot_id, `${user.email}: location mismatch (slot=${slot.location}, user=${user.location})`, req);
       return res.status(403).json({ error: 'Өөр байршлын (location) хуваарь сонгох боломжгүй' });
     }
 
@@ -1109,6 +1194,7 @@ const bookHandler = async (req: any, res: any) => {
         'work_slots',
         slot_id,
         `${user.email} (${user.segment || '-'}, ${user.employment_type || '-'}, ${user.location || '-'}): ${ruleError} | slot ${displayDate(slot.date)} ${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`,
+        req,
       );
       return res.status(400).json({ error: ruleError });
     }
@@ -1254,10 +1340,18 @@ const bookHandler = async (req: any, res: any) => {
       return res.status(bookingResult.status).json({ error: bookingResult.error });
     }
 
+    // Bookings and cancellations are the two events every "but I DID book
+    // it" dispute turns on, and neither left a trace. Only rejections were
+    // logged, so the record contained every failure and no success.
+    const slotLabel = `${displayDate(slot.date)} ` +
+      `${boolValue(slot.is_rest) ? 'Амралт' : `${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`}`;
+
     if ('edited' in bookingResult && bookingResult.edited) {
+      await logAction(userId, 'BOOKING_EDITED', 'slot_bookings', bookingResult.id, `${user.email}: ${slotLabel}`, req);
       return res.json({ id: bookingResult.id, edited: true });
     }
 
+    await logAction(userId, 'BOOKING_CREATED', 'slot_bookings', bookingResult.id, `${user.email}: ${slotLabel}`, req);
     res.status(201).json({ id: bookingResult.id });
   } catch (err) {
     console.error('Book slot error:', err);
@@ -1296,6 +1390,16 @@ const cancelHandler = async (req: any, res: any) => {
     if (!updated) {
       return res.status(404).json({ error: 'Захиалга олдсонгүй' });
     }
+    await logAction(
+      userId,
+      'BOOKING_CANCELLED',
+      'slot_bookings',
+      booking.id,
+      slot
+      ? `${displayDate(slot.date)} ${boolValue(slot.is_rest) ? 'Амралт' : `${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`}`
+      : booking.slot_id,
+      req,
+    );
     res.json({ message: 'Захиалга цуцлагдлаа' });
   } catch (err) {
     console.error('Cancel booking error:', err);

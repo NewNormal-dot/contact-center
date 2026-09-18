@@ -4,6 +4,7 @@ import db from '../database/db';
 import { authenticate, authorize } from '../middleware/auth';
 import { toSqlDateTime } from '../utils/sqlDate';
 import { logAction } from './audit';
+import { isDuplicateKeyError } from '../utils/dbErrors';
 import { captureError } from '../utils/errorLog';
 import { createThrottledTask } from '../utils/throttledTask';
 import { tableExists } from '../database/schemaUtils';
@@ -42,14 +43,6 @@ async function hasAttachmentTable() {
  * double-click or two open tabs raced and surfaced the violation as a bare
  * 500. The row already existing is the desired end state, so swallow it.
  */
-function isDuplicateKeyError(err: any): boolean {
-  const number = err?.number ?? err?.originalError?.info?.number;
-  if (number === 2627 || number === 2601) return true; // mssql PK / unique index
-  const code = String(err?.code || '');
-  if (code === 'SQLITE_CONSTRAINT' || code === '23505') return true; // sqlite / postgres
-  return /duplicate|unique constraint|primary key/i.test(String(err?.message || ''));
-}
-
 function textField(value: unknown, max: number) {
   const text = String(value ?? '').trim();
   return text.length > max ? null : text;
@@ -231,7 +224,7 @@ router.post('/notifications', authenticate, authorize(['admin', 'superadmin']), 
       related_entity_id: related_entity_id || relatedEntityId || null,
       author_id: req.user.id,
     });
-    await logAction(req.user.id, 'CREATE_NOTIFICATION', 'notifications', id, title);
+    await logAction(req.user.id, 'CREATE_NOTIFICATION', 'notifications', id, title, req);
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create notification error:', err);
@@ -257,7 +250,7 @@ router.delete('/notifications/:id', authenticate, authorize(['admin', 'superadmi
 
     await db('notification_read_receipts').where({ notification_id: id }).delete();
     await db('notifications').where({ id }).delete();
-    await logAction(req.user.id, 'DELETE_NOTIFICATION', 'notifications', id, `Notification deleted: ${existing.title}`);
+    await logAction(req.user.id, 'DELETE_NOTIFICATION', 'notifications', id, `Notification deleted: ${existing.title}`, req);
     res.json({ message: 'Мэдэгдэл устгагдлаа' });
   } catch (err) {
     console.error('Delete notification error:', err);
@@ -404,7 +397,7 @@ router.post('/trainings', authenticate, authorize(['admin', 'superadmin']), asyn
       await db('trainings').where({ id }).update({ attachment_url: attachment.inline });
     }
 
-    await logAction(req.user.id, 'CREATE_TRAINING', 'trainings', id, finalTitle);
+    await logAction(req.user.id, 'CREATE_TRAINING', 'trainings', id, finalTitle, req);
     res.status(201).json({ id });
   } catch (err) {
     console.error('Create training error:', err);
@@ -445,7 +438,7 @@ router.put('/trainings/:id', authenticate, authorize(['admin', 'superadmin']), a
     }
 
     await db('trainings').where({ id }).update(updates);
-    await logAction(req.user.id, 'UPDATE_TRAINING', 'trainings', id, updates.title || existing.title);
+    await logAction(req.user.id, 'UPDATE_TRAINING', 'trainings', id, updates.title || existing.title, req);
     res.json({ id });
   } catch (err) {
     console.error('Update training error:', err);
@@ -495,7 +488,7 @@ router.delete('/trainings/:id', authenticate, authorize(['admin', 'superadmin'])
       await db('training_attachments').where({ training_id: id }).delete();
     }
     await db('trainings').where({ id }).delete();
-    await logAction(req.user.id, 'DELETE_TRAINING', 'trainings', id, `Training deleted: ${existing.title}`);
+    await logAction(req.user.id, 'DELETE_TRAINING', 'trainings', id, `Training deleted: ${existing.title}`, req);
     res.json({ message: 'Сургалт устгагдлаа' });
   } catch (err) {
     console.error('Delete training error:', err);

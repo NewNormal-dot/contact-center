@@ -5,6 +5,7 @@ import { getRecentErrors } from '../utils/errorLog';
 import { captureError } from '../utils/errorLog';
 import { tableExists } from '../database/schemaUtils';
 import { invalidatePendingMigrationCount } from '../utils/migrationStatus';
+import { logAction } from './audit';
 
 const router = express.Router();
 
@@ -43,6 +44,19 @@ router.post('/run-migrations', authenticate, authorize(['superadmin']), async (r
     // migrations are still outstanding.
     invalidatePendingMigrationCount();
     console.log(`Manual migration trigger: batch ${batchNo}, ran: ${migrationsRun.join(', ') || '(none - already up to date)'}`);
+    // The single most consequential operation this app exposes - it changes
+    // the schema of the production database - and until now it left no trace
+    // anywhere except a console line that App Service discards on restart.
+    await logAction(
+      (req as any).user?.id,
+      'RUN_MIGRATIONS',
+      'database',
+      null,
+      migrationsRun.length > 0
+      ? `batch ${batchNo}: ${migrationsRun.join(', ')}`
+      : 'no-op (already up to date)',
+      req,
+    );
     res.json({
       success: true,
       batchNo,
@@ -54,6 +68,14 @@ router.post('/run-migrations', authenticate, authorize(['superadmin']), async (r
   } catch (err: any) {
     console.error('Manual migration trigger failed:', err);
     captureError('admin: Manual migration trigger failed:', err);
+    await logAction(
+      (req as any).user?.id,
+      'RUN_MIGRATIONS_FAILED',
+      'database',
+      null,
+      String(err?.message || err).slice(0, 500),
+      req,
+    ).catch(() => undefined);
     res.status(500).json({ error: err?.message || String(err) });
   }
 });
