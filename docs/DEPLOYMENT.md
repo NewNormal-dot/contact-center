@@ -177,14 +177,37 @@ the app writes nothing to disk: no `multer` disk storage, no
 failure mode as the one above. If they do not work, the app is left with no
 modules, and there is no slot to find that out on.
 
-**The real unblock is a deployment slot.** Basic tier has none. Standard (S1,
-~$58/month against B1's ~$12) provides one: every idea here could then be tried
-on the slot, verified, and swapped into production with no downtime and no
-guessing. That is a spending decision, not a technical one — worth making only
-if new npm dependencies actually become necessary.
+There are two ways out, and the cheaper one came up later than this section
+was first written.
+
+**A fresh App Service — free, same tier.** The frozen directory is a property
+of *this* instance, not of Basic tier or of Oryx. A newly created App Service
+has a `wwwroot` that has never been written to, so the deploy replaces
+`node_modules` normally. The database is a separate Azure resource, so no data
+moves and nobody re-registers; what has to be carried across is the
+configuration. Step by step: **`APP-SERVICE-MIGRATION.md`**.
+
+The catch is that it cannot be rehearsed either — but its failure mode is
+mild. The new app is verified on its own hostname *before* anyone is sent to
+it, and the old one keeps serving traffic throughout. If the new one turns out
+to have the same problem, nothing has moved.
+
+**A deployment slot — ~$58/month.** Basic tier has none. Standard (S1, against
+B1's ~$12) provides one: every idea here could then be tried on the slot,
+verified, and swapped into production with no downtime and no guessing. Buys a
+permanent safe place to test, not just a one-time escape.
+
+Note that a slot does not *fix* anything by itself. It makes the remaining
+candidates safe to try — they may still fail.
 
 Until then: the app runs fine, and the guardrails make sure a repeat cannot go
 unnoticed. Just do not add a dependency.
+
+One consequence worth stating plainly, because it is easy to miss: this blocks
+**upgrades** as well as additions. A security patch to a package already in
+`package.json` would be packaged, deployed, reported as successful — and never
+reach the running app, exactly as June's packages never stopped running. "No
+new dependencies" is a working rule, not a permanent one.
 
 ## Verifying it worked
 
