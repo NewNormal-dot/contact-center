@@ -39,39 +39,57 @@ untouched — it is a sign-in, not a re-registration.
 
 ## Before you start
 
-Three things can stop this migration. Check them first, not halfway through.
+Three things can stop this migration. **All three were checked on 2026-09-18**
+and the answers are recorded below, so they do not need repeating unless the
+Azure configuration changes.
 
-### 1. Azure SQL firewall — the most likely blocker
+### 1. Azure SQL firewall — ✅ no work needed
 
-The new App Service has **different outbound IP addresses**. If the SQL server
-only allows the old ones, the new app cannot connect and will fail on startup
-with a connection timeout.
+The new App Service has **different outbound IP addresses**, so a firewall
+that allows only the old ones would reject it, and the app would fail on
+startup with a connection timeout.
 
-In the Azure Portal, on the **SQL server** (not the database) →
-**Networking**:
+Checked on `contact-center-sql` → **Security → Networking**:
 
-- If **"Allow Azure services and resources to access this server"** is ON,
-  nothing to do.
-- If it is OFF and specific IPs are listed, add the new App Service's outbound
-  IPs (App Service → **Networking** → *Outbound addresses*) **before** the
-  cutover.
+```
+Public network access:  Selected networks
+Exceptions:             [x] Allow Azure services and resources to access this server
+```
 
-### 2. Do you have a custom domain?
+That exception is ON, and a new App Service is an Azure resource, so it
+connects with no firewall change at all.
 
-If users reach the app at a custom domain, that domain and its TLS certificate
-must be re-pointed, and that is the actual moment of cutover. If everyone uses
-the `*.azurewebsites.net` hostname, the new app simply has a different
-hostname and there is nothing to re-point — but see `CORS_ALLOWED_ORIGINS` and
-the webchat widget below.
+> Two things noticed while checking, both **out of scope for this migration**
+> and best left until after it has settled:
+>
+> - The eight App Service outbound IPs are listed **twice**, once as
+>   `AllowAppServiceOutbound1-8` and again as `app-out-<ip>`. With the Azure
+>   services exception on, both sets are redundant.
+> - Around ten `QueryEditorClientIPAddress_*` / `ClientIPAddress_*` rules have
+>   accumulated — personal addresses the Portal's Query Editor adds
+>   automatically each time someone uses it.
+>
+> Do not tidy these during the migration. If something breaks, you want one
+> variable changed, not two.
 
-### 3. Write down the current settings
+### 2. Custom domain — ✅ none
 
-Copy the existing app's **Environment variables** out to a file first. Azure
-hides secret values once saved, so collect them while you still can:
+Checked on the App Service → **Custom domains**: one entry, the default
+`contact-center-app-….azurewebsites.net`. No custom hostname is bound.
 
-App Service → **Settings → Environment variables → Advanced edit** gives you
-the whole set as JSON. Save it somewhere safe. This is your source of truth for
-step 3 and your rollback reference.
+That removes the DNS and certificate work, but it has a consequence: **the new
+app has a different URL, and everyone has to be told.** See step 7.
+
+It also means a custom domain (e.g. `workforce.mobicom.mn`) would have made
+this migration invisible to users, and every future one too. Worth considering
+separately — it does not change anything here.
+
+### 3. Current settings — ✅ exported
+
+App Service → **Settings → Environment variables → Advanced edit** gives the
+whole set as JSON. Azure hides secret values once saved, so this has to be
+collected before anything else. Done; keep it safe. It is the source of truth
+for step 3 and the rollback reference.
 
 ---
 
@@ -220,17 +238,43 @@ Service has the same problem, and nothing has moved yet.
 
 ### 7. Cut over
 
-- **Custom domain**: remove it from the old app, add it to the new one, bind
-  the TLS certificate. Brief interruption while DNS and the binding settle.
-- **No custom domain**: tell people the new URL, and update
-  `CORS_ALLOWED_ORIGINS`, `PUBLIC_APP_URL`, `APP_PUBLIC_URL` and
-  `VITE_PUBLIC_APP_URL` to it.
-- **The Agents.mn webchat widget**: if its dashboard restricts which domains
-  may embed it, add the new hostname there too, or the widget silently stops
-  loading.
+No custom domain is bound (pre-flight 2), so the new app has a **different
+URL** and the cutover is a communication exercise rather than a DNS one.
+
+**The four URL settings must now be CHANGED, not copied.** Step 3 says to copy
+them exactly; these four are the exception, because they all name the app's own
+address:
+
+```
+CORS_ALLOWED_ORIGINS     the browser is refused outright if this is wrong
+APP_PUBLIC_URL
+PUBLIC_APP_URL           links in invitation / password-reset emails
+VITE_PUBLIC_APP_URL
+```
+
+Set them to the new hostname. `CORS_ALLOWED_ORIGINS` is the one that breaks
+loudly and immediately; the two `*PUBLIC_APP_URL` pairs break quietly and
+later, when someone receives an invitation email pointing at the old app.
+
+`VITE_PUBLIC_APP_URL` is read at **build** time, not run time, so it only
+takes effect on the next deploy — set it before the final deploy, not after.
+
+**The Agents.mn webchat widget**: if its dashboard restricts which domains may
+embed it, add the new hostname there, or the widget silently stops loading on
+the new app. Nothing in this repo controls that.
+
+**Then tell people.** Everyone signs in at a new address and re-bookmarks.
+There is no redirect from the old hostname unless you build one, so it is worth
+sending the new link directly rather than expecting people to find it.
+
+If you would rather users never saw this: binding a custom domain (e.g.
+`workforce.mobicom.mn`) to the OLD app first, letting people move to it, and
+only then migrating, makes this step and every future one invisible. That is a
+larger change involving DNS, and it was considered and set aside — recorded
+here because the option does not expire.
 
 Leave the old App Service **stopped, not deleted**, for a week or two. Stopped
-costs nothing to keep as a rollback.
+costs nothing and keeps the rollback one click away.
 
 ---
 
