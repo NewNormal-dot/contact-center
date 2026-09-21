@@ -6453,16 +6453,6 @@ export default function AdminDashboard() {
         className={`bg-gray-900/95 lg:bg-gray-900/40 backdrop-blur-xl lg:border-r border-gray-800 lg:transition-all lg:duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} lg:max-h-none lg:h-screen relative z-50 shrink-0 ${mobileDrawerClasses(isMobileNavOpen)}`}
       >
         <MobileNavClose onClose={() => setIsMobileNavOpen(false)} />
-        <button
-          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          className="hidden lg:flex absolute right-2 top-28 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform border border-white/20"
-        >
-          {isSidebarCollapsed ? (
-            <ChevronRight size={14} />
-          ) : (
-            <ChevronLeft size={14} />
-          )}
-        </button>
         <div
           className={`p-6 border-b border-gray-800 flex items-center gap-4 bg-black/20 ${isSidebarCollapsed ? "lg:justify-center" : ""}`}
         >
@@ -6540,6 +6530,17 @@ export default function AdminDashboard() {
         </nav>
 
         <div className="p-4 mt-auto space-y-2 border-t border-gray-800 lg:border-t-0">
+          {/* Panel toggle as a row, not a circle floating over the profile. */}
+          <button
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            className={`hidden lg:flex w-full items-center gap-3 px-4 py-4 text-gray-500 hover:bg-gray-800 hover:text-white rounded-2xl transition-all ${isSidebarCollapsed ? "justify-center" : ""}`}
+            title={isSidebarCollapsed ? "Цэсийг дэлгэх" : "Цэсийг хураах"}
+          >
+            {isSidebarCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+            {!isSidebarCollapsed && (
+              <span className="text-sm font-bold">Хураах</span>
+            )}
+          </button>
           <button
             onClick={() => { setIsMobileNavOpen(false); setIsChangingPassword(true); }}
             className="w-full flex items-center gap-3 px-4 py-4 text-gray-400 hover:bg-gray-800 rounded-2xl transition-all"
