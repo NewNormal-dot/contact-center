@@ -328,22 +328,41 @@ jobs:
             --application-logging filesystem --docker-container-logging filesystem \
             --level verbose -o none
 
-      # The one difference the diagnostics actually found: the new app has an
-      # empty appCommandLine. Azure's Node image is supposed to fall back to
-      # package.json's start script, so this may well change nothing - but it
-      # is the only known difference, it costs one line, and it is reversible
-      # by clearing the field. Setting it in the workflow rather than the
-      # Portal keeps it recorded and repeatable.
+      # The new app had an empty appCommandLine; the old one has
+      #     bash -c 'cd /home/site/wwwroot && npx tsx server.ts'
+      # Neither that nor "npm start" can work here, because both reach tsx
+      # through node_modules/.bin/tsx - and on this app that shim is broken.
+      # The live container log said so exactly:
       #
-      # "npm start" rather than "tsx server.ts": npm resolves tsx from
-      # node_modules/.bin, which is what the package ships, instead of
-      # requiring it on PATH.
+      #   > tsx server.ts
+      #   Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+      #     '/node_modules/.bin/package-CeBgXWuR.mjs'
+      #     imported from /node_modules/.bin/tsx
+      #   Container exited with exit code 1
+      #
+      # .bin/tsx is a symlink to ../tsx/dist/cli.mjs. "zip -rq" in the build
+      # job follows symlinks and stores a COPY of the target at the link's
+      # path, so .bin/tsx arrives as a regular file whose relative imports
+      # then resolve against .bin/ instead of tsx/dist/ - and the sibling
+      # file it needs is not there.
+      #
+      # The old app never hit this because it ignores the node_modules the
+      # package ships entirely and runs June's frozen copy, which was made by
+      # a real npm install with real symlinks (docs/DEPLOYMENT.md). So the
+      # broken shim has been in every package for months and could only ever
+      # become visible on an App Service that actually uses what is shipped.
+      #
+      # Pointing the startup command straight at the real file skips .bin
+      # altogether. "zip -ryq" would fix the package itself, but whether the
+      # server-side extractor restores symlinks is not something this
+      # deployment can rehearse, and getting it wrong breaks production. That
+      # is recorded in docs/DEPLOYMENT.md as a separate decision.
       - name: Set an explicit startup command (new app only)
         continue-on-error: true
         run: |
           RG=$(az webapp list --query "[?name=='contact-center-web'].resourceGroup" -o tsv)
           az webapp config set --name contact-center-web --resource-group "$RG" \
-            --startup-file "npm start" -o none
+            --startup-file "bash -c 'cd /home/site/wwwroot && node node_modules/tsx/dist/cli.mjs server.ts'" -o none
           echo "appCommandLine is now:"
           az webapp config show --name contact-center-web --resource-group "$RG" \
             --query "appCommandLine" -o tsv

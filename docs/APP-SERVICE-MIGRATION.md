@@ -218,6 +218,24 @@ Check, in order:
 - **Look at a schedule.** Real shifts, real bookings — the same data as the
   old app, because it is the same database.
 
+### 5a. Set the startup command — the new app will not start without it
+
+Found the hard way over five runs on 2026-09-19/21. A newly created App
+Service has an empty `appCommandLine`, and the fallbacks Azure's Node image
+offers (`npm start`, and the old app's `npx tsx server.ts`) both reach `tsx`
+through `node_modules/.bin/tsx`, which the package ships broken. See **The
+package has shipped a broken node_modules all along** in `DEPLOYMENT.md`.
+
+Set it to the real file instead:
+
+```
+bash -c 'cd /home/site/wwwroot && node node_modules/tsx/dist/cli.mjs server.ts'
+```
+
+The workflow's `deploy-new` job now sets this on every run, so there is
+nothing to do by hand — it is recorded here because it explains why the
+obvious values do not work.
+
 ### 6. Prove the trap is gone
 
 This is the step that justifies the whole exercise. On a branch, add a small
