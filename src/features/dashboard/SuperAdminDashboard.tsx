@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MobileNavBar, MobileNavBackdrop, MobileNavClose, mobileDrawerClasses } from '../../components/MobileNavBar';
+import { SidebarNavItem } from '../../components/SidebarNavItem';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { LazyMedia } from '../../components/LazyMedia';
@@ -1667,38 +1668,19 @@ export default function SuperAdminDashboard() {
               { id: 'logs', label: 'Үйлдэлүүд', icon: FileText },
               { id: 'users', label: 'Хэрэглэгчид', icon: Users },
             ].map(item => (
-              <button
+              <SidebarNavItem
                 key={item.id}
+                active={activeTab === item.id}
+                icon={item.icon}
+                label={item.label}
+                badge={(item as any).badge}
+                collapsed={isSidebarCollapsed}
                 onClick={() => {
                   setActiveTab(item.id);
                   setIsMobileNavOpen(false);
                 }}
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-all ${
-                  activeTab === item.id 
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
-                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
-                } ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
-                title={isSidebarCollapsed ? item.label : ''}
-              >
-                <div className="flex items-center gap-3">
-                  <item.icon size={20} />
-                  {!isSidebarCollapsed && <span>{item.label}</span>}
-                </div>
-                {!isSidebarCollapsed && (item as any).badge !== undefined && (item as any).badge > 0 && (
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full min-w-[20px] text-center ${
-                    item.id === 'notifications' ? 'bg-red-500 text-white' : 'bg-purple-500 text-white'
-                  }`}>
-                    {(item as any).badge}
-                  </span>
-                )}
-                {isSidebarCollapsed && (item as any).badge !== undefined && (item as any).badge > 0 && (
-                  <span className={`absolute top-1 right-1 w-4 h-4 text-[8px] font-black flex items-center justify-center rounded-full border-2 border-[#0a0a0a] ${
-                    item.id === 'notifications' ? 'bg-red-500 text-white' : 'bg-purple-500 text-white'
-                  }`}>
-                    {(item as any).badge}
-                  </span>
-                )}
-              </button>
+                layoutGroup="superadmin-sidebar-active"
+              />
             ))}
             <div className="pt-4 mt-4 border-t border-gray-800">
             </div>

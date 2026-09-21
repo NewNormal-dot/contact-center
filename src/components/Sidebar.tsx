@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Home, Calendar, PlusCircle, Palmtree, Settings, LogOut, Bell, Camera, BookOpen, Sparkles, ChevronRight, ChevronLeft, Clock } from 'lucide-react';
 import { MobileNavBar, MobileNavBackdrop, MobileNavClose, mobileDrawerClasses } from './MobileNavBar';
+import { SidebarNavItem } from './SidebarNavItem';
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../contexts/AuthContext';
@@ -183,102 +184,68 @@ export default function Sidebar({
       <nav className="flex-1 p-4 space-y-2 lg:space-y-3 overflow-y-auto">
         {!isCollapsed && <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4 ml-2 mt-2">Үндсэн цэс</p>}
         
-        {/* Work Schedule - Refined */}
-        <button 
+        <SidebarNavItem
+          active={activeTab === 'schedule'}
+          icon={Calendar}
+          label="Ажлын хуваарь"
+          collapsed={isCollapsed}
           onClick={() => goToTab('schedule')}
-          className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all ${
-            activeTab === 'schedule' 
-              ? 'bg-blue-600/15 text-white border border-blue-500/30' 
-              : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
-          } ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Ажлын хуваарь' : ''}
-        >
-          <Calendar size={isCollapsed ? 20 : 22} className={activeTab === 'schedule' ? "text-blue-400" : ""} />
-          {!isCollapsed && <span className="text-lg font-black tracking-tight">Ажлын хуваарь</span>}
-        </button>
+          layoutGroup="sidebar-active-shared"
+        />
 
         {SHOW_VACATION_FEATURE && (
-          <button
+          <SidebarNavItem
+            active={activeTab === 'vacation'}
+            icon={Palmtree}
+            label="Ээлжийн амралт"
+            collapsed={isCollapsed}
             onClick={() => goToTab('vacation')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
-              activeTab === 'vacation'
-                ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20'
-                : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
-            } ${isCollapsed ? 'justify-center' : ''}`}
-            title={isCollapsed ? 'Ээлжийн амралт' : ''}
-          >
-            <Palmtree size={20} />
-            {!isCollapsed && <span>Ээлжийн амралт</span>}
-          </button>
+            layoutGroup="sidebar-active-shared"
+          />
         )}
 
-        <button 
+        <SidebarNavItem
+          active={activeTab === 'hourlyLeave'}
+          icon={Clock}
+          label="Чөлөө"
+          collapsed={isCollapsed}
           onClick={() => goToTab('hourlyLeave')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
-            activeTab === 'hourlyLeave' 
-              ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' 
-              : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
-          } ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Чөлөө' : ''}
-        >
-          <Clock size={20} />
-          {!isCollapsed && <span>Чөлөө</span>}
-        </button>
+          layoutGroup="sidebar-active-shared"
+        />
 
-        <button 
+        <SidebarNavItem
+          active={activeTab === 'notifications'}
+          icon={Bell}
+          label="Мэдэгдэл"
+          badge={unreadCount}
+          ringIcon
+          sparkle={unreadCount > 0}
+          collapsed={isCollapsed}
           onClick={() => goToTab('notifications')}
-          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-colors ${
-            activeTab === 'notifications' 
-              ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' 
-              : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
-          } ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Мэдэгдэл' : ''}
-        >
-          <div className="relative flex items-center gap-3">
-            <Bell size={20} className="animate-bell-ring" />
-            {!isCollapsed && <span>Мэдэгдэл</span>}
-            {!isCollapsed && unreadCount > 0 && (
-              <span className="sparkle-emoji">✨</span>
-            )}
-          </div>
-          {unreadCount > 0 && (
-            <span className={`bg-red-500 text-white text-[10px] font-black flex items-center justify-center rounded-full border-2 border-[#0a0a0a] ${isCollapsed ? 'w-4 h-4' : 'px-2 py-0.5 min-w-[20px] text-center'}`}>
-              {unreadCount}
-            </span>
-          )}
-        </button>
+          layoutGroup="sidebar-active-shared"
+        />
 
-        <button 
+        <SidebarNavItem
+          active={activeTab === 'training'}
+          icon={BookOpen}
+          label="Сургалт"
+          badge={unreadTrainingCount}
+          ringIcon={unreadTrainingCount > 0}
+          badgeColor="bg-purple-500"
+          collapsed={isCollapsed}
           onClick={() => goToTab('training')}
-          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-colors ${
-            activeTab === 'training' 
-              ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' 
-              : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
-          } ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Сургалт' : ''}
-        >
-          <div className="flex items-center gap-3">
-            <BookOpen size={20} className={unreadTrainingCount > 0 ? 'animate-bell-ring' : ''} />
-            {!isCollapsed && <span>Сургалт</span>}
-          </div>
-          {unreadTrainingCount > 0 && (
-            <span className={`bg-purple-500 text-white text-[10px] font-black flex items-center justify-center rounded-full border-2 border-[#0a0a0a] ${isCollapsed ? 'w-4 h-4' : 'px-2 py-0.5 min-w-[20px] text-center'}`}>
-              {unreadTrainingCount}
-            </span>
-          )}
-        </button>
+          layoutGroup="sidebar-active-shared"
+        />
 
         {(role === 'admin' || role === 'superadmin') && (
-          <button 
+          <SidebarNavItem
+            active={activeTab === 'forecast'}
+            icon={Sparkles}
+            label="Дуудлагын Forecast"
+            collapsed={isCollapsed}
             onClick={() => goToTab('forecast')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${
-              activeTab === 'forecast' ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
-            } ${isCollapsed ? 'justify-center' : ''}`}
-            title={isCollapsed ? 'Дуудлагын Forecast' : ''}
-          >
-            <Sparkles size={20} />
-            {!isCollapsed && <span>Дуудлагын Forecast</span>}
-          </button>
+            layoutGroup="sidebar-active-shared"
+          />
         )}
       </nav>
 
