@@ -6400,7 +6400,7 @@ export default function AdminDashboard() {
   }) => (
     <button
       onClick={() => setActiveTab(id)}
-      className={`w-full flex items-center gap-3 px-3 sm:px-4 py-3 lg:py-4 rounded-2xl transition-all relative group ${activeTab === id ? "bg-blue-600/10 text-blue-400 border border-blue-500/20 shadow-xl shadow-blue-500/5" : "text-gray-500 hover:text-gray-200 hover:bg-white/5 border border-transparent"}`}
+      className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-3 sm:px-4 py-3 lg:py-4 rounded-2xl transition-all relative group ${activeTab === id ? "bg-blue-600/10 text-blue-400 border border-blue-500/20 shadow-xl shadow-blue-500/5" : "text-gray-500 hover:text-gray-200 hover:bg-white/5 border border-transparent"}`}
     >
       <div
         className={`p-2 rounded-xl transition-colors ${activeTab === id ? "bg-blue-600 text-white shadow-lg shadow-blue-500/40" : "bg-gray-800/50 group-hover:bg-gray-800"}`}
@@ -6436,7 +6436,7 @@ export default function AdminDashboard() {
     <div className="flex min-h-screen flex-col lg:h-screen lg:flex-row lg:overflow-hidden bg-[#0a0a0a] text-gray-100 font-sans overflow-x-hidden">
       {/* Sidebar */}
       <aside
-        className={`bg-gray-900/40 backdrop-blur-xl border-b lg:border-b-0 lg:border-r border-gray-800 transition-all duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} w-full max-h-[46vh] lg:max-h-none lg:h-screen relative z-50 shrink-0`}
+        className={`bg-gray-900/40 backdrop-blur-xl border-b lg:border-b-0 lg:border-r border-gray-800 transition-all duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} w-full lg:max-h-none lg:h-screen relative z-50 shrink-0 max-lg:sticky max-lg:top-0`}
       >
         <button
           onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
@@ -6449,7 +6449,7 @@ export default function AdminDashboard() {
           )}
         </button>
         <div
-          className={`p-4 sm:p-6 border-b border-gray-800 flex items-center gap-4 bg-black/20 ${isSidebarCollapsed ? "lg:justify-center" : ""}`}
+          className={`p-3 sm:p-6 border-b border-gray-800 flex items-center gap-3 sm:gap-4 bg-black/20 ${isSidebarCollapsed ? "lg:justify-center" : ""}`}
         >
           <div
             className="relative group cursor-pointer"
@@ -6498,7 +6498,7 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        <nav className="flex-1 px-3 sm:px-6 space-y-2 lg:space-y-3 overflow-y-auto custom-scrollbar py-3 lg:pt-8">
+        <nav className="flex-1 px-3 sm:px-6 space-y-0 lg:space-y-3 overflow-y-auto custom-scrollbar py-3 lg:pt-8 flex gap-2 overflow-x-auto lg:block lg:gap-0 lg:overflow-x-visible">
           <SidebarItem id="users" icon={Users} label="Ажилтны удирдлага" />
           <SidebarItem
             id="schedule"
@@ -6524,10 +6524,10 @@ export default function AdminDashboard() {
           <SidebarItem id="training" icon={BookOpen} label="Сургалт" />
         </nav>
 
-        <div className="p-4 mt-auto space-y-2">
+        <div className="p-3 lg:p-4 mt-auto space-y-0 lg:space-y-2 flex gap-2 lg:block border-t border-gray-800 lg:border-t-0">
           <button
             onClick={() => setIsChangingPassword(true)}
-            className="w-full flex items-center gap-3 px-4 py-4 text-gray-400 hover:bg-gray-800 rounded-2xl transition-all"
+            className="w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 lg:py-4 text-gray-400 hover:bg-gray-800 rounded-2xl transition-all"
           >
             <Settings size={20} />
             {!isSidebarCollapsed && (
@@ -6536,7 +6536,7 @@ export default function AdminDashboard() {
           </button>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-4 text-red-500 hover:bg-red-500/10 rounded-2xl transition-all"
+            className="w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 lg:py-4 text-red-500 hover:bg-red-500/10 rounded-2xl transition-all"
           >
             <LogOut size={20} />
             {!isSidebarCollapsed && (
