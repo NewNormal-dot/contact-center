@@ -238,21 +238,32 @@ obvious values do not work.
 
 ### 6. Prove the trap is gone
 
-This is the step that justifies the whole exercise. On a branch, add a small
-runtime dependency that is currently blocked:
+This is the step that justifies the whole exercise, and it is now automatic.
 
-```bash
-npm install compression
+`compression` is a real dependency in `package.json` — the same package whose
+addition took production down on 2026-09-16. Nothing imports it at startup.
+Instead `src/utils/dependencyProbe.ts` tries to load it at request time,
+inside a try, caches the answer, and `/api/health` reports it:
+
+```json
+"dependency": { "package": "compression", "loaded": true, "error": null }
 ```
 
-Import it in `server.ts`, deploy to the new app, and check `/api/health` still
-answers. If it does, `wwwroot/node_modules` is being replaced properly and the
-freeze is over.
+Read it on each app:
 
-Revert the commit afterwards unless you actually want the package.
+| `loaded` | Means |
+|---|---|
+| `true` | the instance runs the `node_modules` the deploy shipped — **the trap is gone** |
+| `false` | the instance runs its own frozen copy — the trap is still there |
 
-Do this **before** the cutover. If it fails, you have learned that the new App
-Service has the same problem, and nothing has moved yet.
+Expect `false` on the old app and `true` on the new one. Both are correct
+answers for their app, and neither can break anything: a failed import is
+caught and reported, never thrown. That is what makes it safe to ship to
+production and the new app from a single build, which the previous approach —
+importing it at the top of `server.ts` — was not.
+
+Once the old App Service is retired, delete `dependencyProbe.ts`, its tests,
+the `dependency` field, and the dependency itself. It has no other purpose.
 
 ### 7. Cut over
 
