@@ -20,7 +20,6 @@ import settingsRoutes from "./src/api/settings";
 import db from "./src/database/db";
 import { captureError } from "./src/utils/errorLog";
 import { getPendingMigrationCount } from "./src/utils/migrationStatus";
-import { probeShippedDependency } from "./src/utils/dependencyProbe";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -265,10 +264,6 @@ async function startServer() {
     // startup: an operator who has just applied the migrations needs to see
     // that reflected, not be told they are still pending.
     const pending = await getPendingMigrationCount();
-    // Whether this instance can load a package the deploy shipped. See
-    // src/utils/dependencyProbe.ts - it answers the one question the App
-    // Service migration exists to answer, and cannot throw.
-    const dependency = await probeShippedDependency();
     res.json({
       status: "ok",
       timestamp: new Date().toISOString(),
@@ -288,7 +283,6 @@ async function startServer() {
         pending,
         error: process.env.NODE_ENV === "production" ? undefined : migrationError,
       },
-      dependency,
     });
   });
 

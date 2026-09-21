@@ -38,7 +38,9 @@ old app: "dependency": { "loaded": false, "error": "ERR_MODULE_NOT_FOUND" }
 new app: "dependency": { "loaded": true,  "error": null }
 ```
 
-for a package nothing imports. The old App Service was stopped that day.
+for a package nothing imports. The old App Service was stopped that day, and
+the probe removed once its answer was recorded in
+`APP-SERVICE-MIGRATION.md`.
 
 ### Still true, and still worth knowing
 
