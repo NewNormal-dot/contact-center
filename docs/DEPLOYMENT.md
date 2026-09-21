@@ -167,6 +167,69 @@ only thing that has ever mattered.
 If you try this anyway, recovery is `mkdir /home/site/wwwroot/_del_node_modules`
 over SSH plus a restart — about two minutes.
 
+## The package has shipped a broken node_modules all along
+
+Found on 2026-09-21, from the new App Service's own container log — the first
+place this could ever have shown up.
+
+```
+> tsx server.ts
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+  '/node_modules/.bin/package-CeBgXWuR.mjs'
+  imported from /node_modules/.bin/tsx
+Container exited with exit code 1 during startup
+```
+
+`node_modules/.bin/tsx` is a symlink to `../tsx/dist/cli.mjs`. The build job
+packages with:
+
+```sh
+zip -rq ../release.zip .
+```
+
+**`zip` follows symlinks unless told not to.** Without `-y` it stores a *copy*
+of the target at the link's path, so `.bin/tsx` arrives as a regular file. Its
+relative imports then resolve against `.bin/` instead of `tsx/dist/`, and the
+sibling file it needs is not there. Reproduced locally:
+
+```
+zip -rq   →  .bin/tsx is a regular copy of cli.mjs     (broken)
+zip -ryq  →  .bin/tsx -> ../tsx/dist/cli.mjs           (correct)
+```
+
+### Why nobody noticed for months
+
+The old App Service **ignores the `node_modules` the package ships** and runs
+June's frozen copy, which a real `npm install` created with real symlinks. So
+the broken shim has been in every release since the workflow was written, and
+could only ever become visible on an App Service that actually uses what is
+shipped — which is precisely what the new one does.
+
+The two problems are the same coin. The frozen directory hid the packaging
+bug; removing the frozen directory exposed it.
+
+### What was done, and what was not
+
+**Done:** the new app's startup command points straight at the real file,
+skipping `.bin` entirely:
+
+```
+bash -c 'cd /home/site/wwwroot && node node_modules/tsx/dist/cli.mjs server.ts'
+```
+
+Only `.bin` entries are symlinks in an npm install, and Node's module
+resolution never consults `.bin` — so nothing else in the package depends on
+the symlinks surviving. Bypassing the shim is sufficient, not a workaround
+that leaves a hole.
+
+**Deliberately not done:** adding `-y` to the `zip` call. It is the honest
+fix, but it changes the package that **production** receives, and whether the
+server-side extractor restores symlinks cannot be rehearsed here — there is no
+slot. If it does not, the affected entries arrive missing rather than wrong,
+which is worse. Revisit once the new app has served real traffic: at that
+point the old app is the one that can be broken safely, not the other way
+round.
+
 ## Where this leaves things
 
 Every avenue reachable from the repo has been tried or ruled out. The two that
