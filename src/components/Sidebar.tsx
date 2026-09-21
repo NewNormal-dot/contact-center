@@ -124,7 +124,7 @@ export default function Sidebar({
       <MobileNavClose onClose={() => setIsMobileNavOpen(false)} />
       <button 
         onClick={() => setIsCollapsed?.(!isCollapsed)}
-        className="hidden lg:flex absolute right-2 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform"
+        className="hidden lg:flex absolute right-2 top-28 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform"
       >
         {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>

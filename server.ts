@@ -171,32 +171,28 @@ async function startServer() {
       useDefaults: true,
       directives: {
         defaultSrc: ["'self'"],
-        // No inline scripts: the theme bootstrap and the Agents.mn webchat
-        // loader were moved out of index.html into public/*.js precisely so
-        // this can stay free of 'unsafe-inline'.
-        scriptSrc: ["'self'", 'https://chat.agents.mn'],
-        // Three origins, three different reasons:
+        // No inline scripts: the theme bootstrap was moved out of index.html
+        // into public/theme-init.js precisely so this can stay free of
+        // 'unsafe-inline'.
+        scriptSrc: ["'self'"],
+        // Two reasons for the two entries:
         //   'unsafe-inline' - Tailwind and motion write inline styles.
-        //   chat.agents.mn  - the widget loads its own webchat-styles.css.
         //   fonts.googleapis.com - src/index.css line 1 is
         //     @import url('https://fonts.googleapis.com/css2?family=Inter...&family=Outfit...')
-        //     i.e. the app's OWN typography. Omitting it did not just break
-        //     the widget: every page fell back to a system sans-serif, the
-        //     WORKFORCE wordmark included.
-        styleSrc: ["'self'", "'unsafe-inline'", 'https://chat.agents.mn', 'https://fonts.googleapis.com'],
-        // agents.mn (no chat. prefix) is a separate origin and needs listing
-        // separately - the widget's own logo is served from
-        // https://agents.mn/m/core/pub/files/agent-logos/<id>.png, which is
-        // why the launcher rendered a bare "Logo" placeholder.
-        imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://api.dicebear.com', 'https://chat.agents.mn', 'https://agents.mn'],
-        // Same origin, same reason - notification sounds would be blocked.
-        mediaSrc: ["'self'", 'data:', 'blob:', 'https://chat.agents.mn'],
+        //     i.e. the app's OWN typography. Omitting it makes every page
+        //     fall back to a system sans-serif, the WORKFORCE wordmark
+        //     included.
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        // ui-avatars and dicebear generate the placeholder avatars used where
+        // someone has not uploaded a photo.
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://api.dicebear.com'],
+        mediaSrc: ["'self'", 'data:', 'blob:'],
         // googleapis.com serves the @font-face rules; the .woff2 files they
         // point at come from gstatic.com. Allowing only the first would let
         // the stylesheet load and still leave the fonts blocked.
-        fontSrc: ["'self'", 'data:', 'https://chat.agents.mn', 'https://fonts.gstatic.com'],
-        connectSrc: ["'self'", 'https://chat.agents.mn', 'wss://chat.agents.mn'],
-        frameSrc: ["'self'", 'https://chat.agents.mn'],
+        fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+        connectSrc: ["'self'"],
+        frameSrc: ["'self'"],
         objectSrc: ["'none'"],
         frameAncestors: ["'self'"],
         // Helmet enables this by default. It is right in production (the app
