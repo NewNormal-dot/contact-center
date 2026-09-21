@@ -2539,7 +2539,7 @@ export default function CsrDashboard() {
             {activeTab === 'schedule' ? 'Ажлын хуваарь' : SHOW_VACATION_FEATURE && activeTab === 'vacation' ? 'Ээлжийн амралт' : activeTab === 'hourlyLeave' ? 'Чөлөө' : activeTab === 'training' ? 'Сургалт' : 'Мэдэгдэл'}
           </h1>
           
-          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-4">
+          <div className="flex items-center justify-end gap-2 sm:gap-4 ml-auto">
             {activeTab === 'schedule' && (
               <div className="relative">
                 <button 
@@ -2624,7 +2624,9 @@ export default function CsrDashboard() {
                 </AnimatePresence>
               </div>
             )}
+          </div>
 
+          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-end">
             <DigitalClock months={ENG_MONTHS} weekdays={['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']} />
 
             <button 
