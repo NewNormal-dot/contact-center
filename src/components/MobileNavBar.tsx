@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { Menu, X } from 'lucide-react';
 
 /**
@@ -23,6 +23,10 @@ export function mobileDrawerClasses(open: boolean) {
   return [
     'max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-[100]',
     'max-lg:w-[85vw] max-lg:max-w-[320px] max-lg:shadow-2xl',
+    // The desktop collapse chevron is absolutely positioned at -right-3, and
+    // any such overhang turns the drawer into a sideways-scrolling box with a
+    // scrollbar along the bottom. Clip it instead.
+    'max-lg:overflow-x-hidden',
     'max-lg:transition-transform max-lg:duration-300 max-lg:ease-out',
     open ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full',
   ].join(' ');
@@ -66,12 +70,16 @@ export function MobileNavBar({
   photoUrl,
   initials,
   onOpen,
+  actions,
 }: {
   name: string;
   subtitle?: string;
   photoUrl?: string;
   initials?: string;
   onOpen: () => void;
+  /** Rendered to the right of the hamburger - the notification bell, so it is
+   *  reachable without opening the drawer first. */
+  actions?: React.ReactNode;
 }) {
   return (
     <div className="lg:hidden sticky top-0 z-[90] flex items-center gap-3 px-4 h-16 bg-gray-900/95 backdrop-blur-xl border-b border-gray-800">
@@ -96,10 +104,12 @@ export function MobileNavBar({
       <button
         onClick={onOpen}
         aria-label="Цэс нээх"
-        className="w-11 h-11 -mr-2 shrink-0 flex items-center justify-center rounded-xl text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
+        className="w-11 h-11 shrink-0 flex items-center justify-center rounded-xl text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
       >
         <Menu size={24} />
       </button>
+
+      {actions && <div className="shrink-0 flex items-center -mr-1">{actions}</div>}
     </div>
   );
 }
@@ -110,7 +120,7 @@ export function MobileNavClose({ onClose }: { onClose: () => void }) {
     <button
       onClick={onClose}
       aria-label="Цэс хаах"
-      className="lg:hidden absolute top-3 right-3 z-10 w-10 h-10 flex items-center justify-center rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+      className="lg:hidden absolute top-3 right-3 z-20 w-10 h-10 flex items-center justify-center rounded-xl bg-gray-800/80 text-gray-300 hover:text-white hover:bg-gray-700 transition-colors"
     >
       <X size={22} />
     </button>
