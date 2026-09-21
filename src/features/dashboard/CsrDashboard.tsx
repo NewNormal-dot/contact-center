@@ -1445,13 +1445,8 @@ export default function CsrDashboard() {
     const timer = setTimeout(() => {
       const container = document.getElementById('schedule-container');
       const yesterdayRow = document.getElementById('yesterday-row');
-      if (!yesterdayRow) return;
-      // Below lg the list is not a scroll container - the page is - so
-      // setting scrollTop on it would silently do nothing.
-      if (container && container.scrollHeight > container.clientHeight + 1) {
+      if (container && yesterdayRow) {
         container.scrollTop = yesterdayRow.offsetTop;
-      } else {
-        yesterdayRow.scrollIntoView({ block: 'start' });
       }
     }, 200);
     return () => clearTimeout(timer);
@@ -1749,8 +1744,8 @@ export default function CsrDashboard() {
     };
 
     return (
-      <div className="w-full space-y-4 lg:flex lg:flex-col lg:flex-1 lg:min-h-0">
-        <div className="relative lg:shrink-0">
+      <div className="w-full space-y-4">
+        <div className="relative">
           <div className="bg-gray-900/40 border border-gray-800 p-4 md:p-5 rounded-2xl backdrop-blur-md space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5">
@@ -1857,7 +1852,7 @@ export default function CsrDashboard() {
 
         <div 
           id="schedule-container"
-          className="relative grid grid-cols-1 gap-3 lg:flex-1 lg:min-h-0 lg:overflow-y-auto pr-2 custom-scrollbar scroll-smooth"
+          className="relative grid grid-cols-1 gap-3 max-h-[calc(100vh-320px)] overflow-y-auto pr-2 custom-scrollbar scroll-smooth"
         >
           {displayDays.map(({ date, isToday, isTomorrow, isYesterday, isPast }, idx) => {
             const dateKey = formatDateKey(date);
@@ -2646,7 +2641,7 @@ export default function CsrDashboard() {
           </div>
         </header>
 
-        <div className="flex-1 p-4 sm:p-8 overflow-y-auto lg:overflow-hidden lg:flex lg:flex-col lg:min-h-0">
+        <div className="flex-1 p-4 sm:p-8 overflow-y-auto">
           {activeTab === 'schedule' && renderScheduleView()}
           {activeTab === 'notifications' && renderNotificationsView()}
           {SHOW_VACATION_FEATURE && activeTab === 'vacation' && renderVacationView()}
