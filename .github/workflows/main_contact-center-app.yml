@@ -396,9 +396,27 @@ jobs:
           RG=$(az webapp list --query "[?name=='contact-center-web'].resourceGroup" -o tsv)
 
           echo "=============== 1. Runtime and startup command ==============="
+          echo "--- NEW app (contact-center-web) ---"
           az webapp config show --name contact-center-web --resource-group "$RG" \
             --query "{linuxFxVersion:linuxFxVersion, appCommandLine:appCommandLine, alwaysOn:alwaysOn}" \
             -o yaml || true
+
+          # The old app runs this exact package and has done for months, so its
+          # configuration is the answer key. The first diagnostic run showed the
+          # new app with appCommandLine: '' - an empty startup command - which
+          # only means something next to whatever the working app has.
+          echo "--- OLD app (contact-center-app), the one that works ---"
+          OLD_RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
+          az webapp config show --name contact-center-app --resource-group "$OLD_RG" \
+            --query "{linuxFxVersion:linuxFxVersion, appCommandLine:appCommandLine, alwaysOn:alwaysOn}" \
+            -o yaml || true
+
+          echo "--- settings the OLD app has that the NEW one does not ---"
+          az webapp config appsettings list --name contact-center-app --resource-group "$OLD_RG" \
+            --query "[].name" -o tsv 2>/dev/null | sort > /tmp/old-names.txt || true
+          az webapp config appsettings list --name contact-center-web --resource-group "$RG" \
+            --query "[].name" -o tsv 2>/dev/null | sort > /tmp/new-names.txt || true
+          comm -23 /tmp/old-names.txt /tmp/new-names.txt || true
 
           echo
           echo "=============== 2. Build-related settings ===================="
@@ -412,7 +430,29 @@ jobs:
             | tail -c 16000 || echo "(no deployment log)"
 
           echo
-          echo "=============== 4. Container log (the crash) ================="
+          # Streaming beats downloading. The download returned nothing at all
+          # on the first diagnostic run - filesystem logging had been on for
+          # minutes, not hours, and the archive was empty. Tailing the docker
+          # provider reads the live stream instead, and restarting the app
+          # underneath the tail guarantees a fresh boot lands in it. The
+          # download stays as a fallback in case the tail is not permitted.
+          echo "=============== 4. Container log, live (the crash) =========="
+          rm -f /tmp/tail.log
+          ( az webapp log tail --name contact-center-web --resource-group "$RG" \
+              --provider docker > /tmp/tail.log 2>&1 & echo $! > /tmp/tail.pid ) || true
+          sleep 8
+          echo "(restarting the app so a fresh startup lands in the stream)"
+          az webapp restart --name contact-center-web --resource-group "$RG" -o none || true
+          sleep 110
+          [ -f /tmp/tail.pid ] && kill "$(cat /tmp/tail.pid)" 2>/dev/null || true
+          if [ -s /tmp/tail.log ]; then
+            tail -n 250 /tmp/tail.log
+          else
+            echo "(the live stream produced nothing)"
+          fi
+
+          echo
+          echo "=============== 5. Container log, downloaded (fallback) ====="
           rm -rf /tmp/applog.zip /tmp/applog
           if az webapp log download --name contact-center-web --resource-group "$RG" \
                --log-file /tmp/applog.zip >/dev/null 2>&1 && [ -s /tmp/applog.zip ]; then
