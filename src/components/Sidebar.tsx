@@ -120,11 +120,11 @@ export default function Sidebar({
     />
     <MobileNavBackdrop open={isMobileNavOpen} onClose={() => setIsMobileNavOpen(false)} />
 
-    <aside className={`${isCollapsed ? 'lg:w-20' : 'lg:w-72'} lg:h-screen bg-gray-900/95 backdrop-blur-xl lg:border-r border-gray-800 flex flex-col shadow-2xl z-50 lg:transition-all lg:duration-300 relative overflow-y-auto ${mobileDrawerClasses(isMobileNavOpen)}`}>
+    <aside className={`${isCollapsed ? 'lg:w-20' : 'lg:w-72'} lg:h-screen bg-gray-900/95 backdrop-blur-xl lg:border-r border-gray-800 flex flex-col shadow-2xl z-50 lg:transition-all lg:duration-300 relative ${mobileDrawerClasses(isMobileNavOpen)}`}>
       <MobileNavClose onClose={() => setIsMobileNavOpen(false)} />
       <button 
         onClick={() => setIsCollapsed?.(!isCollapsed)}
-        className="hidden lg:flex absolute -right-3 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform"
+        className="hidden lg:flex absolute right-2 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform"
       >
         {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>

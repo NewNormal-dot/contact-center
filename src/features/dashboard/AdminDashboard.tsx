@@ -6450,12 +6450,12 @@ export default function AdminDashboard() {
 
       {/* Sidebar */}
       <aside
-        className={`bg-gray-900/95 lg:bg-gray-900/40 backdrop-blur-xl lg:border-r border-gray-800 lg:transition-all lg:duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} lg:max-h-none lg:h-screen relative z-50 shrink-0 overflow-y-auto ${mobileDrawerClasses(isMobileNavOpen)}`}
+        className={`bg-gray-900/95 lg:bg-gray-900/40 backdrop-blur-xl lg:border-r border-gray-800 lg:transition-all lg:duration-500 flex flex-col ${isSidebarCollapsed ? "lg:w-24" : "lg:w-80"} lg:max-h-none lg:h-screen relative z-50 shrink-0 ${mobileDrawerClasses(isMobileNavOpen)}`}
       >
         <MobileNavClose onClose={() => setIsMobileNavOpen(false)} />
         <button
           onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          className="hidden lg:flex absolute -right-3 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform border border-white/20"
+          className="hidden lg:flex absolute right-2 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform border border-white/20"
         >
           {isSidebarCollapsed ? (
             <ChevronRight size={14} />
