@@ -5,22 +5,53 @@ deployed — and **always** before adding an npm dependency.
 
 ## The short version
 
-**This app cannot currently take on a new runtime npm dependency.** Adding one
-passes CI, deploys "successfully", and then takes the site down with a 503,
-because the instance ignores the `node_modules` this workflow ships and runs a
-copy frozen at 2026-06-07. That happened on 2026-09-16; the site was down for
+**This is now resolved.** Since 2026-09-21 the app runs on `contact-center-web`,
+a fresh App Service, and dependencies can be added normally again.
+
+The rest of this file is the record of how it got there. It is kept because
+the failure was silent, expensive and easy to recreate, and because the
+packaging bug it uncovered is still latent.
+
+### What was wrong
+
+**The app could not take on a new runtime npm dependency.** Adding one passed
+CI, deployed "successfully", and then took the site down with a 503, because
+the instance ignored the `node_modules` the workflow ships and ran a copy
+frozen at 2026-06-07. That happened on 2026-09-16; the site was down for
 roughly two hours.
 
-Four fixes have been attempted or evaluated and none worked. Read
+Four fixes were attempted or evaluated and none worked — see
 [Three things that did NOT work](#three-things-that-did-not-work) and
-[the last candidate](#4-the-last-candidate--checked-and-ruled-out) before
-spending a deploy on a fifth idea — and see
-[Where this leaves things](#where-this-leaves-things) for what would actually
-unblock it.
+[the last candidate](#4-the-last-candidate--checked-and-ruled-out).
 
-Two guardrails are in place so this can no longer be silent: the workflow warns
-on any `dependencies` change, and fails the run if the app does not answer
-`/api/health` after a deploy.
+### How it was fixed
+
+A **new App Service**, whose `wwwroot` had never been written to. The runbook
+is `APP-SERVICE-MIGRATION.md`; it took five failed deploys and the answer was
+never where it was first looked for.
+
+Proven, not assumed: one build deployed to both apps, and `/api/health`
+reported
+
+```
+old app: "dependency": { "loaded": false, "error": "ERR_MODULE_NOT_FOUND" }
+new app: "dependency": { "loaded": true,  "error": null }
+```
+
+for a package nothing imports. The old App Service was stopped that day.
+
+### Still true, and still worth knowing
+
+- **`zip -rq` in the build job dereferences symlinks**, so
+  `node_modules/.bin/*` ships as copies rather than links and every route
+  through `.bin` is broken. `startup.sh` avoids `.bin` entirely. Adding `-y`
+  is the real fix and has not been done — see
+  [the section on it](#the-package-has-shipped-a-broken-node_modules-all-along).
+- **`appCommandLine` loses quoting.** Keep it to one word-splitting-safe
+  command; the logic belongs in `startup.sh`.
+- Both guardrails stay: the workflow warns on any `dependencies` change, and
+  fails the run if the app does not answer `/api/health` afterwards. They are
+  what made this diagnosable at all.
 
 ## How the app is deployed
 

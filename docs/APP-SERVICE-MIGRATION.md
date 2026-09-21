@@ -1,13 +1,42 @@
 # Moving to a fresh App Service
 
-A runbook for replacing `contact-center-app` with a newly created App Service,
-to escape the frozen `wwwroot/node_modules` described in `DEPLOYMENT.md`.
+**Done, 2026-09-21.** `contact-center-web` is production; `contact-center-app`
+is stopped, not deleted.
 
-Same tier (Basic B1), same cost. The point is not more resources — it is a
-`wwwroot` that has never been written to, so the deploy actually replaces
-`node_modules` instead of leaving June's copy in place.
+This ran as a runbook and is kept as a record. The steps below are what was
+actually done, in order, with what each one cost. If a third App Service is
+ever needed, start at **5a** and **6** — those are the two that were not
+obvious and took five failed deploys between them.
 
-Do this at a quiet hour. It is reversible until the final step.
+### What it took
+
+| | |
+|---|---|
+| Deploys before the new app started | **5** |
+| Cause of failure 1-3 | guessing instead of reading the container log |
+| Cause of failure 4 | `appCommandLine` silently loses quoting |
+| Cause of failure 5 | the app raced Oryx's `node_modules` extraction |
+| Actual root cause | `zip -rq` ships `node_modules/.bin/*` as copies, not symlinks |
+| Production downtime | **none** |
+
+The single most useful change was making CI print the container's own log on
+failure. Every attempt before that was a guess; the first attempt after it
+produced the answer.
+
+### Cleanup still outstanding
+
+- [ ] Delete `src/utils/dependencyProbe.ts`, its three tests, the `dependency`
+      field in `/api/health`, and the `compression` dependency. They exist only
+      to answer a question that is now answered.
+- [ ] Remove `SEED_SUPERADMIN_EMAIL` / `SEED_SUPERADMIN_PASSWORD` from the old
+      App Service and change that account's password. They are not on the new
+      app, and `src/database/seeds/initial_user.ts` runs `knex('users').del()`.
+- [ ] Tidy the duplicated `AllowAppServiceOutbound*` / `app-out-*` firewall
+      rules and the accumulated `QueryEditorClientIPAddress_*` ones.
+- [ ] Consider a custom domain, so the next migration is invisible to users.
+- [ ] Consider `zip -ryq` in the build job — see `DEPLOYMENT.md`. Now that the
+      old app is the expendable one, this is finally safe to test.
+- [ ] Delete the old App Service, once a week or two has passed without regret.
 
 ---
 
@@ -265,70 +294,61 @@ importing it at the top of `server.ts` — was not.
 Once the old App Service is retired, delete `dependencyProbe.ts`, its tests,
 the `dependency` field, and the dependency itself. It has no other purpose.
 
-### 7. Cut over
+### 7. Cut over — done 2026-09-21
 
-No custom domain is bound (pre-flight 2), so the new app has a **different
-URL** and the cutover is a communication exercise rather than a DNS one.
-
-**The four URL settings must now be CHANGED, not copied.** Step 3 says to copy
-them exactly; these four are the exception, because they all name the app's own
-address:
+No custom domain was bound, so the new app has a **different URL** and the
+cutover was a communication exercise rather than a DNS one:
 
 ```
-CORS_ALLOWED_ORIGINS     the browser is refused outright if this is wrong
-APP_PUBLIC_URL
-PUBLIC_APP_URL           links in invitation / password-reset emails
-VITE_PUBLIC_APP_URL
+https://contact-center-web-e4f6a3bqapfxeseh.westus2-01.azurewebsites.net
 ```
 
-Set them to the new hostname. `CORS_ALLOWED_ORIGINS` is the one that breaks
-loudly and immediately; the two `*PUBLIC_APP_URL` pairs break quietly and
-later, when someone receives an invitation email pointing at the old app.
+Everyone signs in at that address. Accounts, passwords, schedules and history
+are untouched — it is the same database.
 
-`VITE_PUBLIC_APP_URL` is read at **build** time, not run time, so it only
-takes effect on the next deploy — set it before the final deploy, not after.
+The old App Service was **stopped, not deleted**, the same day. Stopped costs
+nothing and keeps the rollback one click away.
 
-**The Agents.mn webchat widget**: if its dashboard restricts which domains may
-embed it, add the new hostname there, or the widget silently stops loading on
-the new app. Nothing in this repo controls that.
-
-**Then tell people.** Everyone signs in at a new address and re-bookmarks.
-There is no redirect from the old hostname unless you build one, so it is worth
-sending the new link directly rather than expecting people to find it.
+**If the Agents.mn webchat dashboard restricts which domains may embed the
+widget**, the new hostname has to be added there. Nothing in this repo
+controls that, so if the widget stops appearing, look there first.
 
 If you would rather users never saw this: binding a custom domain (e.g.
-`workforce.mobicom.mn`) to the OLD app first, letting people move to it, and
-only then migrating, makes this step and every future one invisible. That is a
-larger change involving DNS, and it was considered and set aside — recorded
-here because the option does not expire.
-
-Leave the old App Service **stopped, not deleted**, for a week or two. Stopped
-costs nothing and keeps the rollback one click away.
+`workforce.mobicom.mn`) makes this step and every future one invisible. It was
+considered and set aside. The option does not expire, and it is on the cleanup
+list at the top of this file.
 
 ---
 
 ## Rollback
 
-Nothing destructive happens to data at any point, because the database is never
-touched.
+Nothing destructive happened to data at any point, because the database was
+never touched — both App Services read the same Azure SQL server.
 
-- **Before cutover**: just keep using the old app. Delete the new one.
-- **After cutover**: start the old app, move the custom domain back, restore
-  `app-name` in the workflow. A few minutes.
+To go back to `contact-center-app`:
 
-The only irreversible action in this runbook is deleting the old App Service.
-Do not do that until the new one has served real traffic for a while.
+1. **Start** it in the Portal. It still holds the last build it received.
+2. Restore its deploy job from git history — the commit that removed it names
+   the line to look for.
+3. Tell people to use the old URL again.
+
+A few minutes, and no data moves.
+
+The only irreversible action is **deleting** the old App Service. That is on
+the cleanup list deliberately, not done.
 
 ---
 
 ## What this does not fix
 
-The frozen directory is a property of that one App Service instance. A fresh
-one starts clean — but nothing guarantees it cannot drift the same way in
-future. The guardrails already in the workflow are what make a repeat visible:
+The frozen directory was a property of that one App Service instance. A fresh
+one starts clean — but nothing guarantees it cannot drift the same way. The
+guardrails in the workflow are what make a repeat visible:
 
 - the deploy warns when `package.json`'s runtime dependencies change
-- the deploy fails unless the running app reports the commit that was just
-  shipped
+- the deploy fails unless the running app reports the commit just shipped
+- on failure, the deploy prints the container's own log
 
-Keep both.
+Keep all three. The third was added late and is the reason this was solved at
+all: the four attempts before it were guesses, and the first attempt after it
+had the answer.

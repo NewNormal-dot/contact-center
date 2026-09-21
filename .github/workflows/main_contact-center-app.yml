@@ -1,4 +1,4 @@
-name: Build and deploy Node.js app to Azure Web App - contact-center-app
+name: Build and deploy Node.js app to Azure Web App - contact-center-web
 
 on:
   push:
@@ -126,160 +126,23 @@ jobs:
           name: node-app
           path: release.zip
 
+  # contact-center-web IS production, as of 2026-09-21.
+  #
+  # The previous App Service, contact-center-app, had a wwwroot/node_modules
+  # frozen at 2026-06-07 that no deploy could refresh, so adding any npm
+  # dependency took the site down at runtime while the deploy reported success
+  # (docs/DEPLOYMENT.md). This app was created to escape that, and does:
+  # /api/health reported "compression" loadable here and not loadable there,
+  # from one build, before the switch.
+  #
+  # The old app is STOPPED, not deleted, and its deploy job was removed with
+  # it. To roll back: start contact-center-app in the Portal - it still holds
+  # the last build it received - and restore the job from git history
+  # (the commit that removed it names this line). Both apps read the same
+  # Azure SQL database, so no data moves either way.
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    # HARD GATE. The workflow now also runs on pull_request, and a pull
-    # request must NEVER be able to deploy to production. An explicit
-    # allow-list of the two events that may deploy - not a `!=` - so that
-    # adding a future trigger cannot silently grant deploy rights.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v4
-        with:
-          name: node-app
-
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_75E7311A0A234F78920C8F58457BD0E1 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E818FF295088428588714610EB52173C }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_3CAB9C9898834E3E8B16390FFB73AC89 }}
-
-      - name: Check and enable Always On (prevents cold-start login errors)
-        continue-on-error: true
-        run: |
-          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
-          echo "Resource group: $RG"
-          echo "--- Always On BEFORE ---"
-          az webapp config show --name contact-center-app --resource-group "$RG" --query "alwaysOn" -o tsv
-          echo "--- App Service Plan tier ---"
-          PLAN_ID=$(az webapp show --name contact-center-app --resource-group "$RG" --query "appServicePlanId" -o tsv)
-          az appservice plan show --ids "$PLAN_ID" --query "{tier:sku.tier, name:sku.name}" -o table
-          echo "--- Attempting to enable Always On ---"
-          az webapp config set --name contact-center-app --resource-group "$RG" --always-on true || echo "FAILED - likely unsupported on this tier (e.g. Free F1). See tier above."
-          echo "--- Always On AFTER ---"
-          az webapp config show --name contact-center-app --resource-group "$RG" --query "alwaysOn" -o tsv
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: 'contact-center-app'
-          slot-name: 'Production'
-          package: release.zip
-
-      # NOTE: wwwroot/node_modules on this instance is frozen at 2026-06-07 and
-      # the deploy does not refresh it, so a NEWLY ADDED npm dependency is
-      # missing at runtime and the app dies on startup. Three fixes have been
-      # tried and none worked; docs/DEPLOYMENT.md records exactly what was
-      # attempted and what the remaining candidate is. Read it before adding a
-      # dependency - and before trying a fourth idea here.
-
-      # "Successfully deployed" only means the files arrived. It says nothing
-      # about whether the process actually started. On 2026-09-16 a deploy
-      # reported success while the app was crash-looping on startup, and the
-      # outage was only noticed hours later. This step closes that gap: if the
-      # app does not answer /api/health, the run goes red within minutes.
-      # The answer key. deploy-new tried to read this and got
-      # AuthorizationFailed: its federated credential is scoped to the new
-      # resource group, and the old app is in a different one. This job has
-      # the credential that can, so it reads it here and prints it in every
-      # run - the new app's own configuration only means something next to
-      # the one that has served this package for months.
-      - name: Print this app's startup configuration (the working reference)
-        if: always()
-        continue-on-error: true
-        run: |
-          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
-          echo "--- OLD app (contact-center-app): runtime and startup ---"
-          az webapp config show --name contact-center-app --resource-group "$RG" \
-            --query "{linuxFxVersion:linuxFxVersion, appCommandLine:appCommandLine, alwaysOn:alwaysOn}" \
-            -o yaml || true
-          echo "--- OLD app: build-related settings ---"
-          az webapp config appsettings list --name contact-center-app --resource-group "$RG" \
-            --query "[?name=='SCM_DO_BUILD_DURING_DEPLOYMENT' || name=='ENABLE_ORYX_BUILD' || name=='WEBSITE_NODE_DEFAULT_VERSION' || name=='WEBSITE_RUN_FROM_PACKAGE'].{name:name,value:value}" \
-            -o table || true
-          echo "--- OLD app: all setting NAMES (values deliberately not printed) ---"
-          az webapp config appsettings list --name contact-center-app --resource-group "$RG" \
-            --query "[].name" -o tsv | sort || true
-
-      - name: Verify the app actually came back up
-        run: |
-          set -u
-          RG=$(az webapp list --query "[?name=='contact-center-app'].resourceGroup" -o tsv)
-          HOST=$(az webapp show --name contact-center-app --resource-group "$RG" --query defaultHostName -o tsv)
-          URL="https://${HOST}/api/health"
-          echo "Polling ${URL} for up to 5 minutes, waiting for commit ${GITHUB_SHA}..."
-
-          SAW_OLD_BUILD=0
-
-          for i in $(seq 1 30); do
-            # Clear the body file first, so a failure never reports a stale
-            # body left over from an earlier attempt as if it were current.
-            rm -f /tmp/health.json
-            # curl already prints 000 to stdout when it cannot connect, so use
-            # `|| true` rather than appending another 000 to it.
-            CODE=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$URL" 2>/dev/null || true)
-            CODE=${CODE:-000}
-
-            if [ "$CODE" = "200" ]; then
-              # A 200 is NOT enough on its own. App Service takes 30-60s to
-              # restart into the uploaded package, so for that window the old
-              # process is still answering - on 2026-09-17 this check passed
-              # six seconds after upload, against the previous build. Wait
-              # until the app reports the commit we just shipped.
-              RUNNING=$(jq -r '.commit // empty' /tmp/health.json 2>/dev/null || true)
-
-              if [ "$RUNNING" = "$GITHUB_SHA" ]; then
-                echo "App is healthy AND running this build after ~$((i * 10))s:"
-                cat /tmp/health.json; echo
-                exit 0
-              fi
-
-              SAW_OLD_BUILD=1
-              if [ -z "$RUNNING" ]; then
-                echo "[$i/30] HTTP 200 but no commit reported - still the pre-build-stamp process, waiting for restart"
-              else
-                echo "[$i/30] HTTP 200 but running ${RUNNING} - waiting for restart into ${GITHUB_SHA}"
-              fi
-            else
-              echo "[$i/30] HTTP ${CODE} - not healthy yet, retrying in 10s"
-            fi
-            sleep 10
-          done
-
-          echo "Last response body (if any):"
-          if [ -s /tmp/health.json ]; then cat /tmp/health.json; echo; else echo "(no response body - the app did not answer at all)"; fi
-
-          if [ "$SAW_OLD_BUILD" = "1" ]; then
-            echo "::error title=Deploy did not take effect::${URL} answers, but never reported commit ${GITHUB_SHA} within 5 minutes. The package uploaded but the app did not restart into it - it is still serving the previous build, or the new one is crash-looping and App Service kept the old process. Check Log stream (Azure Portal -> contact-center-app -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
-          else
-            echo "::error title=Deploy did not come up::The package deployed but ${URL} never returned 200 within 5 minutes. The app is very likely crash-looping - check Log stream (Azure Portal -> contact-center-app -> Log stream) and see docs/DEPLOYMENT.md. Roll back with: git revert <this commit> && git push"
-          fi
-          exit 1
-
-  # ===== Migration target, temporary =====
-  #
-  # contact-center-app's wwwroot/node_modules has been frozen since
-  # 2026-06-07 and no deploy refreshes it, so a newly added npm dependency is
-  # missing at runtime (docs/DEPLOYMENT.md). contact-center-web is a fresh App
-  # Service created to escape that; the plan is docs/APP-SERVICE-MIGRATION.md.
-  #
-  # Both apps are deployed from this one build while the new one is being
-  # verified: the old keeps serving users, the new gets the same code. Once
-  # the new app is confirmed good and users have moved, DELETE the `deploy`
-  # job above and this comment, leaving only this one.
-  #
-  # If this job goes red while `deploy` is green, production is fine and the
-  # migration is not. That is the distinction to look at first.
-  deploy-new:
-    runs-on: ubuntu-latest
-    needs: [build, deploy]
     # HARD GATE. The workflow now also runs on pull_request, and a pull
     # request must NEVER be able to deploy to production. An explicit
     # allow-list of the two events that may deploy - not a `!=` - so that
@@ -340,7 +203,7 @@ jobs:
       # ships in the package, where the real logic lives and can be reviewed:
       # startup.sh. It waits for node_modules to be extracted and avoids the
       # broken .bin shim. See that file, and docs/DEPLOYMENT.md.
-      - name: Set an explicit startup command (new app only)
+      - name: Set an explicit startup command
         continue-on-error: true
         run: |
           RG=$(az webapp list --query "[?name=='contact-center-web'].resourceGroup" -o tsv)
