@@ -2629,7 +2629,7 @@ export default function CsrDashboard() {
 
             <button 
               onClick={() => setActiveTab('notifications')}
-              className="relative p-2.5 text-gray-400 hover:text-white transition-all hover:bg-white/5 rounded-xl border border-transparent hover:border-white/10"
+              className="hidden lg:flex relative p-2.5 text-gray-400 hover:text-white transition-all hover:bg-white/5 rounded-xl border border-transparent hover:border-white/10"
             >
               <Bell size={22} />
               {unreadCount > 0 && (

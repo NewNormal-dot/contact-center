@@ -101,6 +101,22 @@ export default function Sidebar({
       photoUrl={profile.photoUrl}
       initials={profile.name?.slice(0, 2).toUpperCase()}
       onOpen={() => setIsMobileNavOpen(true)}
+      actions={
+        // Sits beside the hamburger so an unread count is visible, and
+        // reachable, without opening the drawer to find it.
+        <button
+          onClick={() => goToTab('notifications')}
+          aria-label="Мэдэгдэл"
+          className="relative w-11 h-11 flex items-center justify-center rounded-xl text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
+        >
+          <Bell size={22} />
+          {unreadCount > 0 && (
+            <span className="absolute top-1 right-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-black flex items-center justify-center rounded-full border-2 border-gray-900">
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </button>
+      }
     />
     <MobileNavBackdrop open={isMobileNavOpen} onClose={() => setIsMobileNavOpen(false)} />
 
