@@ -208,6 +208,37 @@ shipped — which is precisely what the new one does.
 The two problems are the same coin. The frozen directory hid the packaging
 bug; removing the frozen directory exposed it.
 
+### And appCommandLine does not survive quoting
+
+A second, unrelated trap, found the same day. Setting
+
+```
+az webapp config set --startup-file "bash -c 'cd /home/site/wwwroot && node ... server.ts'"
+```
+
+reached the container as:
+
+```
+PATH="$PATH:/home/site/wwwroot" bash -c cd
+```
+
+The quotes were lost and everything after the first word dropped. `bash -c cd`
+exits 0 immediately, so the container "succeeded" and the site never came up —
+which is why the failure looked like `exit code 0` rather than a crash.
+
+The old app's `bash -c 'cd /home/site/wwwroot && npx tsx server.ts'` is stored
+intact, so this is not a rule so much as a hazard; do not rely on quoting
+surviving. **`startup.sh` in the repository root** is the answer: the command
+is one word-splitting-safe invocation,
+
+```
+bash /home/site/wwwroot/startup.sh
+```
+
+and the real logic lives in a file that is reviewed, version-controlled, and
+free to be as long as it needs. It also waits for the tarball extraction to
+finish, which the 2026-09-21 log showed racing the app's own start.
+
 ### What was done, and what was not
 
 **Done:** the new app's startup command points straight at the real file,
