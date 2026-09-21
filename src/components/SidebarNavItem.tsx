@@ -25,6 +25,8 @@ export function SidebarNavItem({
   collapsed = false,
   onClick,
   layoutGroup,
+  ringIcon = false,
+  sparkle = false,
 }: {
   active: boolean;
   icon: any;
@@ -35,6 +37,10 @@ export function SidebarNavItem({
   collapsed?: boolean;
   onClick: () => void;
   layoutGroup: string;
+  /** Shake the icon - used to draw the eye to something unread. */
+  ringIcon?: boolean;
+  /** The sparkle the CSR menu shows beside unread notifications. */
+  sparkle?: boolean;
 }) {
   return (
     <button
@@ -53,7 +59,7 @@ export function SidebarNavItem({
             : 'bg-gray-800/50 group-hover:bg-gray-800'
         }`}
       >
-        <Icon size={18} strokeWidth={active ? 3 : 2} />
+        <Icon size={18} strokeWidth={active ? 3 : 2} className={ringIcon ? 'animate-bell-ring' : undefined} />
       </div>
 
       {!collapsed && (
@@ -61,6 +67,8 @@ export function SidebarNavItem({
           {label}
         </span>
       )}
+
+      {!collapsed && sparkle && <span className="sparkle-emoji">✨</span>}
 
       {Boolean(badge) && (
         <span

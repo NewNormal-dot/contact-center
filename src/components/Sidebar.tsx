@@ -218,6 +218,8 @@ export default function Sidebar({
           icon={Bell}
           label="Мэдэгдэл"
           badge={unreadCount}
+          ringIcon
+          sparkle={unreadCount > 0}
           collapsed={isCollapsed}
           onClick={() => goToTab('notifications')}
           layoutGroup="sidebar-active-shared"
@@ -228,6 +230,7 @@ export default function Sidebar({
           icon={BookOpen}
           label="Сургалт"
           badge={unreadTrainingCount}
+          ringIcon={unreadTrainingCount > 0}
           badgeColor="bg-purple-500"
           collapsed={isCollapsed}
           onClick={() => goToTab('training')}
