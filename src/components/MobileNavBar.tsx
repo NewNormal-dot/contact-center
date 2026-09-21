@@ -23,10 +23,6 @@ export function mobileDrawerClasses(open: boolean) {
   return [
     'max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-[100]',
     'max-lg:w-[85vw] max-lg:max-w-[320px] max-lg:shadow-2xl',
-    // The desktop collapse chevron is absolutely positioned at -right-3, and
-    // any such overhang turns the drawer into a sideways-scrolling box with a
-    // scrollbar along the bottom. Clip it instead.
-    'max-lg:overflow-x-hidden',
     'max-lg:transition-transform max-lg:duration-300 max-lg:ease-out',
     open ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full',
   ].join(' ');
@@ -77,8 +73,9 @@ export function MobileNavBar({
   photoUrl?: string;
   initials?: string;
   onOpen: () => void;
-  /** Rendered to the right of the hamburger - the notification bell, so it is
-   *  reachable without opening the drawer first. */
+  /** Rendered to the LEFT of the hamburger - the notification bell, so it is
+   *  reachable without opening the drawer first, and the menu stays in the
+   *  corner where a thumb expects it. */
   actions?: React.ReactNode;
 }) {
   return (
@@ -101,15 +98,15 @@ export function MobileNavBar({
       </div>
 
       {/* 44px square: the smallest target that is reliably tappable. */}
+      {actions && <div className="shrink-0 flex items-center">{actions}</div>}
+
       <button
         onClick={onOpen}
         aria-label="Цэс нээх"
-        className="w-11 h-11 shrink-0 flex items-center justify-center rounded-xl text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
+        className="w-11 h-11 -mr-2 shrink-0 flex items-center justify-center rounded-xl text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
       >
         <Menu size={24} />
       </button>
-
-      {actions && <div className="shrink-0 flex items-center -mr-1">{actions}</div>}
     </div>
   );
 }
