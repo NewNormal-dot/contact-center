@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Home, Calendar, PlusCircle, Palmtree, Settings, LogOut, Bell, Camera, BookOpen, Sparkles, ChevronRight, ChevronLeft, Clock } from 'lucide-react';
+import { MobileNavBar, MobileNavBackdrop, MobileNavClose, mobileDrawerClasses } from './MobileNavBar';
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../contexts/AuthContext';
@@ -31,8 +32,16 @@ export default function Sidebar({
   const navigate = useNavigate();
   const { profile: authProfile, logout, setProfilePhoto } = useAuth();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Choosing a destination should close the drawer. Leaving it open would
+  // hide the thing the tap just navigated to.
+  const goToTab = (tab: string) => {
+    setActiveTab?.(tab);
+    setIsMobileNavOpen(false);
+  };
+
   const profile = authProfile || {
     id: '',
     name: 'Уншиж байна...',
@@ -85,11 +94,18 @@ export default function Sidebar({
   };
 
   return (
-    // Below lg this is a compact bar across the top, not a column beside the
-    // content. It used to be w-72 h-screen with no responsive classes at all,
-    // so on a 360px phone the entire first screen was navigation and the
-    // schedule - the thing people open this app for - was below the fold.
-    <aside className={`${isCollapsed ? 'lg:w-20' : 'lg:w-72'} w-full lg:h-screen bg-gray-900/95 backdrop-blur-xl border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col shadow-2xl z-50 transition-all duration-300 relative max-lg:sticky max-lg:top-0`}>
+    <>
+    <MobileNavBar
+      name={profile.name}
+      subtitle={profile.lineType}
+      photoUrl={profile.photoUrl}
+      initials={profile.name?.slice(0, 2).toUpperCase()}
+      onOpen={() => setIsMobileNavOpen(true)}
+    />
+    <MobileNavBackdrop open={isMobileNavOpen} onClose={() => setIsMobileNavOpen(false)} />
+
+    <aside className={`${isCollapsed ? 'lg:w-20' : 'lg:w-72'} lg:h-screen bg-gray-900/95 backdrop-blur-xl lg:border-r border-gray-800 flex flex-col shadow-2xl z-50 lg:transition-all lg:duration-300 relative overflow-y-auto ${mobileDrawerClasses(isMobileNavOpen)}`}>
+      <MobileNavClose onClose={() => setIsMobileNavOpen(false)} />
       <button 
         onClick={() => setIsCollapsed?.(!isCollapsed)}
         className="hidden lg:flex absolute -right-3 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform"
@@ -98,7 +114,7 @@ export default function Sidebar({
       </button>
 
       {/* Profile Section */}
-      <div className={`p-3 lg:p-6 border-b border-gray-800 flex items-center gap-3 lg:gap-4 bg-black/20 ${isCollapsed ? 'lg:justify-center' : ''}`}>
+      <div className={`p-6 border-b border-gray-800 flex items-center gap-4 bg-black/20 ${isCollapsed ? 'lg:justify-center' : ''}`}>
         <div
           className={`relative group ${isUploadingPhoto ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}
           onClick={isUploadingPhoto ? undefined : handlePhotoClick}
@@ -148,13 +164,13 @@ export default function Sidebar({
       </div>
 
       {/* Menu Items */}
-      <nav className="flex-1 p-3 lg:p-4 space-y-0 lg:space-y-3 overflow-y-auto flex gap-2 overflow-x-auto lg:block lg:gap-0 lg:overflow-x-visible custom-scrollbar">
-        {!isCollapsed && <p className="hidden lg:block text-xs font-bold text-gray-500 uppercase tracking-wider mb-4 ml-2 mt-2">Үндсэн цэс</p>}
+      <nav className="flex-1 p-4 space-y-2 lg:space-y-3 overflow-y-auto">
+        {!isCollapsed && <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4 ml-2 mt-2">Үндсэн цэс</p>}
         
         {/* Work Schedule - Refined */}
         <button 
-          onClick={() => setActiveTab?.('schedule')}
-          className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all ${
+          onClick={() => goToTab('schedule')}
+          className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all ${
             activeTab === 'schedule' 
               ? 'bg-blue-600/15 text-white border border-blue-500/30' 
               : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
@@ -167,8 +183,8 @@ export default function Sidebar({
 
         {SHOW_VACATION_FEATURE && (
           <button
-            onClick={() => setActiveTab?.('vacation')}
-            className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
+            onClick={() => goToTab('vacation')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
               activeTab === 'vacation'
                 ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20'
                 : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
@@ -181,8 +197,8 @@ export default function Sidebar({
         )}
 
         <button 
-          onClick={() => setActiveTab?.('hourlyLeave')}
-          className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
+          onClick={() => goToTab('hourlyLeave')}
+          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-colors ${
             activeTab === 'hourlyLeave' 
               ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' 
               : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
@@ -194,8 +210,8 @@ export default function Sidebar({
         </button>
 
         <button 
-          onClick={() => setActiveTab?.('notifications')}
-          className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-colors ${
+          onClick={() => goToTab('notifications')}
+          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-colors ${
             activeTab === 'notifications' 
               ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' 
               : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
@@ -217,8 +233,8 @@ export default function Sidebar({
         </button>
 
         <button 
-          onClick={() => setActiveTab?.('training')}
-          className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-colors ${
+          onClick={() => goToTab('training')}
+          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-colors ${
             activeTab === 'training' 
               ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' 
               : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
@@ -238,8 +254,8 @@ export default function Sidebar({
 
         {(role === 'admin' || role === 'superadmin') && (
           <button 
-            onClick={() => setActiveTab?.('forecast')}
-            className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${
+            onClick={() => goToTab('forecast')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${
               activeTab === 'forecast' ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20' : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'
             } ${isCollapsed ? 'justify-center' : ''}`}
             title={isCollapsed ? 'Дуудлагын Forecast' : ''}
@@ -251,10 +267,10 @@ export default function Sidebar({
       </nav>
 
       {/* Bottom Section */}
-      <div className={`p-3 lg:p-4 border-t border-gray-800 bg-black/10 flex gap-2 lg:block ${isCollapsed ? 'lg:flex lg:flex-col lg:items-center lg:gap-2' : ''}`}>
+      <div className={`p-4 border-t border-gray-800 bg-black/10 ${isCollapsed ? 'lg:flex lg:flex-col lg:items-center lg:gap-2' : ''}`}>
         <button 
-          onClick={() => onChangePassword?.()}
-          className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 text-gray-400 hover:bg-gray-800/50 hover:text-white rounded-xl font-medium transition-colors max-lg:mb-0 mb-2 ${isCollapsed ? 'justify-center' : ''}`}
+          onClick={() => { setIsMobileNavOpen(false); onChangePassword?.(); }}
+          className={`w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:bg-gray-800/50 hover:text-white rounded-xl font-medium transition-colors mb-2 ${isCollapsed ? 'justify-center' : ''}`}
           title={isCollapsed ? 'Нууц үг солих' : ''}
         >
           <Settings size={20} />
@@ -262,7 +278,7 @@ export default function Sidebar({
         </button>
         <button 
           onClick={handleLogout}
-          className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl font-medium transition-colors ${isCollapsed ? 'justify-center' : ''}`}
+          className={`w-full flex items-center gap-3 px-4 py-3 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl font-medium transition-colors ${isCollapsed ? 'justify-center' : ''}`}
           title={isCollapsed ? 'Гарах' : ''}
         >
           <LogOut size={20} />
@@ -270,5 +286,6 @@ export default function Sidebar({
         </button>
       </div>
     </aside>
+    </>
   );
 }
