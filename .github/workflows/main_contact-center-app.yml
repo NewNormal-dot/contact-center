@@ -93,7 +93,7 @@ jobs:
         run: |
           rm -rf release release.zip
           mkdir -p release
-          cp package.json package-lock.json server.ts knexfile.ts release/
+          cp package.json package-lock.json server.ts knexfile.ts startup.sh release/
           cp -r dist src node_modules release/
           # Stamps the package with the commit it was built from. server.ts
           # reports this at /api/health, and the verify step below polls until
@@ -112,9 +112,11 @@ jobs:
           grep -q "$GITHUB_SHA" release/build-info.json
           test -f release/node_modules/express/package.json
           test -f release/node_modules/tsx/dist/cli.mjs
+          test -f release/startup.sh
           test -d release/src/database/migrations
           unzip -l release.zip | grep "node_modules/express/package.json"
           unzip -l release.zip | grep "node_modules/tsx/dist/cli.mjs"
+          unzip -l release.zip | grep "startup.sh"
           unzip -l release.zip | grep "src/database/migrations"
 
       - name: Upload artifact for deployment job
@@ -328,41 +330,22 @@ jobs:
             --application-logging filesystem --docker-container-logging filesystem \
             --level verbose -o none
 
-      # The new app had an empty appCommandLine; the old one has
-      #     bash -c 'cd /home/site/wwwroot && npx tsx server.ts'
-      # Neither that nor "npm start" can work here, because both reach tsx
-      # through node_modules/.bin/tsx - and on this app that shim is broken.
-      # The live container log said so exactly:
+      # appCommandLine does not survive quoting. Setting it to
+      #     bash -c 'cd /home/site/wwwroot && node ... server.ts'
+      # reached the container as "bash -c cd" - the quotes were lost and
+      # everything after the first word was dropped, so the process exited 0
+      # immediately and the site never came up.
       #
-      #   > tsx server.ts
-      #   Error [ERR_MODULE_NOT_FOUND]: Cannot find module
-      #     '/node_modules/.bin/package-CeBgXWuR.mjs'
-      #     imported from /node_modules/.bin/tsx
-      #   Container exited with exit code 1
-      #
-      # .bin/tsx is a symlink to ../tsx/dist/cli.mjs. "zip -rq" in the build
-      # job follows symlinks and stores a COPY of the target at the link's
-      # path, so .bin/tsx arrives as a regular file whose relative imports
-      # then resolve against .bin/ instead of tsx/dist/ - and the sibling
-      # file it needs is not there.
-      #
-      # The old app never hit this because it ignores the node_modules the
-      # package ships entirely and runs June's frozen copy, which was made by
-      # a real npm install with real symlinks (docs/DEPLOYMENT.md). So the
-      # broken shim has been in every package for months and could only ever
-      # become visible on an App Service that actually uses what is shipped.
-      #
-      # Pointing the startup command straight at the real file skips .bin
-      # altogether. "zip -ryq" would fix the package itself, but whether the
-      # server-side extractor restores symlinks is not something this
-      # deployment can rehearse, and getting it wrong breaks production. That
-      # is recorded in docs/DEPLOYMENT.md as a separate decision.
+      # So the command is one word-splitting-safe invocation of a script that
+      # ships in the package, where the real logic lives and can be reviewed:
+      # startup.sh. It waits for node_modules to be extracted and avoids the
+      # broken .bin shim. See that file, and docs/DEPLOYMENT.md.
       - name: Set an explicit startup command (new app only)
         continue-on-error: true
         run: |
           RG=$(az webapp list --query "[?name=='contact-center-web'].resourceGroup" -o tsv)
           az webapp config set --name contact-center-web --resource-group "$RG" \
-            --startup-file "bash -c 'cd /home/site/wwwroot && node node_modules/tsx/dist/cli.mjs server.ts'" -o none
+            --startup-file "bash /home/site/wwwroot/startup.sh" -o none
           echo "appCommandLine is now:"
           az webapp config show --name contact-center-web --resource-group "$RG" \
             --query "appCommandLine" -o tsv
