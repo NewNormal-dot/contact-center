@@ -25,9 +25,9 @@ produced the answer.
 
 ### Cleanup still outstanding
 
-- [ ] Delete `src/utils/dependencyProbe.ts`, its three tests, the `dependency`
-      field in `/api/health`, and the `compression` dependency. They exist only
-      to answer a question that is now answered.
+- [x] ~~Delete `src/utils/dependencyProbe.ts`, its three tests, the
+      `dependency` field in `/api/health`, and the `compression`
+      dependency.~~ Done 2026-09-21, once the answer was recorded below.
 - [ ] Remove `SEED_SUPERADMIN_EMAIL` / `SEED_SUPERADMIN_PASSWORD` from the old
       App Service and change that account's password. They are not on the new
       app, and `src/database/seeds/initial_user.ts` runs `knex('users').del()`.
@@ -265,34 +265,35 @@ The workflow's `deploy-new` job now sets this on every run, so there is
 nothing to do by hand — it is recorded here because it explains why the
 obvious values do not work.
 
-### 6. Prove the trap is gone
+### 6. Prove the trap is gone — done, and the evidence
 
-This is the step that justifies the whole exercise, and it is now automatic.
+This is the step that justified the whole exercise.
 
-`compression` is a real dependency in `package.json` — the same package whose
-addition took production down on 2026-09-16. Nothing imports it at startup.
-Instead `src/utils/dependencyProbe.ts` tries to load it at request time,
-inside a try, caches the answer, and `/api/health` reports it:
+`compression` — the same package whose addition took production down on
+2026-09-16 — was added as a real dependency that **nothing imported**. A probe
+tried to load it at request time, inside a try, and `/api/health` reported the
+result. One build went to both App Services, and they answered differently:
 
-```json
-"dependency": { "package": "compression", "loaded": true, "error": null }
+```
+old app  "dependency": { "package": "compression", "loaded": false,
+                         "error": "ERR_MODULE_NOT_FOUND" }
+
+new app  "dependency": { "package": "compression", "loaded": true,
+                         "error": null }
 ```
 
-Read it on each app:
+Run #229, 2026-09-21, 06:58 and 07:05 UTC. The old app could not see a package
+that was sitting in the zip it had just been handed; the new app could. That
+is the trap, measured rather than assumed — and the old app **stayed up**
+while reporting it, which the 2026-09-16 outage did not.
 
-| `loaded` | Means |
-|---|---|
-| `true` | the instance runs the `node_modules` the deploy shipped — **the trap is gone** |
-| `false` | the instance runs its own frozen copy — the trap is still there |
+The probe and the dependency were removed the same day. They existed to answer
+one question, and it is answered; this section is the answer.
 
-Expect `false` on the old app and `true` on the new one. Both are correct
-answers for their app, and neither can break anything: a failed import is
-caught and reported, never thrown. That is what makes it safe to ship to
-production and the new app from a single build, which the previous approach —
-importing it at the top of `server.ts` — was not.
-
-Once the old App Service is retired, delete `dependencyProbe.ts`, its tests,
-the `dependency` field, and the dependency itself. It has no other purpose.
+If a future App Service ever needs the same proof, the pattern is worth
+repeating exactly: a dependency nothing imports, loaded inside a try at
+request time, reported from a health endpoint. Never an import at the top of
+`server.ts` — that is what caused the outage this was investigating.
 
 ### 7. Cut over — done 2026-09-21
 
