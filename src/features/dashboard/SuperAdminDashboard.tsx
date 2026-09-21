@@ -1629,7 +1629,7 @@ export default function SuperAdminDashboard() {
   return (
     <div className="flex min-h-screen flex-col lg:h-screen lg:flex-row lg:overflow-hidden bg-[#0a0a0a] text-white overflow-x-hidden font-sans">
       {/* Sidebar */}
-      <div className={`${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-72'} w-full max-h-[42vh] lg:max-h-none lg:h-screen bg-gray-900/50 border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col transition-all duration-300 relative z-50 shrink-0`}>
+      <div className={`${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-72'} w-full lg:max-h-none lg:h-screen bg-gray-900/50 border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col transition-all duration-300 relative z-50 shrink-0 max-lg:sticky max-lg:top-0`}>
         <button 
           onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
           className="hidden lg:flex absolute -right-3 top-10 w-6 h-6 bg-blue-600 rounded-full items-center justify-center text-white shadow-lg z-30 hover:scale-110 transition-transform"
@@ -1637,8 +1637,8 @@ export default function SuperAdminDashboard() {
           {isSidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
 
-        <div className={isSidebarCollapsed ? 'p-4 lg:p-4' : 'p-4 sm:p-8'}>
-          <div className={`flex items-center gap-3 mb-8 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
+        <div className={isSidebarCollapsed ? 'p-3 lg:p-4' : 'p-3 sm:p-8'}>
+          <div className={`flex items-center gap-3 mb-3 lg:mb-8 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
             <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/20 shrink-0">
               <ShieldAlert size={24} className="text-white" />
             </div>
@@ -1650,7 +1650,7 @@ export default function SuperAdminDashboard() {
             )}
           </div>
 
-          <nav className="space-y-2 overflow-y-auto custom-scrollbar">
+          <nav className="space-y-0 lg:space-y-2 overflow-y-auto custom-scrollbar flex gap-2 overflow-x-auto lg:block lg:gap-0 lg:overflow-x-visible">
             {[
               { id: 'logs', label: 'Үйлдэлүүд', icon: FileText },
               { id: 'users', label: 'Хэрэглэгчид', icon: Users },
@@ -1658,7 +1658,7 @@ export default function SuperAdminDashboard() {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-all ${
+                className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center justify-between px-4 py-3 rounded-xl font-bold transition-all ${
                   activeTab === item.id 
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
                     : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
@@ -1685,15 +1685,15 @@ export default function SuperAdminDashboard() {
                 )}
               </button>
             ))}
-            <div className="pt-4 mt-4 border-t border-gray-800">
+            <div className="hidden lg:block pt-4 mt-4 border-t border-gray-800">
             </div>
           </nav>
         </div>
 
-        <div className={`mt-auto p-4 sm:p-8 border-t border-gray-800 ${isSidebarCollapsed ? 'lg:p-4 lg:flex lg:flex-col lg:items-center lg:gap-2' : ''}`}>
+        <div className={`mt-auto p-3 sm:p-8 border-t border-gray-800 flex gap-2 lg:block ${isSidebarCollapsed ? 'lg:p-4 lg:flex lg:flex-col lg:items-center lg:gap-2' : ''}`}>
           <button 
             onClick={() => setIsChangingMyPassword(true)}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-gray-400 hover:bg-gray-800 transition-all mb-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
+            className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-gray-400 hover:bg-gray-800 transition-all max-lg:mb-0 mb-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
             title={isSidebarCollapsed ? 'Нууц үг солих' : ''}
           >
             <Settings size={20} />
@@ -1701,7 +1701,7 @@ export default function SuperAdminDashboard() {
           </button>
           <button 
             onClick={handleLogout}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-red-500 hover:bg-red-500/10 transition-all ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
+            className={`w-full max-lg:w-auto max-lg:shrink-0 max-lg:whitespace-nowrap flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-red-500 hover:bg-red-500/10 transition-all ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
             title={isSidebarCollapsed ? 'Системээс гарах' : ''}
           >
             <LogOut size={20} />
