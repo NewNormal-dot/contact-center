@@ -299,6 +299,25 @@ function mapBooking(row: any) {
   };
 }
 
+// Leave is only ever requested against a confirmed booking, so a booking
+// that stops existing takes its undecided leave request with it. Without
+// this an admin kept seeing - and could approve - a Чөлөө for a shift the
+// person is no longer working. Decided requests are left as history.
+async function dropPendingLeaveForBooking(conn: any, bookingId: string) {
+  if (!bookingId) return 0;
+  const stale = await conn('leave_requests')
+    .where({ slot_booking_id: bookingId, status: 'pending' })
+    .select('id');
+  if (stale.length === 0) return 0;
+  const ids = stale.map((row: any) => String(row.id));
+  await conn('notifications')
+    .where({ related_entity_type: 'leave_request' })
+    .whereIn('related_entity_id', ids)
+    .del();
+  await conn('leave_requests').whereIn('id', ids).del();
+  return ids.length;
+}
+
 async function getUser(userId: string) {
   return db('users').where({ id: userId }).first();
 }
@@ -1172,6 +1191,12 @@ router.delete('/:slotId/bookings/:userId', authenticate, authorize(['admin', 'su
     const target = await db('users').where({ id: userId }).first();
     const slot = await db('work_slots').where({ id: slotId }).first();
 
+    // Read the booking before it is gone - its id is what any leave request
+    // raised against this shift points at.
+    const booking = await db('slot_bookings')
+      .where({ slot_id: slotId, user_id: userId, status: 'confirmed' })
+      .first();
+
     const deleted = await db('slot_bookings')
       .where({ slot_id: slotId, user_id: userId, status: 'confirmed' })
       .delete();
@@ -1180,8 +1205,22 @@ router.delete('/:slotId/bookings/:userId', authenticate, authorize(['admin', 'su
       return res.status(404).json({ error: 'Захиалга олдсонгүй' });
     }
 
-    // The CSR is not notified of this, so the audit entry is the only record
-    // that their shift was taken away rather than lost to a bug.
+    await dropPendingLeaveForBooking(db, String(booking?.id || ''));
+
+    // Being removed from a shift without a word is how somebody turns up for
+    // a shift they no longer hold, or misses one they still do.
+    if (slot) {
+      await createNotification({
+        title: 'Таны захиалсан ээлж цуцлагдлаа',
+        content: `${displayDate(slot.date)} ${boolValue(slot.is_rest) ? '(Амралт)' : `${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`} ээлжээс таныг админ хаслаа. Шинэчилсэн хуваариас дахин захиална уу.`,
+        type: 'schedule_change',
+        targetUserId: userId,
+        authorId: (req as any).user?.id,
+        relatedEntityType: 'work_slots',
+        relatedEntityId: slotId,
+      });
+    }
+
     await logAction(
       (req as any).user?.id,
       'REMOVE_BOOKING',
@@ -1466,6 +1505,9 @@ const cancelHandler = async (req: any, res: any) => {
     if (!updated) {
       return res.status(404).json({ error: 'Захиалга олдсонгүй' });
     }
+
+    await dropPendingLeaveForBooking(db, booking.id);
+
     await logAction(
       userId,
       'BOOKING_CANCELLED',

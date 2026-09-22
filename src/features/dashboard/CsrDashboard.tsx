@@ -165,6 +165,9 @@ interface Shift {
   employmentType?: string;
   location?: string;
   bookingWaves?: BookingWave[];
+  // When booking closes for this shift. After it, the CSR can no longer
+  // cancel or move the shift - only trade it, or request Чөлөө.
+  bookingCloseAt?: string;
 }
 
 interface BookingWave {
@@ -1099,6 +1102,7 @@ export default function CsrDashboard() {
         segment: slot.segment || csrProfile.lineType,
         employmentType: slot.employmentType || slot.employment_type || csrProfile.employmentType,
         location: slotLocation,
+        bookingCloseAt,
         // Use the split the admin actually configured, when there is one.
         // Previously this always collapsed to a single synthetic pool, so a
         // morning/evening quota could never be shown or respected.
@@ -2119,9 +2123,15 @@ export default function CsrDashboard() {
     reason: ''
   });
 
-  const upcomingConfirmedBookings = React.useMemo(() => {
-    if (!csrProfile) return [];
-    const results: { bookingId: string; dateKey: string; time: string; startTime: string; endTime: string; hoursAway: number }[] = [];
+  // Shifts this CSR may request Чөлөө for: booked, still ahead, and with
+  // booking already CLOSED. While booking is open there is nothing to ask
+  // permission for - the shift can simply be cancelled or moved - so those
+  // are counted separately and explained in the form instead of being
+  // offered as choices.
+  const leaveEligibleBookings = React.useMemo(() => {
+    if (!csrProfile) return { closed: [] as { bookingId: string; dateKey: string; time: string; startTime: string; endTime: string; hoursAway: number }[], stillOpen: 0 };
+    const closed: { bookingId: string; dateKey: string; time: string; startTime: string; endTime: string; hoursAway: number }[] = [];
+    let stillOpen = 0;
     const now = Date.now();
     Object.entries(schedule).forEach(([dateKey, dayData]: [string, DayData]) => {
       dayData.shifts.forEach((shift) => {
@@ -2132,11 +2142,19 @@ export default function CsrDashboard() {
         const shiftStart = new Date(`${dateKey}T${window.start}:00`);
         const hoursAway = (shiftStart.getTime() - now) / (1000 * 60 * 60);
         if (hoursAway <= 0) return;
-        results.push({ bookingId: myBooking.id, dateKey, time: shift.time, startTime: window.start, endTime: window.end, hoursAway });
+        const closesAt = shift.bookingCloseAt ? new Date(shift.bookingCloseAt).getTime() : NaN;
+        if (!Number.isFinite(closesAt) || now <= closesAt) {
+          stillOpen += 1;
+          return;
+        }
+        closed.push({ bookingId: myBooking.id, dateKey, time: shift.time, startTime: window.start, endTime: window.end, hoursAway });
       });
     });
-    return results.sort((a, b) => a.hoursAway - b.hoursAway);
+    closed.sort((a, b) => a.hoursAway - b.hoursAway);
+    return { closed, stillOpen };
   }, [schedule, csrProfile]);
+
+  const upcomingConfirmedBookings = leaveEligibleBookings.closed;
 
   const selectedLeaveBooking = upcomingConfirmedBookings.find(b => b.bookingId === hourlyLeaveForm.slotBookingId) || null;
 
@@ -2612,6 +2630,7 @@ export default function CsrDashboard() {
            <ul className="space-y-4">
              {[
                'Чөлөөг зөвхөн өөрийн захиалсан ээлжийн цагт авна.',
+               'Захиалга хаагдсаны дараа чөлөө хүснэ. Нээлттэй байхад ээлжээ өөрөө цуцлана.',
                'Ээлж эхлэхэд дор хаяж 8 цаг үлдсэн байх ёстой.',
                'Бүтэн ээлж эсвэл ээлжийн дотоод цагийг сонгож болно.',
                'Яаралтай тохиолдолд шууд ахлах ажилтантайгаа холбогдоно уу.'
@@ -3181,10 +3200,22 @@ export default function CsrDashboard() {
                     {upcomingConfirmedBookings.length === 0 ? (
                       <div className="p-4 bg-black/30 border border-white/5 rounded-2xl text-center">
                         <Calendar size={28} className="mx-auto text-gray-700 mb-2" />
-                        <p className="text-xs font-bold text-gray-400">Захиалсан ээлж алга байна</p>
-                        <p className="text-[10px] text-gray-600 mt-1 leading-relaxed">
-                          Чөлөөг зөвхөн өөрийн захиалсан ээлжийн цагт авах боломжтой. Эхлээд "Ажлын хуваарь" хэсгээс ээлжээ захиална уу.
-                        </p>
+                        {leaveEligibleBookings.stillOpen > 0 ? (
+                          <>
+                            <p className="text-xs font-bold text-gray-400">Захиалга нээлттэй байна</p>
+                            <p className="text-[10px] text-gray-600 mt-1 leading-relaxed">
+                              Захиалга нээлттэй байхад чөлөө хүсэх шаардлагагүй — "Ажлын хуваарь" хэсгээс ээлжээ өөрөө цуцлах буюу өөрчлөх боломжтой.
+                              Захиалга хаагдсаны дараа энэ ээлж дээр чөлөө хүсэх боломжтой болно.
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-xs font-bold text-gray-400">Захиалсан ээлж алга байна</p>
+                            <p className="text-[10px] text-gray-600 mt-1 leading-relaxed">
+                              Чөлөөг зөвхөн өөрийн захиалсан ээлжийн цагт авах боломжтой. Эхлээд "Ажлын хуваарь" хэсгээс ээлжээ захиална уу.
+                            </p>
+                          </>
+                        )}
                       </div>
                     ) : (
                       <>

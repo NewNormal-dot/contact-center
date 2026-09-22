@@ -226,6 +226,62 @@ const autoDeclineExpiredTrades = createThrottledTask(
   'autoDeclineExpiredTrades',
 );
 
+// A Чөлөө is raised against one specific booking, and a trade moves that
+// booking row onto a different shift while keeping its id. Left alone, an
+// approved "I cannot work 09:00-18:00 on the 5th" would follow the booking
+// and silently become leave from whatever shift the trade handed over - and
+// worse, leave granted to one person would end up attached to the shift the
+// OTHER person now works. A leave request must never transfer.
+//
+// It never does now, because the two cases have different right answers:
+//
+//   approved - an admin has already excused this person from this shift.
+//     There is nothing left for them to hand over, so the trade is refused.
+//   pending  - they asked to be let off and are now arranging cover
+//     themselves, which is the better outcome. The trade goes through and
+//     the request is withdrawn, because the problem it described is solved.
+async function approvedLeaveBlocking(conn: any, bookingIds: string[]) {
+  const ids = bookingIds.filter(Boolean);
+  if (ids.length === 0) return null;
+  const row = await conn('leave_requests')
+    .whereIn('slot_booking_id', ids)
+    .where({ status: 'approved' })
+    .first();
+  return row
+    ? 'Энэ ээлжийн чөлөө аль хэдийн зөвшөөрөгдсөн тул солих боломжгүй.'
+    : null;
+}
+
+// Withdraws the pending leave requests raised against these bookings, tells
+// each requester why, and clears the admins' now-meaningless alerts.
+async function withdrawPendingLeaveForTrade(conn: any, bookingIds: string[], actingUserId: string) {
+  const ids = bookingIds.filter(Boolean);
+  if (ids.length === 0) return;
+  const rows = await conn('leave_requests')
+    .whereIn('slot_booking_id', ids)
+    .where({ status: 'pending' })
+    .select('id', 'user_id', 'date', 'start_time', 'end_time');
+  if (rows.length === 0) return;
+
+  const leaveIds = rows.map((row: any) => String(row.id));
+  await conn('notifications')
+    .where({ related_entity_type: 'leave_request' })
+    .whereIn('related_entity_id', leaveIds)
+    .del();
+  await conn('leave_requests').whereIn('id', leaveIds).del();
+
+  for (const row of rows) {
+    if (!row.user_id) continue;
+    await createNotification({
+      title: 'Чөлөөний хүсэлт цуцлагдлаа',
+      content: `${displayDate(row.date)} ${displayTime(row.start_time)}-${displayTime(row.end_time)} ээлжийг өөр ажилтантай сольсон тул тухайн ээлжийн чөлөөний хүсэлт цуцлагдлаа.`,
+      type: 'leave_decision',
+      targetUserId: row.user_id,
+      authorId: actingUserId,
+    }, conn);
+  }
+}
+
 router.get('/', authenticate, async (req: any, res) => {
   try {
     await autoDeclineExpiredTrades();
@@ -278,6 +334,9 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     const senderBooking = await db('slot_bookings').where({ user_id: senderId, slot_id: senderSlotIdFinal, status: 'confirmed' }).first();
     const receiverBooking = await db('slot_bookings').where({ user_id: receiverIdFinal, slot_id: receiverSlotIdFinal, status: 'confirmed' }).first();
     if (!senderBooking || !receiverBooking) return res.status(400).json({ error: 'Захиалга баталгаагүй байна' });
+
+    const leaveBlock = await approvedLeaveBlocking(db, [senderBooking.id, receiverBooking.id]);
+    if (leaveBlock) return res.status(409).json({ error: leaveBlock });
 
     const senderSlot = await db('work_slots').where({ id: senderSlotIdFinal }).first();
     const receiverSlot = await db('work_slots').where({ id: receiverSlotIdFinal }).first();
@@ -435,6 +494,18 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
       await trx.rollback();
       return res.status(409).json({ error: capacityError });
     }
+
+    // Re-checked here as well as at creation: an admin may have approved a
+    // Чөлөө in the meantime.
+    const leaveBlock = await approvedLeaveBlocking(trx, [senderBooking.id, receiverBooking.id]);
+    if (leaveBlock) {
+      await trx.rollback();
+      return res.status(409).json({ error: leaveBlock });
+    }
+
+    // The swap covers the shift, so any still-undecided request to be let
+    // off it is withdrawn rather than carried onto the new shift.
+    await withdrawPendingLeaveForTrade(trx, [senderBooking.id, receiverBooking.id], req.user.id);
 
     // slot_bookings carries UNIQUE(slot_id, user_id) and cancelling is a soft
     // delete, so either CSR may still own a leftover cancelled row for the
