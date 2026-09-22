@@ -253,6 +253,48 @@ describe('POST /api/slots/book - cancel then re-book the same shift', () => {
     expect(rows[0].status).toBe('confirmed');
   });
 
+  it('takes an undecided Чөлөө with the booking it was raised against', async () => {
+    // Leave is only ever requested against a confirmed booking. Cancelling
+    // that booking used to leave the request behind, so an admin still saw -
+    // and could approve - leave for a shift the CSR no longer works.
+    const booked = await api('POST', '/api/slots/book', csrToken, { slotId: SLOT_A });
+    expect([200, 201]).toContain(booked.status);
+    const bookingRow = await db('slot_bookings').where({ slot_id: SLOT_A, user_id: CSR_ID, status: 'confirmed' }).first();
+    expect(bookingRow).toBeTruthy();
+
+    await db('leave_requests').insert([
+      {
+        id: 'aaaa1111-1111-4111-8111-111111111111',
+        user_id: CSR_ID, date: futureDate(), start_time: '09:00:00', end_time: '18:00:00',
+        reason: 'Undecided', status: 'pending', slot_booking_id: bookingRow.id,
+      },
+      {
+        id: 'bbbb2222-2222-4222-8222-222222222222',
+        user_id: CSR_ID, date: futureDate(), start_time: '09:00:00', end_time: '18:00:00',
+        reason: 'Already decided', status: 'approved', slot_booking_id: bookingRow.id,
+      },
+    ]);
+    await db('notifications').insert({
+      id: 'cccc3333-3333-4333-8333-333333333333',
+      title: 'Чөлөөний хүсэлт', content: 'pending alert', type: 'leave_request',
+      related_entity_type: 'leave_request', related_entity_id: 'aaaa1111-1111-4111-8111-111111111111',
+    });
+
+    const cancelled = await api('POST', `/api/slots/${SLOT_A}/cancel`, csrToken, { slotId: SLOT_A });
+    expect(cancelled.status).toBe(200);
+
+    // The undecided request and its admin alert are gone...
+    expect(await db('leave_requests').where({ status: 'pending' }).first()).toBeFalsy();
+    expect(await db('notifications').where({ id: 'cccc3333-3333-4333-8333-333333333333' }).first()).toBeFalsy();
+    // ...while the decided one stays as history.
+    expect(await db('leave_requests').where({ status: 'approved' }).first()).toBeTruthy();
+
+    // Leave the fixture as this block found it: the next case expects a
+    // confirmed booking on this date.
+    await db('leave_requests').del();
+    expect([200, 201]).toContain((await api('POST', '/api/slots/book', csrToken, { slotId: SLOT_A })).status);
+  });
+
   it('still refuses two different shifts on the same day', async () => {
     const sameDaySlot = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     await db('work_slots').insert({

@@ -239,6 +239,12 @@ router.post('/', authenticate, async (req: any, res) => {
   const finalEmploymentType = normalizeEmploymentType(employment_type ?? employmentType);
   const requestedSegment = segment ?? lineType ?? DEFAULT_SEGMENTS_BY_ROLE[finalRole] ?? '';
 
+  // The role check comes first: a CSR probing this endpoint should be told
+  // they may not use it, not handed field-by-field validation feedback.
+  if (actingUserRole !== 'superadmin' && actingUserRole !== 'admin') {
+    return res.status(403).json({ error: 'Хандах эрхгүй' });
+  }
+
   if (!email || !name) {
     return res.status(400).json({ error: 'И-мэйл болон нэр шаардлагатай' });
   }
@@ -555,6 +561,12 @@ router.post('/:id/reset-password', authenticate, authorize(['superadmin', 'admin
 router.delete('/:id', authenticate, async (req: any, res) => {
   const { id } = req.params;
   const actingUser = req.user; // { id, email, role }
+
+  // Before any lookup: otherwise a CSR could tell an existing account from a
+  // non-existent one by the 404.
+  if (actingUser.role !== 'superadmin' && actingUser.role !== 'admin') {
+    return res.status(403).json({ error: 'Устгах эрхгүй' });
+  }
 
   try {
     const userToDelete = await db('users').where({ id }).first();

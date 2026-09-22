@@ -226,6 +226,23 @@ const autoDeclineExpiredTrades = createThrottledTask(
   'autoDeclineExpiredTrades',
 );
 
+// A Чөлөө is raised against one specific booking. Swapping that booking onto
+// a different shift would silently turn an approved "I cannot work 09:00-
+// 18:00 on the 5th" into leave from whatever shift the trade handed over,
+// with the stored hours no longer matching anything. Refuse the trade
+// instead; the CSR can withdraw the leave request first.
+async function leaveRequestBlocking(conn: any, bookingIds: string[]) {
+  const ids = bookingIds.filter(Boolean);
+  if (ids.length === 0) return null;
+  const row = await conn('leave_requests')
+    .whereIn('slot_booking_id', ids)
+    .whereIn('status', ['pending', 'approved'])
+    .first();
+  return row
+    ? 'Энэ ээлж дээр чөлөөний хүсэлт байгаа тул солих боломжгүй. Эхлээд чөлөөний хүсэлтээ устгана уу.'
+    : null;
+}
+
 router.get('/', authenticate, async (req: any, res) => {
   try {
     await autoDeclineExpiredTrades();
@@ -278,6 +295,9 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     const senderBooking = await db('slot_bookings').where({ user_id: senderId, slot_id: senderSlotIdFinal, status: 'confirmed' }).first();
     const receiverBooking = await db('slot_bookings').where({ user_id: receiverIdFinal, slot_id: receiverSlotIdFinal, status: 'confirmed' }).first();
     if (!senderBooking || !receiverBooking) return res.status(400).json({ error: 'Захиалга баталгаагүй байна' });
+
+    const leaveBlock = await leaveRequestBlocking(db, [senderBooking.id, receiverBooking.id]);
+    if (leaveBlock) return res.status(409).json({ error: leaveBlock });
 
     const senderSlot = await db('work_slots').where({ id: senderSlotIdFinal }).first();
     const receiverSlot = await db('work_slots').where({ id: receiverSlotIdFinal }).first();
@@ -434,6 +454,14 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     if (capacityError) {
       await trx.rollback();
       return res.status(409).json({ error: capacityError });
+    }
+
+    // Re-checked here as well as at creation: either side may have raised a
+    // Чөлөө in the meantime.
+    const leaveBlock = await leaveRequestBlocking(trx, [senderBooking.id, receiverBooking.id]);
+    if (leaveBlock) {
+      await trx.rollback();
+      return res.status(409).json({ error: leaveBlock });
     }
 
     // slot_bookings carries UNIQUE(slot_id, user_id) and cancelling is a soft
