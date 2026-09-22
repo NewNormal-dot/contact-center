@@ -21,6 +21,12 @@ const CSR_ID = '11111111-1111-4111-8111-111111111111';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
 const SECOND_ADMIN_ID = '33333333-3333-4333-8333-333333333333';
 const OTHER_CSR_ID = '44444444-4444-4444-8444-444444444444';
+const SLOT_ID = '55555555-5555-4555-8555-555555555555';
+const BOOKING_ID = '66666666-6666-4666-8666-666666666666';
+
+// Far enough out that the eight-hours-before-the-shift rule is satisfied no
+// matter what time of day the suite runs.
+const SHIFT_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 async function createSchema() {
   await db.schema.createTable('users', (t: any) => {
@@ -51,6 +57,34 @@ async function createSchema() {
     t.string('user_code');
     t.uuid('approved_by');
     t.text('comment');
+    t.uuid('slot_booking_id');
+    t.timestamps(true, true);
+  });
+
+  // Leave is only ever requested against a shift the CSR has booked, so
+  // these two tables are now part of the leave flow.
+  await db.schema.createTable('work_slots', (t: any) => {
+    t.uuid('id').primary();
+    t.date('date').notNullable();
+    t.time('start_time').notNullable();
+    t.time('end_time').notNullable();
+    t.float('duration').defaultTo(0);
+    t.integer('capacity').defaultTo(5);
+    t.string('segment').defaultTo('All');
+    t.string('employment_type').defaultTo('Full Time');
+    t.string('location').defaultTo('Ulaanbaatar');
+    t.boolean('is_rest').defaultTo(false);
+    t.timestamps(true, true);
+  });
+
+  await db.schema.createTable('slot_bookings', (t: any) => {
+    t.uuid('id').primary();
+    t.uuid('slot_id');
+    t.uuid('user_id');
+    t.string('status').defaultTo('confirmed');
+    t.string('user_name');
+    t.string('user_code');
+    t.dateTime('booked_at');
     t.timestamps(true, true);
   });
 
@@ -129,17 +163,23 @@ beforeEach(async () => {
   await db('notifications').del();
   await db('notification_read_receipts').del();
   await db('leave_requests').del();
+  await db('slot_bookings').del();
+  await db('work_slots').del();
+
+  await db('work_slots').insert({
+    id: SLOT_ID, date: SHIFT_DATE, start_time: '09:00:00', end_time: '17:00:00',
+    duration: 8, capacity: 5, segment: 'VIP', employment_type: 'Full Time', location: 'Ulaanbaatar',
+  });
+  await db('slot_bookings').insert({
+    id: BOOKING_ID, slot_id: SLOT_ID, user_id: CSR_ID, status: 'confirmed', user_name: 'CSR One',
+  });
 });
 
 describe('leave request notifications', () => {
   it('sends one exact notification to the requester and admin copies that identify the acting admin and requester', async () => {
     const createLeave = await api('POST', '/api/requests/leave', csrToken, {
-      date: '2026-10-05',
-      endDate: '2026-10-05',
-      startTime: '09:00',
-      endTime: '17:00',
+      slotBookingId: BOOKING_ID,
       reason: 'Family matter',
-      type: 'daily',
     });
 
     expect(createLeave.status).toBe(201);
@@ -163,5 +203,94 @@ describe('leave request notifications', () => {
 
     const csrCopies = rows.filter((n: any) => String(n.target_user_id) === String(OTHER_CSR_ID));
     expect(csrCopies.length).toBe(0);
+  });
+
+  it('refuses leave that is not tied to a booked shift', async () => {
+    const created = await api('POST', '/api/requests/leave', csrToken, {
+      date: SHIFT_DATE,
+      endDate: SHIFT_DATE,
+      startTime: '09:00',
+      endTime: '17:00',
+      reason: 'A day I was never rostered for',
+      type: 'daily',
+    });
+
+    expect(created.status).toBe(400);
+    expect(await db('leave_requests').count({ c: '*' }).first()).toMatchObject({ c: 0 });
+  });
+
+  it('refuses a booking that belongs to someone else', async () => {
+    const otherCsrToken = (await import('jsonwebtoken')).default.sign(
+      { id: OTHER_CSR_ID, email: 'othercsr@test.mn', role: 'csr', name: 'Other CSR' },
+      process.env.JWT_SECRET!,
+      { expiresIn: '1h' },
+    );
+
+    const created = await api('POST', '/api/requests/leave', otherCsrToken, {
+      slotBookingId: BOOKING_ID,
+      reason: 'Not my shift',
+    });
+
+    expect(created.status).toBe(403);
+  });
+
+  it('records the whole shift as shift_leave and part of it as hourly', async () => {
+    const whole = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      reason: 'Out all day',
+    });
+    expect(whole.status).toBe(201);
+    expect(await db('leave_requests').where({ id: whole.body.id }).first()).toMatchObject({
+      type: 'shift_leave', start_time: '09:00:00', end_time: '17:00:00',
+    });
+
+    await db('leave_requests').del();
+
+    const partial = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      startTime: '13:00',
+      endTime: '15:00',
+      reason: 'Appointment',
+    });
+    expect(partial.status).toBe(201);
+    expect(await db('leave_requests').where({ id: partial.body.id }).first()).toMatchObject({
+      type: 'hourly', start_time: '13:00:00', end_time: '15:00:00',
+    });
+  });
+
+  it('keeps the requested hours inside the shift, and rejects an overlapping second window', async () => {
+    const outside = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      startTime: '18:00',
+      endTime: '19:00',
+      reason: 'After the shift ends',
+    });
+    expect(outside.status).toBe(400);
+
+    const first = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      startTime: '10:00',
+      endTime: '12:00',
+      reason: 'Morning',
+    });
+    expect(first.status).toBe(201);
+
+    const overlapping = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      startTime: '11:00',
+      endTime: '13:00',
+      reason: 'Overlaps the morning',
+    });
+    expect(overlapping.status).toBe(409);
+
+    // A second window on the same shift is fine as long as it does not
+    // overlap the first.
+    const later = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      startTime: '14:00',
+      endTime: '16:00',
+      reason: 'Afternoon',
+    });
+    expect(later.status).toBe(201);
   });
 });
