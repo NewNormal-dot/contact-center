@@ -74,6 +74,7 @@ async function createSchema() {
     t.string('employment_type').defaultTo('Full Time');
     t.string('location').defaultTo('Ulaanbaatar');
     t.boolean('is_rest').defaultTo(false);
+    t.dateTime('booking_deadline');
     t.timestamps(true, true);
   });
 
@@ -169,6 +170,8 @@ beforeEach(async () => {
   await db('work_slots').insert({
     id: SLOT_ID, date: SHIFT_DATE, start_time: '09:00:00', end_time: '17:00:00',
     duration: 8, capacity: 5, segment: 'VIP', employment_type: 'Full Time', location: 'Ulaanbaatar',
+    // Booking already closed: Чөлөө is only for a schedule that is fixed.
+    booking_deadline: new Date(Date.now() - 60 * 60 * 1000),
   });
   await db('slot_bookings').insert({
     id: BOOKING_ID, slot_id: SLOT_ID, user_id: CSR_ID, status: 'confirmed', user_name: 'CSR One',
@@ -342,5 +345,20 @@ describe('leave request notifications', () => {
     expect((await api('PUT', `/api/requests/leave/${id}`, csrToken, { reason: 'Too late' })).status).toBe(409);
     expect((await api('DELETE', `/api/requests/leave/${id}`, csrToken)).status).toBe(409);
     expect(await db('leave_requests').where({ id }).first()).toBeTruthy();
+  });
+
+  it('refuses leave while booking is still open, because the shift can just be cancelled', async () => {
+    await db('work_slots').where({ id: SLOT_ID }).update({
+      booking_deadline: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+    });
+
+    const created = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      reason: 'Booking is still open',
+    });
+
+    expect(created.status).toBe(400);
+    expect(created.body.error).toContain('Захиалга нээлттэй');
+    expect(await db('leave_requests').first()).toBeFalsy();
   });
 });

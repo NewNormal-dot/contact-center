@@ -162,7 +162,13 @@ async function resolveLeaveWindow(params: {
   const booking = await db('slot_bookings')
     .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
     .where({ 'slot_bookings.id': params.bookingId })
-    .select('slot_bookings.*', 'work_slots.date as slot_date', 'work_slots.start_time as slot_start_time', 'work_slots.end_time as slot_end_time')
+    .select(
+      'slot_bookings.*',
+      'work_slots.date as slot_date',
+      'work_slots.start_time as slot_start_time',
+      'work_slots.end_time as slot_end_time',
+      'work_slots.booking_deadline as slot_booking_deadline',
+    )
     .first();
 
   if (!booking) return { status: 404, error: 'Захиалга олдсонгүй' } as const;
@@ -171,6 +177,22 @@ async function resolveLeaveWindow(params: {
   }
   if (booking.status !== 'confirmed') {
     return { status: 400, error: 'Энэ захиалга идэвхгүй байна' } as const;
+  }
+
+  // Чөлөө only means anything once the schedule is FIXED. While booking is
+  // still open the CSR can cancel or move the shift themselves, so asking an
+  // admin's permission to miss it is the wrong tool - and it produced leave
+  // requests attached to bookings the person then freely deleted. Leave
+  // opens exactly when cancelling closes: at the booking deadline, the same
+  // moment trading becomes the only way to hand a shift over.
+  const bookingDeadline = booking.slot_booking_deadline
+    ? new Date(booking.slot_booking_deadline).getTime()
+    : NaN;
+  if (!Number.isFinite(bookingDeadline) || Date.now() <= bookingDeadline) {
+    return {
+      status: 400,
+      error: 'Захиалга нээлттэй байхад чөлөө хүсэх шаардлагагүй. Ээлжээ өөрөө цуцлах буюу өөрчлөх боломжтой. Захиалга хаагдсаны дараа чөлөө хүснэ үү.',
+    } as const;
   }
 
   const shiftStartTime = toSqlTime(booking.slot_start_time);
