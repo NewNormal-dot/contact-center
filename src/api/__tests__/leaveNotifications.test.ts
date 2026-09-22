@@ -293,4 +293,54 @@ describe('leave request notifications', () => {
     });
     expect(later.status).toBe(201);
   });
+
+  it('lets the requester edit and withdraw a request nobody has answered yet', async () => {
+    const created = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      startTime: '10:00',
+      endTime: '11:00',
+      reason: 'Wrong hours',
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+
+    const edited = await api('PUT', `/api/requests/leave/${id}`, csrToken, {
+      slotBookingId: BOOKING_ID,
+      startTime: '14:00',
+      endTime: '16:00',
+      reason: 'Corrected hours',
+    });
+    expect(edited.status).toBe(200);
+    expect(await db('leave_requests').where({ id }).first()).toMatchObject({
+      start_time: '14:00:00', end_time: '16:00:00', reason: 'Corrected hours', type: 'hourly',
+    });
+
+    const removed = await api('DELETE', `/api/requests/leave/${id}`, csrToken);
+    expect(removed.status).toBe(200);
+    expect(await db('leave_requests').where({ id }).first()).toBeFalsy();
+    // The admins' pending alerts pointed at a request that no longer exists.
+    expect(await db('notifications').where({ related_entity_id: id }).first()).toBeFalsy();
+  });
+
+  it('will not let a decided request be edited or withdrawn, nor touched by another CSR', async () => {
+    const created = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      reason: 'Whole shift',
+    });
+    const id = created.body.id;
+
+    const otherCsrToken = (await import('jsonwebtoken')).default.sign(
+      { id: OTHER_CSR_ID, email: 'othercsr@test.mn', role: 'csr', name: 'Other CSR' },
+      process.env.JWT_SECRET!,
+      { expiresIn: '1h' },
+    );
+    expect((await api('DELETE', `/api/requests/leave/${id}`, otherCsrToken)).status).toBe(403);
+    expect((await api('PUT', `/api/requests/leave/${id}`, otherCsrToken, { reason: 'Not mine' })).status).toBe(403);
+
+    expect((await api('PATCH', `/api/requests/leave/${id}`, adminToken, { status: 'approved' })).status).toBe(200);
+
+    expect((await api('PUT', `/api/requests/leave/${id}`, csrToken, { reason: 'Too late' })).status).toBe(409);
+    expect((await api('DELETE', `/api/requests/leave/${id}`, csrToken)).status).toBe(409);
+    expect(await db('leave_requests').where({ id }).first()).toBeTruthy();
+  });
 });

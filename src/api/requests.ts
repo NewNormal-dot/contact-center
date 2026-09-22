@@ -149,6 +149,125 @@ router.get('/leave', authenticate, async (req: any, res) => {
 // CSR typed in by hand) which let someone file leave for a day they were
 // never scheduled to work at all - leave from nothing. That path is gone:
 // no booking, no leave.
+//
+// Shared by creating a request and by editing one that is still pending, so
+// the two can never drift apart on what counts as a valid window.
+async function resolveLeaveWindow(params: {
+  userId: string;
+  bookingId: string;
+  rawStartTime: unknown;
+  rawEndTime: unknown;
+  excludeLeaveId?: string;
+}) {
+  const booking = await db('slot_bookings')
+    .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
+    .where({ 'slot_bookings.id': params.bookingId })
+    .select('slot_bookings.*', 'work_slots.date as slot_date', 'work_slots.start_time as slot_start_time', 'work_slots.end_time as slot_end_time')
+    .first();
+
+  if (!booking) return { status: 404, error: 'Захиалга олдсонгүй' } as const;
+  if (booking.user_id !== params.userId) {
+    return { status: 403, error: 'Энэ захиалга танд хамаарахгүй байна' } as const;
+  }
+  if (booking.status !== 'confirmed') {
+    return { status: 400, error: 'Энэ захиалга идэвхгүй байна' } as const;
+  }
+
+  const shiftStartTime = toSqlTime(booking.slot_start_time);
+  const shiftEndTime = toSqlTime(booking.slot_end_time);
+  if (!shiftStartTime || !shiftEndTime) {
+    return { status: 400, error: 'Ээлжийн цагийг тодорхойлж чадсангүй' } as const;
+  }
+
+  // A requested window defaults to the WHOLE shift - "I cannot work this
+  // one at all" - which is by far the common case.
+  const finalStartTime = toSqlTime(params.rawStartTime) || shiftStartTime;
+  const finalEndTime = toSqlTime(params.rawEndTime) || shiftEndTime;
+
+  // Night shifts run past midnight (22:00-06:00), so a plain string
+  // comparison would reject every one of them. Measure everything as
+  // minutes FROM the shift's own start instead, wrapping the end past
+  // midnight when it lands before the start.
+  const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const shiftStartMin = minutes(shiftStartTime);
+  const fromShiftStart = (t: string) => {
+    const delta = minutes(t) - shiftStartMin;
+    return delta < 0 ? delta + 24 * 60 : delta;
+  };
+  const shiftLengthMin = fromShiftStart(shiftEndTime) || 24 * 60;
+  const leaveFrom = fromShiftStart(finalStartTime);
+  const leaveTo = minutes(finalEndTime) === minutes(shiftEndTime) ? shiftLengthMin : fromShiftStart(finalEndTime);
+
+  // Bounds are checked BEFORE ordering: a time outside the shift wraps
+  // past midnight in this arithmetic, which would otherwise surface as a
+  // confusing "end before start" message.
+  if (leaveFrom >= shiftLengthMin || leaveTo > shiftLengthMin) {
+    return {
+      status: 400,
+      error: `Чөлөөний цаг ээлжийн хугацаанд (${displayTime(shiftStartTime)}-${displayTime(shiftEndTime)}) багтах ёстой`,
+    } as const;
+  }
+  if (leaveTo <= leaveFrom) {
+    return { status: 400, error: 'Дуусах цаг эхлэх цагаас хойш байх ёстой' } as const;
+  }
+
+  const shiftStart = toSqlDateTime(`${displayDate(booking.slot_date)}T${displayTime(shiftStartTime)}`);
+  if (!shiftStart) return { status: 400, error: 'Ээлжийн цагийг тодорхойлж чадсангүй' } as const;
+
+  const hoursUntilShift = (shiftStart.getTime() - Date.now()) / (1000 * 60 * 60);
+  if (hoursUntilShift < 8) {
+    return {
+      status: 400,
+      error: hoursUntilShift < 0
+        ? 'Энэ ээлж аль хэдийн эхэлсэн эсвэл өнгөрсөн байна'
+        : `Ээлж эхлэхэд дор хаяж 8 цаг үлдсэн байх ёстой (одоогоор ${hoursUntilShift.toFixed(1)} цаг үлдсэн байна)`,
+    } as const;
+  }
+
+  // One shift may carry more than one leave window (a CSR out for a
+  // morning appointment and again in the afternoon), but two windows may
+  // not overlap each other. When editing, the request being edited is not
+  // its own clash.
+  let existingQuery = db('leave_requests')
+    .where({ slot_booking_id: params.bookingId })
+    .whereIn('status', ['pending', 'approved']);
+  if (params.excludeLeaveId) existingQuery = existingQuery.whereNot({ id: params.excludeLeaveId });
+  const existingForBooking = await existingQuery.select('start_time', 'end_time');
+
+  const clashes = existingForBooking.some((row: any) => {
+    const rowStart = toSqlTime(row.start_time);
+    const rowEnd = toSqlTime(row.end_time);
+    if (!rowStart || !rowEnd) return true;
+    const from = fromShiftStart(rowStart);
+    const to = minutes(rowEnd) === minutes(shiftEndTime) ? shiftLengthMin : fromShiftStart(rowEnd);
+    return from < leaveTo && to > leaveFrom;
+  });
+  if (clashes) {
+    return { status: 409, error: 'Энэ ээлжийн тэр цагт аль хэдийн чөлөөний хүсэлт илгээгдсэн байна' } as const;
+  }
+
+  // Whole shift vs. part of it. The monthly export blanks out a whole day
+  // for 'shift_leave' only, so a partial window must NOT be recorded as
+  // one - it stays 'hourly'.
+  const isWholeShift = leaveFrom === 0 && leaveTo === shiftLengthMin;
+
+  return {
+    booking,
+    shiftStartTime,
+    shiftEndTime,
+    finalStartTime,
+    finalEndTime,
+    isWholeShift,
+    leaveType: isWholeShift ? 'shift_leave' : 'hourly',
+  };
+}
+
+function leaveReasonError(reason: unknown) {
+  if (!reason || !String(reason).trim()) return 'Шалтгаанаа оруулна уу';
+  if (String(reason).trim().length > 1000) return 'Шалтгаан хэт урт байна (1000 тэмдэгт)';
+  return null;
+}
+
 router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) => {
   const { start_time, end_time, startTime, endTime, reason, slotBookingId, slot_booking_id } = req.body;
   const userId = req.user.id;
@@ -157,102 +276,19 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
   if (!requestedSlotBookingId) {
     return res.status(400).json({ error: 'Чөлөө зөвхөн захиалсан ээлжийн цагт авах боломжтой. Ээлжээ сонгоно уу.' });
   }
-  if (!reason || !String(reason).trim()) {
-    return res.status(400).json({ error: 'Шалтгаанаа оруулна уу' });
-  }
-  if (String(reason).trim().length > 1000) {
-    return res.status(400).json({ error: 'Шалтгаан хэт урт байна (1000 тэмдэгт)' });
-  }
+  const reasonError = leaveReasonError(reason);
+  if (reasonError) return res.status(400).json({ error: reasonError });
 
   try {
-    const booking = await db('slot_bookings')
-      .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
-      .where({ 'slot_bookings.id': requestedSlotBookingId })
-      .select('slot_bookings.*', 'work_slots.date as slot_date', 'work_slots.start_time as slot_start_time', 'work_slots.end_time as slot_end_time')
-      .first();
-
-    if (!booking) return res.status(404).json({ error: 'Захиалга олдсонгүй' });
-    if (booking.user_id !== userId) {
-      return res.status(403).json({ error: 'Энэ захиалга танд хамаарахгүй байна' });
-    }
-    if (booking.status !== 'confirmed') {
-      return res.status(400).json({ error: 'Энэ захиалга идэвхгүй байна' });
-    }
-
-    const shiftStartTime = toSqlTime(booking.slot_start_time);
-    const shiftEndTime = toSqlTime(booking.slot_end_time);
-    if (!shiftStartTime || !shiftEndTime) {
-      return res.status(400).json({ error: 'Ээлжийн цагийг тодорхойлж чадсангүй' });
-    }
-
-    // A requested window defaults to the WHOLE shift - "I cannot work this
-    // one at all" - which is by far the common case.
-    const finalStartTime = toSqlTime(start_time || startTime) || shiftStartTime;
-    const finalEndTime = toSqlTime(end_time || endTime) || shiftEndTime;
-
-    // Night shifts run past midnight (22:00-06:00), so a plain string
-    // comparison would reject every one of them. Measure everything as
-    // minutes FROM the shift's own start instead, wrapping the end past
-    // midnight when it lands before the start.
-    const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
-    const shiftStartMin = minutes(shiftStartTime);
-    const fromShiftStart = (t: string) => {
-      const delta = minutes(t) - shiftStartMin;
-      return delta < 0 ? delta + 24 * 60 : delta;
-    };
-    const shiftLengthMin = fromShiftStart(shiftEndTime) || 24 * 60;
-    const leaveFrom = fromShiftStart(finalStartTime);
-    const leaveTo = minutes(finalEndTime) === minutes(shiftEndTime) ? shiftLengthMin : fromShiftStart(finalEndTime);
-
-    // Bounds are checked BEFORE ordering: a time outside the shift wraps
-    // past midnight in this arithmetic, which would otherwise surface as a
-    // confusing "end before start" message.
-    if (leaveFrom >= shiftLengthMin || leaveTo > shiftLengthMin) {
-      return res.status(400).json({
-        error: `Чөлөөний цаг ээлжийн хугацаанд (${displayTime(shiftStartTime)}-${displayTime(shiftEndTime)}) багтах ёстой`,
-      });
-    }
-    if (leaveTo <= leaveFrom) {
-      return res.status(400).json({ error: 'Дуусах цаг эхлэх цагаас хойш байх ёстой' });
-    }
-
-    const shiftStart = toSqlDateTime(`${displayDate(booking.slot_date)}T${displayTime(shiftStartTime)}`);
-    if (!shiftStart) return res.status(400).json({ error: 'Ээлжийн цагийг тодорхойлж чадсангүй' });
-
-    const hoursUntilShift = (shiftStart.getTime() - Date.now()) / (1000 * 60 * 60);
-    if (hoursUntilShift < 8) {
-      return res.status(400).json({
-        error: hoursUntilShift < 0
-          ? 'Энэ ээлж аль хэдийн эхэлсэн эсвэл өнгөрсөн байна'
-          : `Ээлж эхлэхэд дор хаяж 8 цаг үлдсэн байх ёстой (одоогоор ${hoursUntilShift.toFixed(1)} цаг үлдсэн байна)`,
-      });
-    }
-
-    // One shift may carry more than one leave window (a CSR out for a
-    // morning appointment and again in the afternoon), but two windows may
-    // not overlap each other.
-    const existingForBooking = await db('leave_requests')
-      .where({ slot_booking_id: requestedSlotBookingId })
-      .whereIn('status', ['pending', 'approved'])
-      .select('start_time', 'end_time');
-
-    const clashes = existingForBooking.some((row: any) => {
-      const rowStart = toSqlTime(row.start_time);
-      const rowEnd = toSqlTime(row.end_time);
-      if (!rowStart || !rowEnd) return true;
-      const from = fromShiftStart(rowStart);
-      const to = minutes(rowEnd) === minutes(shiftEndTime) ? shiftLengthMin : fromShiftStart(rowEnd);
-      return from < leaveTo && to > leaveFrom;
+    const resolved = await resolveLeaveWindow({
+      userId,
+      bookingId: requestedSlotBookingId,
+      rawStartTime: start_time || startTime,
+      rawEndTime: end_time || endTime,
     });
-    if (clashes) {
-      return res.status(409).json({ error: 'Энэ ээлжийн тэр цагт аль хэдийн чөлөөний хүсэлт илгээгдсэн байна' });
-    }
+    if ('error' in resolved) return res.status(resolved.status).json({ error: resolved.error });
 
-    // Whole shift vs. part of it. The monthly export blanks out a whole day
-    // for 'shift_leave' only, so a partial window must NOT be recorded as
-    // one - it stays 'hourly'.
-    const isWholeShift = leaveFrom === 0 && leaveTo === shiftLengthMin;
-    const leaveType = isWholeShift ? 'shift_leave' : 'hourly';
+    const { booking, shiftStartTime, shiftEndTime, finalStartTime, finalEndTime, isWholeShift, leaveType } = resolved;
 
     const id = uuidv4();
     const requestingUser = await db('users').where({ id: userId }).first();
@@ -297,6 +333,142 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
     console.error('Create leave request error:', err);
     captureError('requests: Create leave request error:', err);
     return res.status(500).json({ error: 'Чөлөөний хүсэлт үүсгэхэд алдаа гарлаа' });
+  }
+});
+
+// A request nobody has answered yet is still the requester's to change or
+// withdraw - previously it was fire-and-forget, and a CSR who picked the
+// wrong shift or mistyped the hours had to ask an admin to reject it.
+router.put('/leave/:id', authenticate, authorize(['csr']), async (req: any, res) => {
+  const { id } = req.params;
+  const { start_time, end_time, startTime, endTime, reason, slotBookingId, slot_booking_id } = req.body;
+  const userId = req.user.id;
+
+  const reasonError = leaveReasonError(reason);
+  if (reasonError) return res.status(400).json({ error: reasonError });
+
+  try {
+    const existing = await db('leave_requests').where({ id }).first();
+    if (!existing) return res.status(404).json({ error: 'Хүсэлт олдсонгүй' });
+    if (String(existing.user_id) !== String(userId)) {
+      return res.status(403).json({ error: 'Энэ хүсэлт танд хамаарахгүй байна' });
+    }
+    if (existing.status !== 'pending') {
+      return res.status(409).json({ error: 'Шийдвэрлэгдсэн хүсэлтийг засах боломжгүй' });
+    }
+
+    const targetBookingId = slotBookingId || slot_booking_id || existing.slot_booking_id;
+    if (!targetBookingId) {
+      return res.status(400).json({ error: 'Чөлөө зөвхөн захиалсан ээлжийн цагт авах боломжтой. Ээлжээ сонгоно уу.' });
+    }
+
+    const resolved = await resolveLeaveWindow({
+      userId,
+      bookingId: targetBookingId,
+      rawStartTime: start_time || startTime,
+      rawEndTime: end_time || endTime,
+      excludeLeaveId: id,
+    });
+    if ('error' in resolved) return res.status(resolved.status).json({ error: resolved.error });
+
+    const { booking, shiftStartTime, shiftEndTime, finalStartTime, finalEndTime, isWholeShift, leaveType } = resolved;
+
+    // Guard the state machine: an admin may have decided the request while
+    // this edit was in flight.
+    const updated = await db('leave_requests')
+      .where({ id, user_id: userId, status: 'pending' })
+      .update({
+        slot_booking_id: targetBookingId,
+        date: booking.slot_date,
+        end_date: booking.slot_date,
+        start_time: finalStartTime,
+        end_time: finalEndTime,
+        type: leaveType,
+        reason,
+        updated_at: db.fn.now(),
+      });
+    if (updated !== 1) {
+      return res.status(409).json({ error: 'Энэ хүсэлт аль хэдийн шийдвэрлэгдсэн байна' });
+    }
+
+    const window = `${displayTime(finalStartTime)}-${displayTime(finalEndTime)}`;
+    const requestingUser = await db('users').where({ id: userId }).first();
+
+    // Replace the admins' pending alert rather than adding a second one, so
+    // the team sees the current request and not both versions of it.
+    await db('notifications')
+      .where({ related_entity_type: 'leave_request', related_entity_id: id })
+      .whereIn('target_user_id', db('users').select('id').whereIn('role', ['admin', 'superadmin']))
+      .del();
+    await createNotificationForAdmins({
+      title: 'Чөлөөний хүсэлт засагдлаа',
+      content: `${requestingUser?.name || 'CSR'} нь ${displayDate(booking.slot_date)} өдрийн ${displayTime(shiftStartTime)}-${displayTime(shiftEndTime)} ээлжийн ${isWholeShift ? 'бүтэн ээлжид' : `${window} цагт`} чөлөө хүсэхээр хүсэлтээ өөрчиллөө. Шалтгаан: ${reason}`,
+      type: 'leave_request',
+      relatedEntityType: 'leave_request',
+      relatedEntityId: id,
+      authorId: userId,
+    });
+
+    await logAction(
+      userId,
+      'UPDATE_LEAVE_REQUEST',
+      'leave_requests',
+      id,
+      `edited to ${leaveType} ${displayDate(booking.slot_date)} ${window}`,
+      req,
+    );
+
+    return res.json({ id });
+  } catch (err) {
+    console.error('Update own leave request error:', err);
+    captureError('requests: Update own leave request error:', err);
+    return res.status(500).json({ error: 'Чөлөөний хүсэлт засахад алдаа гарлаа' });
+  }
+});
+
+router.delete('/leave/:id', authenticate, authorize(['csr']), async (req: any, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  try {
+    const existing = await db('leave_requests').where({ id }).first();
+    if (!existing) return res.status(404).json({ error: 'Хүсэлт олдсонгүй' });
+    if (String(existing.user_id) !== String(userId)) {
+      return res.status(403).json({ error: 'Энэ хүсэлт танд хамаарахгүй байна' });
+    }
+    if (existing.status !== 'pending') {
+      return res.status(409).json({ error: 'Шийдвэрлэгдсэн хүсэлтийг устгах боломжгүй' });
+    }
+
+    const removed = await db.transaction(async (trx) => {
+      const count = await trx('leave_requests').where({ id, user_id: userId, status: 'pending' }).del();
+      if (count !== 1) return false;
+      // The admins' "хүсэлт ирлээ" alerts point at a request that no longer
+      // exists, so they go with it.
+      await trx('notifications')
+        .where({ related_entity_type: 'leave_request', related_entity_id: id })
+        .del();
+      return true;
+    });
+
+    if (!removed) {
+      return res.status(409).json({ error: 'Энэ хүсэлт аль хэдийн шийдвэрлэгдсэн байна' });
+    }
+
+    await logAction(
+      userId,
+      'DELETE_LEAVE_REQUEST',
+      'leave_requests',
+      id,
+      `withdrew ${existing.type || 'hourly'} leave for ${displayDate(existing.date)} ${displayTime(existing.start_time)}-${displayTime(existing.end_time)}`,
+      req,
+    );
+
+    return res.json({ message: 'Хүсэлт устгагдлаа' });
+  } catch (err) {
+    console.error('Delete own leave request error:', err);
+    captureError('requests: Delete own leave request error:', err);
+    return res.status(500).json({ error: 'Чөлөөний хүсэлт устгахад алдаа гарлаа' });
   }
 });
 

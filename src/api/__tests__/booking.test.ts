@@ -133,6 +133,22 @@ async function createSchema() {
     t.string('related_entity_id');
     t.timestamps(true, true);
   });
+
+  // Removing a shift now clears the pending leave requests raised against
+  // the bookings on it, so the reconciliation path touches this table too.
+  await db.schema.createTable('leave_requests', (t: any) => {
+    t.uuid('id').primary();
+    t.uuid('user_id');
+    t.date('date').notNullable();
+    t.date('end_date');
+    t.time('start_time');
+    t.time('end_time');
+    t.string('reason');
+    t.string('type').defaultTo('hourly');
+    t.string('status').defaultTo('pending');
+    t.uuid('slot_booking_id');
+    t.timestamps(true, true);
+  });
 }
 
 /** A future date, so booking windows and past-date guards behave normally. */
@@ -287,31 +303,50 @@ describe('POST /api/slots/book - cancel then re-book the same shift', () => {
 });
 
 describe('POST /api/slots/sync-schedules - reconciliation deletes', () => {
-  it('never deletes a shift that somebody has booked', async () => {
-    // THE BUG: any work_slot the payload no longer contained was deleted
-    // together with its slot_bookings. Identity is
-    // date|start|end|segment|type|location|is_rest, so merely editing a
-    // shift's TIME orphaned the old row and destroyed every confirmed
-    // booking on it - silently, with no audit row and no notification.
+  it('removes a booked shift along with its bookings, and tells the people who lose them', async () => {
+    // Identity is date|start|end|segment|type|location|is_rest, so merely
+    // editing a shift's TIME leaves the old row unmatched. That row used to
+    // be KEPT whenever somebody had booked it, which left the employee
+    // holding a booking on a shift the admin thought was gone - and, since a
+    // CSR may hold only one booking per day, locked them out of the
+    // replacement. It goes now, but never silently.
     const date = futureDate(1);
-    const booked = await db('slot_bookings').insert({
-      id: '99999999-9999-4999-8999-999999999999',
+    const bookingId = '99999999-9999-4999-8999-999999999999';
+    await db('slot_bookings').insert({
+      id: bookingId,
       slot_id: SLOT_B, user_id: ADMIN_ID, status: 'confirmed', booked_at: new Date(),
     });
-    expect(booked).toBeDefined();
+    await db('leave_requests').insert({
+      id: '88888888-8888-4888-8888-888888888888',
+      user_id: ADMIN_ID, date, start_time: '09:00:00', end_time: '18:00:00',
+      reason: 'Pending against a shift about to vanish', status: 'pending',
+      slot_booking_id: bookingId,
+    });
 
     const response = await api('POST', '/api/slots/sync-schedules', adminToken, {
       dateKeys: [date],
       scope: { location: 'Ulaanbaatar', segment: 'Postpaid', employmentType: 'Full Time' },
-      // SLOT_B is simply absent - the old code's cue to delete it.
+      // SLOT_B is simply absent - the cue to remove it.
       schedules: { [date]: { shifts: [] } },
     });
 
     expect(response.status).toBe(200);
-    expect(await db('work_slots').where({ id: SLOT_B }).first()).toBeTruthy();
-    expect(await db('slot_bookings').where({ slot_id: SLOT_B, status: 'confirmed' }).first()).toBeTruthy();
-    // ...and the admin is told, rather than being shown a clean save.
-    expect(response.body.keptBookedSlots.length).toBeGreaterThan(0);
+    expect(await db('work_slots').where({ id: SLOT_B }).first()).toBeFalsy();
+    expect(await db('slot_bookings').where({ id: bookingId }).first()).toBeFalsy();
+
+    // The person who lost the shift hears about it...
+    const notice = await db('notifications')
+      .where({ target_user_id: ADMIN_ID, type: 'schedule_change' })
+      .first();
+    expect(notice).toBeTruthy();
+    expect(notice.content).toContain(date);
+
+    // ...the admin is shown who was affected...
+    expect(response.body.removedBookings.length).toBeGreaterThan(0);
+
+    // ...and the pending leave request that hung off the booking is gone,
+    // rather than pointing at a shift that no longer exists.
+    expect(await db('leave_requests').where({ status: 'pending' }).first()).toBeFalsy();
   });
 
   it('deletes nothing at all when the request carries no editing scope', async () => {
