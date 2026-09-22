@@ -42,6 +42,25 @@ for a package nothing imports. The old App Service was stopped that day, and
 the probe removed once its answer was recorded in
 `APP-SERVICE-MIGRATION.md`.
 
+### Dependency upgrades, and the three that are left
+
+The freeze meant security patches could not be applied at all. Once it was
+gone, `npm audit --omit=dev` reported **24 vulnerabilities, 2 critical and 14
+high**. `npm audit fix` (no `--force`) brought that to **3**, and changed
+nothing in `package.json` — only the resolved tree in `package-lock.json`, so
+no declared version moved.
+
+What is left, and why:
+
+| | Severity | Why it stays |
+|---|---|---|
+| `xlsx` 0.18.5 | high | **No fix on npm.** SheetJS publishes newer versions only from its own CDN, so npm's copy is frozen. Prototype pollution + ReDoS. Replacing it (e.g. with `exceljs`) is a real change to the forecast import and wants its own PR. |
+| `qs` | moderate | Pinned by `express@4`. Fixing it means Express 5, a breaking upgrade. |
+| `esbuild` | low | The advisory is the **dev server on Windows**. Production is Linux and does not run Vite's dev server (`NODE_ENV=production` serves the built files). |
+
+Re-run `npm audit --omit=dev` after any dependency change. It is cheap, and it
+is now actionable — which it was not for three months.
+
 ### Still true, and still worth knowing
 
 - **`zip -rq` in the build job dereferences symlinks**, so
