@@ -1360,8 +1360,10 @@ const bookHandler = async (req: any, res: any) => {
   }
 };
 
+// The slot id comes in the body. A /:slotId/book alias existed for clients
+// from before 2026-07-31, which sent it in the path; removed once no such
+// client could plausibly still be open.
 router.post('/book', authenticate, authorize(['csr']), bookHandler);
-router.post('/:slotId/book', authenticate, authorize(['csr']), bookHandler);
 router.put('/bookings/:bookingId', authenticate, authorize(['csr']), async (req: any, res: any) => {
   req.body.bookingId = req.params.bookingId;
   return bookHandler(req, res);
@@ -1408,7 +1410,6 @@ const cancelHandler = async (req: any, res: any) => {
   }
 };
 
-router.post('/cancel', authenticate, authorize(['csr']), cancelHandler);
 router.post('/:slotId/cancel', authenticate, authorize(['csr']), cancelHandler);
 
 export default router;
