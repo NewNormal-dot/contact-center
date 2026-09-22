@@ -366,6 +366,19 @@ const formatShiftTimeForDisplay = (timeStr?: string) => {
   return `${compactMatch[1].padStart(2, '0')}-${compactMatch[2].padStart(2, '0')}`;
 };
 
+// A shift's time is stored either as "09:00-18:00" or in the compact "9-18"
+// form. Leave is now requested inside a shift's own hours, so both forms
+// have to resolve to a real HH:MM window.
+const parseShiftWindow = (timeStr?: string): { start: string; end: string } | null => {
+  if (!timeStr) return null;
+  const pad = (h: string, m?: string) => `${h.padStart(2, '0')}:${m || '00'}`;
+  const full = String(timeStr).trim().match(/^(\d{1,2}):(\d{2})\s*-+\s*(\d{1,2}):(\d{2})$/);
+  if (full) return { start: pad(full[1], full[2]), end: pad(full[3], full[4]) };
+  const compact = String(timeStr).trim().match(/^(\d{1,2})\s*-+\s*(\d{1,2})$/);
+  if (compact) return { start: pad(compact[1]), end: pad(compact[2]) };
+  return null;
+};
+
 const getShiftEndTime = (timeStr: string) => {
   const regularMatch = timeStr.match(/\d{1,2}:\d{2}\s*-\s*(\d{1,2}):(\d{2})/);
   if (regularMatch) {
@@ -2011,9 +2024,7 @@ export default function CsrDashboard() {
 
   const [isRequestingVacation, setIsRequestingVacation] = useState(false);
   const [isRequestingHourlyLeave, setIsRequestingHourlyLeave] = useState(false);
-  const [isRequestingShiftLeave, setIsRequestingShiftLeave] = useState(false);
-  const [shiftLeaveForm, setShiftLeaveForm] = useState({ slotBookingId: '', reason: '' });
-  const [isSubmittingShiftLeave, setIsSubmittingShiftLeave] = useState(false);
+  const [isSubmittingHourlyLeave, setIsSubmittingHourlyLeave] = useState(false);
 
   useEffect(() => {
     if (!SHOW_VACATION_FEATURE && activeTab === 'vacation') {
@@ -2083,10 +2094,11 @@ export default function CsrDashboard() {
     }
   };
 
+  // Чөлөө is now requested against a booked shift only, so the form holds a
+  // booking id and a window inside that shift - never a free-typed date.
   const [hourlyLeaveForm, setHourlyLeaveForm] = useState({
-    type: 'hourly',
-    date: '',
-    endDate: '',
+    slotBookingId: '',
+    wholeShift: true,
     startTime: '',
     endTime: '',
     reason: ''
@@ -2094,84 +2106,100 @@ export default function CsrDashboard() {
 
   const upcomingConfirmedBookings = React.useMemo(() => {
     if (!csrProfile) return [];
-    const results: { bookingId: string; dateKey: string; time: string; hoursAway: number }[] = [];
+    const results: { bookingId: string; dateKey: string; time: string; startTime: string; endTime: string; hoursAway: number }[] = [];
     const now = Date.now();
     Object.entries(schedule).forEach(([dateKey, dayData]: [string, DayData]) => {
       dayData.shifts.forEach((shift) => {
         const myBooking = shift.bookedBy?.find((b) => b.userId === csrProfile.id);
         if (!myBooking || shift.isRest) return;
-        const [startTimeStr] = String(shift.time || '').split('-');
-        const hasMinutes = /^\d{1,2}:\d{2}$/.test(startTimeStr);
-        const normalizedStartTime = hasMinutes ? startTimeStr : `${String(startTimeStr || '0').padStart(2, '0')}:00`;
-        const shiftStart = new Date(`${dateKey}T${normalizedStartTime}:00`);
+        const window = parseShiftWindow(shift.time);
+        if (!window) return;
+        const shiftStart = new Date(`${dateKey}T${window.start}:00`);
         const hoursAway = (shiftStart.getTime() - now) / (1000 * 60 * 60);
         if (hoursAway <= 0) return;
-        results.push({ bookingId: myBooking.id, dateKey, time: shift.time, hoursAway });
+        results.push({ bookingId: myBooking.id, dateKey, time: shift.time, startTime: window.start, endTime: window.end, hoursAway });
       });
     });
     return results.sort((a, b) => a.hoursAway - b.hoursAway);
   }, [schedule, csrProfile]);
 
-  const handleRequestShiftLeave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!shiftLeaveForm.slotBookingId) {
-      alert('Ээлжээ сонгоно уу.');
-      return;
-    }
-    if (!shiftLeaveForm.reason.trim()) {
-      alert('Шалтгаанаа оруулна уу.');
-      return;
-    }
-    setIsSubmittingShiftLeave(true);
-    try {
-      await apiClient.post('/requests/leave', {
-        slotBookingId: shiftLeaveForm.slotBookingId,
-        reason: shiftLeaveForm.reason,
-      });
-      const refreshed = await apiClient.get('/requests/leave');
-      setHourlyLeaveRequests((refreshed.data || []).map(mapHourlyLeaveForUi));
-      logAction('Shift Leave Requested', `Requested urgent leave for booking ${shiftLeaveForm.slotBookingId}`);
-      setIsRequestingShiftLeave(false);
-      setShiftLeaveForm({ slotBookingId: '', reason: '' });
-      triggerSuccess();
-    } catch (error: any) {
-      console.error('Error requesting shift leave:', error);
-      alert(error.response?.data?.error || 'Чөлөөний хүсэлт илгээхэд алдаа гарлаа.');
-    } finally {
-      setIsSubmittingShiftLeave(false);
-    }
+  const selectedLeaveBooking = upcomingConfirmedBookings.find(b => b.bookingId === hourlyLeaveForm.slotBookingId) || null;
+
+  const selectLeaveBooking = (bookingId: string) => {
+    const booking = upcomingConfirmedBookings.find(b => b.bookingId === bookingId);
+    setHourlyLeaveForm(prev => ({
+      ...prev,
+      slotBookingId: bookingId,
+      // Default to the whole shift; the CSR narrows it only if they want to.
+      startTime: booking?.startTime || '',
+      endTime: booking?.endTime || '',
+    }));
   };
 
+  const resetHourlyLeaveForm = () => setHourlyLeaveForm({
+    slotBookingId: '',
+    wholeShift: true,
+    startTime: '',
+    endTime: '',
+    reason: ''
+  });
 
   const handleRequestHourlyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csrProfile) return;
 
+    if (!selectedLeaveBooking) {
+      alert('Ээлжээ сонгоно уу.');
+      return;
+    }
+    if (selectedLeaveBooking.hoursAway < 8) {
+      alert('Ээлж эхлэхэд дор хаяж 8 цаг үлдсэн байх ёстой.');
+      return;
+    }
+    if (!hourlyLeaveForm.wholeShift) {
+      // Night shifts (22:00-06:00) wrap past midnight, so a plain string
+      // compare would call every legitimate window backwards. Measure both
+      // ends from the shift's own start, exactly as the server does.
+      const asMinutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+      const shiftStartMin = asMinutes(selectedLeaveBooking.startTime);
+      const fromShiftStart = (t: string) => {
+        const delta = asMinutes(t) - shiftStartMin;
+        return delta < 0 ? delta + 24 * 60 : delta;
+      };
+      const shiftLength = fromShiftStart(selectedLeaveBooking.endTime) || 24 * 60;
+      const from = fromShiftStart(hourlyLeaveForm.startTime);
+      const to = hourlyLeaveForm.endTime === selectedLeaveBooking.endTime ? shiftLength : fromShiftStart(hourlyLeaveForm.endTime);
+      if (from >= shiftLength || to > shiftLength) {
+        alert(`Чөлөөний цаг ээлжийн хугацаанд (${selectedLeaveBooking.startTime}-${selectedLeaveBooking.endTime}) багтах ёстой.`);
+        return;
+      }
+      if (to <= from) {
+        alert('Дуусах цаг эхлэх цагаас хойш байх ёстой.');
+        return;
+      }
+    }
+
+    setIsSubmittingHourlyLeave(true);
     try {
       await apiClient.post('/requests/leave', {
-        type: hourlyLeaveForm.type,
-        date: hourlyLeaveForm.date,
-        endDate: hourlyLeaveForm.endDate || hourlyLeaveForm.date,
-        startTime: hourlyLeaveForm.startTime,
-        endTime: hourlyLeaveForm.endTime,
+        slotBookingId: selectedLeaveBooking.bookingId,
+        // Omitting the window means the whole shift, which is what the
+        // server falls back to.
+        startTime: hourlyLeaveForm.wholeShift ? undefined : hourlyLeaveForm.startTime,
+        endTime: hourlyLeaveForm.wholeShift ? undefined : hourlyLeaveForm.endTime,
         reason: hourlyLeaveForm.reason,
       });
 
       await fetchHourlyLeaveRequests();
-      logAction('Leave Requested', `Requested ${hourlyLeaveForm.type} leave for ${hourlyLeaveForm.date}`);
+      logAction('Leave Requested', `Requested leave for booking ${selectedLeaveBooking.bookingId} on ${selectedLeaveBooking.dateKey}`);
       setIsRequestingHourlyLeave(false);
-      setHourlyLeaveForm({
-        type: 'hourly',
-        date: '',
-        endDate: '',
-        startTime: '',
-        endTime: '',
-        reason: ''
-      });
+      resetHourlyLeaveForm();
       triggerSuccess();
     } catch (error: any) {
-      console.error('Error requesting hourly leave:', error);
+      console.error('Error requesting leave:', error);
       alert(error.response?.data?.error || 'Чөлөөний хүсэлт илгээхэд алдаа гарлаа.');
+    } finally {
+      setIsSubmittingHourlyLeave(false);
     }
   };
 
@@ -2434,7 +2462,7 @@ export default function CsrDashboard() {
           <p className="text-gray-400 mt-1">Чөлөө авах хүсэлт илгээх болон хянах.</p>
         </div>
         <button 
-          onClick={() => setIsRequestingHourlyLeave(true)}
+          onClick={() => { resetHourlyLeaveForm(); setIsRequestingHourlyLeave(true); }}
           className="flex items-center gap-3 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-900/20 uppercase tracking-widest text-xs"
         >
           <Plus size={18} />
@@ -2505,8 +2533,9 @@ export default function CsrDashboard() {
            <h3 className="text-xl font-black text-white mb-4">Санамж</h3>
            <ul className="space-y-4">
              {[
-               'Чөлөө авах хүсэлтийг 24 цагийн өмнө илгээнэ үү.',
-               'Чөлөө авсан тохиолдолд тухайн цагийн квот нөхөгдөх болно.',
+               'Чөлөөг зөвхөн өөрийн захиалсан ээлжийн цагт авна.',
+               'Ээлж эхлэхэд дор хаяж 8 цаг үлдсэн байх ёстой.',
+               'Бүтэн ээлж эсвэл ээлжийн дотоод цагийг сонгож болно.',
                'Яаралтай тохиолдолд шууд ахлах ажилтантайгаа холбогдоно уу.'
              ].map((item, i) => (
                <li key={i} className="flex gap-4 text-sm text-gray-400 leading-relaxed font-medium">
@@ -3062,7 +3091,7 @@ export default function CsrDashboard() {
         <AnimatePresence>
           {isRequestingHourlyLeave && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsRequestingHourlyLeave(false)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setIsRequestingHourlyLeave(false); resetHourlyLeaveForm(); }} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
               <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl overflow-hidden">
                 <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
                   <Clock size={120} className="text-blue-500" />
@@ -3071,78 +3100,111 @@ export default function CsrDashboard() {
                 <div className="relative">
                   <h2 className="text-2xl font-black text-white mb-6 tracking-tight">Чөлөө авах</h2>
                   <form onSubmit={handleRequestHourlyLeave} className="space-y-4">
-                    <div className="flex bg-gray-800 p-1 rounded-xl mb-4">
-                      <button
-                        type="button"
-                        onClick={() => setHourlyLeaveForm(prev => ({ ...prev, type: 'hourly' }))}
-                        className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${
-                          hourlyLeaveForm.type === 'hourly' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
-                        }`}
-                      >
-                        Цагаар
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setHourlyLeaveForm(prev => ({ ...prev, type: 'daily' }))}
-                        className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${
-                          hourlyLeaveForm.type === 'daily' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
-                        }`}
-                      >
-                        Өдрөөр
-                      </button>
-                    </div>
+                    {upcomingConfirmedBookings.length === 0 ? (
+                      <div className="p-4 bg-black/30 border border-white/5 rounded-2xl text-center">
+                        <Calendar size={28} className="mx-auto text-gray-700 mb-2" />
+                        <p className="text-xs font-bold text-gray-400">Захиалсан ээлж алга байна</p>
+                        <p className="text-[10px] text-gray-600 mt-1 leading-relaxed">
+                          Чөлөөг зөвхөн өөрийн захиалсан ээлжийн цагт авах боломжтой. Эхлээд "Ажлын хуваарь" хэсгээс ээлжээ захиална уу.
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Ээлж сонгох</label>
+                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                            {upcomingConfirmedBookings.map((booking) => {
+                              const tooSoon = booking.hoursAway < 8;
+                              const isSelected = hourlyLeaveForm.slotBookingId === booking.bookingId;
+                              return (
+                                <button
+                                  key={booking.bookingId}
+                                  type="button"
+                                  disabled={tooSoon}
+                                  onClick={() => selectLeaveBooking(booking.bookingId)}
+                                  className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${
+                                    isSelected
+                                      ? 'bg-blue-600/20 border-blue-500 text-white'
+                                      : tooSoon
+                                        ? 'bg-gray-800/40 border-gray-800 text-gray-600 cursor-not-allowed'
+                                        : 'bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-sm font-black">{booking.dateKey}</span>
+                                    <span className="text-xs font-bold">{booking.startTime} - {booking.endTime}</span>
+                                  </div>
+                                  {tooSoon && (
+                                    <span className="text-[10px] text-orange-400 font-bold">Ээлж эхлэхэд 8-аас бага цаг үлдсэн</span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
 
-                    <div className={hourlyLeaveForm.type === 'daily' ? 'grid grid-cols-2 gap-4' : ''}>
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">
-                          {hourlyLeaveForm.type === 'daily' ? 'Эхлэх огноо' : 'Огноо'}
-                        </label>
-                        <input 
-                          type="date" 
-                          required
-                          value={hourlyLeaveForm.date}
-                          onChange={e => setHourlyLeaveForm(prev => ({ ...prev, date: e.target.value }))}
-                          className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 transition-all shadow-inner"
-                        />
-                      </div>
-                      
-                      {hourlyLeaveForm.type === 'daily' && (
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Дуусах огноо</label>
-                          <input 
-                            type="date" 
-                            required
-                            value={hourlyLeaveForm.endDate}
-                            onChange={e => setHourlyLeaveForm(prev => ({ ...prev, endDate: e.target.value }))}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 transition-all shadow-inner"
-                          />
-                        </div>
-                      )}
-                    </div>
-                    
-                    {hourlyLeaveForm.type === 'hourly' && (
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эхлэх цаг</label>
-                          <input 
-                            type="time" 
-                            required
-                            value={hourlyLeaveForm.startTime}
-                            onChange={e => setHourlyLeaveForm(prev => ({ ...prev, startTime: e.target.value }))}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 transition-all shadow-inner"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Дуусах цаг</label>
-                          <input 
-                            type="time" 
-                            required
-                            value={hourlyLeaveForm.endTime}
-                            onChange={e => setHourlyLeaveForm(prev => ({ ...prev, endTime: e.target.value }))}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 transition-all shadow-inner"
-                          />
-                        </div>
-                      </div>
+                        {selectedLeaveBooking && (
+                          <>
+                            <div className="flex bg-gray-800 p-1 rounded-xl">
+                              <button
+                                type="button"
+                                onClick={() => setHourlyLeaveForm(prev => ({ ...prev, wholeShift: true }))}
+                                className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${
+                                  hourlyLeaveForm.wholeShift ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
+                                }`}
+                              >
+                                Бүтэн ээлж
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setHourlyLeaveForm(prev => ({ ...prev, wholeShift: false }))}
+                                className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${
+                                  !hourlyLeaveForm.wholeShift ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
+                                }`}
+                              >
+                                Хэсэгчлэн
+                              </button>
+                            </div>
+
+                            {!hourlyLeaveForm.wholeShift && (
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эхлэх цаг</label>
+                                  <input
+                                    type="time"
+                                    required
+                                    min={selectedLeaveBooking.startTime}
+                                    max={selectedLeaveBooking.endTime}
+                                    value={hourlyLeaveForm.startTime}
+                                    onChange={e => setHourlyLeaveForm(prev => ({ ...prev, startTime: e.target.value }))}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 transition-all shadow-inner"
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Дуусах цаг</label>
+                                  <input
+                                    type="time"
+                                    required
+                                    min={selectedLeaveBooking.startTime}
+                                    max={selectedLeaveBooking.endTime}
+                                    value={hourlyLeaveForm.endTime}
+                                    onChange={e => setHourlyLeaveForm(prev => ({ ...prev, endTime: e.target.value }))}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-blue-500 transition-all shadow-inner"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            <p className="text-[10px] text-gray-500 leading-relaxed ml-1">
+                              {selectedLeaveBooking.dateKey} өдрийн {selectedLeaveBooking.startTime}-{selectedLeaveBooking.endTime} ээлжийн{' '}
+                              {hourlyLeaveForm.wholeShift
+                                ? 'бүтэн хугацаанд'
+                                : `${hourlyLeaveForm.startTime || '--:--'}-${hourlyLeaveForm.endTime || '--:--'} цагт`}{' '}
+                              чөлөө хүсэж байна.
+                            </p>
+                          </>
+                        )}
+                      </>
                     )}
 
                     <div className="space-y-2">
@@ -3157,8 +3219,14 @@ export default function CsrDashboard() {
                     </div>
 
                     <div className="pt-4 flex gap-3">
-                      <button type="button" onClick={() => setIsRequestingHourlyLeave(false)} className="flex-1 py-4 bg-gray-800 text-white font-black rounded-xl hover:bg-gray-700 transition-all uppercase tracking-widest text-xs">Цуцлах</button>
-                      <button type="submit" className="flex-1 py-4 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 transition-all shadow-xl shadow-blue-900/20 uppercase tracking-widest text-xs">Илгээх</button>
+                      <button type="button" onClick={() => { setIsRequestingHourlyLeave(false); resetHourlyLeaveForm(); }} className="flex-1 py-4 bg-gray-800 text-white font-black rounded-xl hover:bg-gray-700 transition-all uppercase tracking-widest text-xs">Цуцлах</button>
+                      <button
+                        type="submit"
+                        disabled={!selectedLeaveBooking || isSubmittingHourlyLeave}
+                        className="flex-1 py-4 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 transition-all shadow-xl shadow-blue-900/20 uppercase tracking-widest text-xs disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+                      >
+                        {isSubmittingHourlyLeave ? 'Илгээж байна...' : 'Илгээх'}
+                      </button>
                     </div>
                   </form>
                 </div>

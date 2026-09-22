@@ -143,173 +143,140 @@ router.get('/leave', authenticate, async (req: any, res) => {
   }
 });
 
+// Чөлөө is ONLY ever requested against a shift this CSR has actually
+// booked, and only for hours that fall INSIDE that shift. There used to be
+// a second, free-form path here (`type: 'daily' | 'hourly'` with a date the
+// CSR typed in by hand) which let someone file leave for a day they were
+// never scheduled to work at all - leave from nothing. That path is gone:
+// no booking, no leave.
 router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) => {
-  const { date, end_date, endDate, start_time, end_time, startTime, endTime, reason, type, slotBookingId, slot_booking_id } = req.body;
+  const { start_time, end_time, startTime, endTime, reason, slotBookingId, slot_booking_id } = req.body;
   const userId = req.user.id;
   const requestedSlotBookingId = slotBookingId || slot_booking_id || null;
 
-  // Urgent shift-leave: the CSR already has a CONFIRMED booking for a
-  // specific shift and something came up. Instead of the CSR typing in
-  // date/time by hand, we look up the real booking, verify it belongs to
-  // them, and require at least 8 hours' notice before that shift starts.
-  if (requestedSlotBookingId) {
-    if (!reason || !String(reason).trim()) {
-      return res.status(400).json({ error: 'Шалтгаанаа оруулна уу' });
-    }
-
-    try {
-      const booking = await db('slot_bookings')
-        .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
-        .where({ 'slot_bookings.id': requestedSlotBookingId })
-        .select('slot_bookings.*', 'work_slots.date as slot_date', 'work_slots.start_time as slot_start_time', 'work_slots.end_time as slot_end_time')
-        .first();
-
-      if (!booking) return res.status(404).json({ error: 'Захиалга олдсонгүй' });
-      if (booking.user_id !== userId) {
-        return res.status(403).json({ error: 'Энэ захиалга танд хамаарахгүй байна' });
-      }
-      if (booking.status !== 'confirmed') {
-        return res.status(400).json({ error: 'Энэ захиалга идэвхгүй байна' });
-      }
-
-      const existingRequest = await db('leave_requests')
-        .where({ slot_booking_id: requestedSlotBookingId })
-        .whereIn('status', ['pending', 'approved'])
-        .first();
-      if (existingRequest) {
-        return res.status(400).json({ error: 'Энэ ээлжид аль хэдийн чөлөөний хүсэлт илгээгдсэн байна' });
-      }
-
-      const shiftStart = toSqlDateTime(`${displayDate(booking.slot_date)}T${displayTime(booking.slot_start_time)}`);
-      if (!shiftStart) return res.status(400).json({ error: 'Ээлжийн цагийг тодорхойлж чадсангүй' });
-
-      const hoursUntilShift = (shiftStart.getTime() - Date.now()) / (1000 * 60 * 60);
-      if (hoursUntilShift < 8) {
-        return res.status(400).json({
-          error: hoursUntilShift < 0
-            ? 'Энэ ээлж аль хэдийн эхэлсэн эсвэл өнгөрсөн байна'
-            : `Ээлж эхлэхэд дор хаяж 8 цаг үлдсэн байх ёстой (одоогоор ${hoursUntilShift.toFixed(1)} цаг үлдсэн байна)`,
-        });
-      }
-
-      const id = uuidv4();
-      const requestingUser = await db('users').where({ id: userId }).first();
-      await db('leave_requests').insert({
-        id,
-        user_id: userId,
-        slot_booking_id: requestedSlotBookingId,
-        date: booking.slot_date,
-        end_date: booking.slot_date,
-        start_time: booking.slot_start_time,
-        end_time: booking.slot_end_time,
-        type: 'shift_leave',
-        reason,
-        status: 'pending',
-        // Snapshot so this record stays meaningful even if the account is
-        // later deleted (user_id becomes NULL via SET NULL FK).
-        user_name: requestingUser?.name,
-        user_code: requestingUser?.code,
-      });
-
-      const user = requestingUser;
-      await createNotificationForAdmins({
-        title: 'Яаралтай чөлөөний хүсэлт',
-        content: `${user?.name || 'CSR'} нь ${displayDate(booking.slot_date)} өдрийн ${displayTime(booking.slot_start_time)}-${displayTime(booking.slot_end_time)} ээлжинд яаралтай чөлөө хүссэн байна. Шалтгаан: ${reason}`,
-        type: 'leave_request',
-        relatedEntityType: 'leave_request',
-        relatedEntityId: id,
-        authorId: userId,
-      });
-
-      await logAction(
-        userId,
-        'CREATE_SHIFT_LEAVE_REQUEST',
-        'leave_requests',
-        id,
-        `Urgent leave requested for ${displayDate(booking.slot_date)} ${displayTime(booking.slot_start_time)}-${displayTime(booking.slot_end_time)}`,
-        req,
-      );
-
-      return res.status(201).json({ id });
-    } catch (err) {
-      console.error('Create shift leave request error:', err);
-    captureError('requests: Create shift leave request error:', err);
-      return res.status(500).json({ error: 'Чөлөөний хүсэлт үүсгэхэд алдаа гарлаа' });
-    }
+  if (!requestedSlotBookingId) {
+    return res.status(400).json({ error: 'Чөлөө зөвхөн захиалсан ээлжийн цагт авах боломжтой. Ээлжээ сонгоно уу.' });
   }
-
-  const leaveType = type === 'daily' ? 'daily' : 'hourly';
-  const finalDate = toSqlDate(date);
-  const finalEndDate = toSqlDate(end_date || endDate || date);
-  const finalStartTime = toSqlTime(start_time || startTime || (leaveType === 'daily' ? '09:00' : ''));
-  const finalEndTime = toSqlTime(end_time || endTime || (leaveType === 'daily' ? '18:00' : ''));
-
-  if (!finalDate || !finalStartTime || !finalEndTime || !reason) {
-    return res.status(400).json({ error: 'Огноо, цаг болон шалтгааныг зөв оруулна уу' });
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'Шалтгаанаа оруулна уу' });
   }
-
   if (String(reason).trim().length > 1000) {
     return res.status(400).json({ error: 'Шалтгаан хэт урт байна (1000 тэмдэгт)' });
   }
 
-  // Everything below was previously unchecked: only the FORMAT of the date
-  // and times was validated, so a CSR could file leave for last year, with
-  // an end time before the start time, an end date before the start date,
-  // and as many identical overlapping requests as they liked.
-  if (finalEndDate && finalEndDate < finalDate) {
-    return res.status(400).json({ error: 'Дуусах огноо эхлэх огнооноос өмнө байж болохгүй' });
-  }
-
-  if (finalDate < todayInMongolia()) {
-    return res.status(400).json({ error: 'Өнгөрсөн өдрийн чөлөө хүсэх боломжгүй' });
-  }
-
-  if (leaveType === 'hourly' && finalEndTime <= finalStartTime) {
-    return res.status(400).json({ error: 'Дуусах цаг эхлэх цагаас хойш байх ёстой' });
-  }
-
   try {
-    const id = uuidv4();
-    const requestingUser = await db('users').where({ id: userId }).first();
-
-    // Reject a request that overlaps one this CSR already has open or
-    // approved for the same dates.
-    const overlapping = await db('leave_requests')
-      .where({ user_id: userId })
-      .whereIn('status', ['pending', 'approved'])
-      .andWhere(function () {
-        this.where(function () {
-          this.where('date', '<=', finalEndDate || finalDate)
-            .andWhere(db.raw('COALESCE(end_date, date)'), '>=', finalDate);
-        });
-      })
+    const booking = await db('slot_bookings')
+      .join('work_slots', 'slot_bookings.slot_id', '=', 'work_slots.id')
+      .where({ 'slot_bookings.id': requestedSlotBookingId })
+      .select('slot_bookings.*', 'work_slots.date as slot_date', 'work_slots.start_time as slot_start_time', 'work_slots.end_time as slot_end_time')
       .first();
 
-    if (overlapping) {
-      return res.status(409).json({
-        error: `Энэ хугацаанд аль хэдийн чөлөөний хүсэлт (${overlapping.status === 'approved' ? 'зөвшөөрөгдсөн' : 'хүлээгдэж буй'}) байна.`,
+    if (!booking) return res.status(404).json({ error: 'Захиалга олдсонгүй' });
+    if (booking.user_id !== userId) {
+      return res.status(403).json({ error: 'Энэ захиалга танд хамаарахгүй байна' });
+    }
+    if (booking.status !== 'confirmed') {
+      return res.status(400).json({ error: 'Энэ захиалга идэвхгүй байна' });
+    }
+
+    const shiftStartTime = toSqlTime(booking.slot_start_time);
+    const shiftEndTime = toSqlTime(booking.slot_end_time);
+    if (!shiftStartTime || !shiftEndTime) {
+      return res.status(400).json({ error: 'Ээлжийн цагийг тодорхойлж чадсангүй' });
+    }
+
+    // A requested window defaults to the WHOLE shift - "I cannot work this
+    // one at all" - which is by far the common case.
+    const finalStartTime = toSqlTime(start_time || startTime) || shiftStartTime;
+    const finalEndTime = toSqlTime(end_time || endTime) || shiftEndTime;
+
+    // Night shifts run past midnight (22:00-06:00), so a plain string
+    // comparison would reject every one of them. Measure everything as
+    // minutes FROM the shift's own start instead, wrapping the end past
+    // midnight when it lands before the start.
+    const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+    const shiftStartMin = minutes(shiftStartTime);
+    const fromShiftStart = (t: string) => {
+      const delta = minutes(t) - shiftStartMin;
+      return delta < 0 ? delta + 24 * 60 : delta;
+    };
+    const shiftLengthMin = fromShiftStart(shiftEndTime) || 24 * 60;
+    const leaveFrom = fromShiftStart(finalStartTime);
+    const leaveTo = minutes(finalEndTime) === minutes(shiftEndTime) ? shiftLengthMin : fromShiftStart(finalEndTime);
+
+    // Bounds are checked BEFORE ordering: a time outside the shift wraps
+    // past midnight in this arithmetic, which would otherwise surface as a
+    // confusing "end before start" message.
+    if (leaveFrom >= shiftLengthMin || leaveTo > shiftLengthMin) {
+      return res.status(400).json({
+        error: `Чөлөөний цаг ээлжийн хугацаанд (${displayTime(shiftStartTime)}-${displayTime(shiftEndTime)}) багтах ёстой`,
+      });
+    }
+    if (leaveTo <= leaveFrom) {
+      return res.status(400).json({ error: 'Дуусах цаг эхлэх цагаас хойш байх ёстой' });
+    }
+
+    const shiftStart = toSqlDateTime(`${displayDate(booking.slot_date)}T${displayTime(shiftStartTime)}`);
+    if (!shiftStart) return res.status(400).json({ error: 'Ээлжийн цагийг тодорхойлж чадсангүй' });
+
+    const hoursUntilShift = (shiftStart.getTime() - Date.now()) / (1000 * 60 * 60);
+    if (hoursUntilShift < 8) {
+      return res.status(400).json({
+        error: hoursUntilShift < 0
+          ? 'Энэ ээлж аль хэдийн эхэлсэн эсвэл өнгөрсөн байна'
+          : `Ээлж эхлэхэд дор хаяж 8 цаг үлдсэн байх ёстой (одоогоор ${hoursUntilShift.toFixed(1)} цаг үлдсэн байна)`,
       });
     }
 
+    // One shift may carry more than one leave window (a CSR out for a
+    // morning appointment and again in the afternoon), but two windows may
+    // not overlap each other.
+    const existingForBooking = await db('leave_requests')
+      .where({ slot_booking_id: requestedSlotBookingId })
+      .whereIn('status', ['pending', 'approved'])
+      .select('start_time', 'end_time');
+
+    const clashes = existingForBooking.some((row: any) => {
+      const rowStart = toSqlTime(row.start_time);
+      const rowEnd = toSqlTime(row.end_time);
+      if (!rowStart || !rowEnd) return true;
+      const from = fromShiftStart(rowStart);
+      const to = minutes(rowEnd) === minutes(shiftEndTime) ? shiftLengthMin : fromShiftStart(rowEnd);
+      return from < leaveTo && to > leaveFrom;
+    });
+    if (clashes) {
+      return res.status(409).json({ error: 'Энэ ээлжийн тэр цагт аль хэдийн чөлөөний хүсэлт илгээгдсэн байна' });
+    }
+
+    // Whole shift vs. part of it. The monthly export blanks out a whole day
+    // for 'shift_leave' only, so a partial window must NOT be recorded as
+    // one - it stays 'hourly'.
+    const isWholeShift = leaveFrom === 0 && leaveTo === shiftLengthMin;
+    const leaveType = isWholeShift ? 'shift_leave' : 'hourly';
+
+    const id = uuidv4();
+    const requestingUser = await db('users').where({ id: userId }).first();
     await db('leave_requests').insert({
       id,
       user_id: userId,
-      date: finalDate,
-      end_date: finalEndDate,
+      slot_booking_id: requestedSlotBookingId,
+      date: booking.slot_date,
+      end_date: booking.slot_date,
       start_time: finalStartTime,
       end_time: finalEndTime,
       type: leaveType,
       reason,
       status: 'pending',
+      // Snapshot so this record stays meaningful even if the account is
+      // later deleted (user_id becomes NULL via SET NULL FK).
       user_name: requestingUser?.name,
       user_code: requestingUser?.code,
     });
 
-    const user = requestingUser;
-
+    const window = `${displayTime(finalStartTime)}-${displayTime(finalEndTime)}`;
     await createNotificationForAdmins({
-      title: 'Шинэ чөлөөний хүсэлт',
-      content: `${user?.name || 'CSR'} ${leaveType === 'daily' ? 'өдрийн' : 'цагийн'} чөлөө хүссэн байна. Огноо: ${finalDate}${leaveType === 'daily' && finalEndDate && finalEndDate !== finalDate ? ` - ${finalEndDate}` : ''}.`,
+      title: isWholeShift ? 'Ээлжийн чөлөөний хүсэлт' : 'Цагийн чөлөөний хүсэлт',
+      content: `${requestingUser?.name || 'CSR'} нь ${displayDate(booking.slot_date)} өдрийн ${displayTime(shiftStartTime)}-${displayTime(shiftEndTime)} ээлжийн ${isWholeShift ? 'бүтэн ээлжид' : `${window} цагт`} чөлөө хүссэн байна. Шалтгаан: ${reason}`,
       type: 'leave_request',
       relatedEntityType: 'leave_request',
       relatedEntityId: id,
@@ -318,18 +285,18 @@ router.post('/leave', authenticate, authorize(['csr']), async (req: any, res) =>
 
     await logAction(
       userId,
-      'CREATE_LEAVE_REQUEST',
+      'CREATE_SHIFT_LEAVE_REQUEST',
       'leave_requests',
       id,
-      `${leaveType} leave requested for ${finalDate}${finalEndDate && finalEndDate !== finalDate ? ` - ${finalEndDate}` : ''}`,
+      `${leaveType} leave requested for ${displayDate(booking.slot_date)} ${window} (shift ${displayTime(shiftStartTime)}-${displayTime(shiftEndTime)})`,
       req,
     );
 
-    res.status(201).json({ id });
+    return res.status(201).json({ id });
   } catch (err) {
     console.error('Create leave request error:', err);
     captureError('requests: Create leave request error:', err);
-    res.status(500).json({ error: 'Чөлөөний хүсэлт үүсгэхэд алдаа гарлаа' });
+    return res.status(500).json({ error: 'Чөлөөний хүсэлт үүсгэхэд алдаа гарлаа' });
   }
 });
 
