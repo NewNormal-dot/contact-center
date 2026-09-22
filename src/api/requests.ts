@@ -419,18 +419,26 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
         }, trx);
       }
 
-      // Also let every admin know who made the decision, so it's visible to
-      // the whole admin team, not just the requesting CSR.
-      if (isShiftLeave) {
-        await createNotificationForAdmins({
-          title: isApproved ? 'Яаралтай чөлөө зөвшөөрөгдлөө' : 'Яаралтай чөлөө татгалзагдлаа',
-          content: `${request.user_name}-ийн ${displayDate(request.date)} ${displayTime(request.start_time)}-${displayTime(request.end_time)} ээлжийн чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} ${isApproved ? 'зөвшөөрлөө' : 'татгалзлаа'}.`,
-          type: 'leave_decision',
-          relatedEntityType: 'leave_request',
-          relatedEntityId: id,
-          authorId: actingUserId,
-        }, trx);
-      }
+      // Let the whole admin team see who approved or rejected the request,
+      // regardless of whether it was an urgent shift leave or a standard
+      // daily/hourly leave request. The requester still gets a personal
+      // decision notice, but no other CSR should receive any copy of this
+      // admin-facing decision trail.
+      const decisionTitle = isApproved ? 'Чөлөөний хүсэлт зөвшөөрөгдлөө' : 'Чөлөөний хүсэлт татгалзагдлаа';
+      const requestKind = isShiftLeave
+        ? `${displayDate(request.date)} ${displayTime(request.start_time)}-${displayTime(request.end_time)} ээлжийн`
+        : request.type === 'daily'
+          ? 'өдрийн'
+          : 'цагийн';
+
+      await createNotificationForAdmins({
+        title: decisionTitle,
+        content: `${request.user_name || 'CSR'}-ийн ${requestKind} чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} ${isApproved ? 'зөвшөөрлөө' : 'татгалзлаа'}.`,
+        type: 'leave_decision',
+        relatedEntityType: 'leave_request',
+        relatedEntityId: id,
+        authorId: actingUserId,
+      }, trx);
 
       return { conflict: false as const };
     });
