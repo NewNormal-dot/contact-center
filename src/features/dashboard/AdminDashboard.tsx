@@ -95,6 +95,18 @@ const ENG_MONTHS = [
   "DEC",
 ];
 
+// "Яаралтай чөлөө" is about WHEN the request was filed, not how much of the
+// shift it covers. Filed less than a day before the shift starts (the rules
+// allow no later than 8 hours before) is the urgent case; anything filed
+// earlier is ordinary planned leave and is not flagged.
+const isUrgentLeave = (request: { date?: string; startTime?: string; createdAt?: string }) => {
+  if (!request.date || !request.startTime || !request.createdAt) return false;
+  const shiftStart = new Date(`${request.date}T${request.startTime.slice(0, 5)}:00`).getTime();
+  const filedAt = new Date(request.createdAt).getTime();
+  if (!Number.isFinite(shiftStart) || !Number.isFinite(filedAt)) return false;
+  return (shiftStart - filedAt) / (1000 * 60 * 60) < 24;
+};
+
 const EMPLOYEE_LOCATIONS = ["Ulaanbaatar", "Darkhan"] as const;
 type EmployeeLocation = (typeof EMPLOYEE_LOCATIONS)[number];
 
@@ -1217,17 +1229,16 @@ export default function AdminDashboard() {
         ...(scope ? { scope } : {}),
       });
 
-      // The server no longer deletes a shift somebody has already booked, and
-      // no longer drops malformed shifts silently. Both used to look like a
+      // Removing a shift now removes the bookings on it, and malformed
+      // shifts are no longer dropped silently. Both used to look like a
       // clean save while quietly losing data, so surface them here.
-      const kept: string[] = response.data?.keptBookedSlots || [];
+      const removed: string[] = response.data?.removedBookings || [];
       const skippedRows: string[] = response.data?.skipped || [];
       const messages: string[] = [];
-      if (kept.length > 0) {
+      if (removed.length > 0) {
         messages.push(
-          `Дараах ээлжийг захиалсан ажилтан байгаа тул устгасангүй:\n${kept.slice(0, 15).join("\n")}` +
-            (kept.length > 15 ? `\n… бас ${kept.length - 15}` : "") +
-            `\n\nУстгах бол эхлээд ажилтныг ээлжээс хасна уу.`,
+          `Дараах ажилтнуудын захиалга ээлжтэйгээ хамт цуцлагдлаа (мэдэгдэл илгээгдсэн):\n${removed.slice(0, 15).join("\n")}` +
+            (removed.length > 15 ? `\n… бас ${removed.length - 15}` : ""),
         );
       }
       if (skippedRows.length > 0) {
@@ -6306,7 +6317,7 @@ export default function AdminDashboard() {
                             <>
                               <Calendar size={12} /> Өдрийн чөлөө
                             </>
-                          ) : req.type === "shift_leave" ? (
+                          ) : isUrgentLeave(req) ? (
                             <>
                               <span className="text-orange-400">🚨 Яаралтай чөлөө</span> · {req.startTime} - {req.endTime}
                             </>

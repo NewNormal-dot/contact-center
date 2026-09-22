@@ -379,6 +379,18 @@ const parseShiftWindow = (timeStr?: string): { start: string; end: string } | nu
   return null;
 };
 
+// "Яаралтай чөлөө" is about WHEN the request was filed, not how much of the
+// shift it covers. A request raised less than a day before the shift starts
+// (the rules allow no later than 8 hours before) is the urgent one; anything
+// filed earlier is ordinary planned leave and should not be flagged.
+const isUrgentLeave = (request: { date?: string; startTime?: string; createdAt?: string }) => {
+  if (!request.date || !request.startTime || !request.createdAt) return false;
+  const shiftStart = new Date(`${request.date}T${request.startTime.slice(0, 5)}:00`).getTime();
+  const filedAt = new Date(request.createdAt).getTime();
+  if (!Number.isFinite(shiftStart) || !Number.isFinite(filedAt)) return false;
+  return (shiftStart - filedAt) / (1000 * 60 * 60) < 24;
+};
+
 const getShiftEndTime = (timeStr: string) => {
   const regularMatch = timeStr.match(/\d{1,2}:\d{2}\s*-\s*(\d{1,2}):(\d{2})/);
   if (regularMatch) {
@@ -1214,6 +1226,7 @@ export default function CsrDashboard() {
     createdAt: raw.createdAt || raw.created_at || new Date().toISOString(),
     comment: raw.comment || undefined,
     approvedByName: raw.approvedByName || raw.approver_name || undefined,
+    slotBookingId: raw.slotBookingId || raw.slot_booking_id || undefined,
   });
 
   const mapTrainingForUi = (raw: any): TrainingMaterial => ({
@@ -2025,6 +2038,8 @@ export default function CsrDashboard() {
   const [isRequestingVacation, setIsRequestingVacation] = useState(false);
   const [isRequestingHourlyLeave, setIsRequestingHourlyLeave] = useState(false);
   const [isSubmittingHourlyLeave, setIsSubmittingHourlyLeave] = useState(false);
+  // Id of the pending request being edited; null means a new one.
+  const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!SHOW_VACATION_FEATURE && activeTab === 'vacation') {
@@ -2136,13 +2151,48 @@ export default function CsrDashboard() {
     }));
   };
 
-  const resetHourlyLeaveForm = () => setHourlyLeaveForm({
-    slotBookingId: '',
-    wholeShift: true,
-    startTime: '',
-    endTime: '',
-    reason: ''
-  });
+  const resetHourlyLeaveForm = () => {
+    setEditingLeaveId(null);
+    setHourlyLeaveForm({
+      slotBookingId: '',
+      wholeShift: true,
+      startTime: '',
+      endTime: '',
+      reason: ''
+    });
+  };
+
+  const startEditingLeave = (request: HourlyLeaveRequest) => {
+    const booking = upcomingConfirmedBookings.find(b => b.bookingId === request.slotBookingId);
+    if (!booking) {
+      alert('Энэ хүсэлтийн ээлж хуваариас олдсонгүй. Хүсэлтээ устгаад дахин илгээнэ үү.');
+      return;
+    }
+    const start = String(request.startTime || booking.startTime).slice(0, 5);
+    const end = String(request.endTime || booking.endTime).slice(0, 5);
+    setEditingLeaveId(request.id);
+    setHourlyLeaveForm({
+      slotBookingId: booking.bookingId,
+      wholeShift: start === booking.startTime && end === booking.endTime,
+      startTime: start,
+      endTime: end,
+      reason: request.reason || '',
+    });
+    setIsRequestingHourlyLeave(true);
+  };
+
+  const handleDeleteLeaveRequest = async (id: string) => {
+    if (!window.confirm('Энэ чөлөөний хүсэлтийг устгах уу?')) return;
+    try {
+      await apiClient.delete(`/requests/leave/${id}`);
+      await fetchHourlyLeaveRequests();
+      logAction('Leave Request Withdrawn', `Withdrew leave request ${id}`);
+      triggerSuccess();
+    } catch (error: any) {
+      console.error('Error deleting leave request:', error);
+      alert(error.response?.data?.error || 'Чөлөөний хүсэлт устгахад алдаа гарлаа.');
+    }
+  };
 
   const handleRequestHourlyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2181,17 +2231,25 @@ export default function CsrDashboard() {
 
     setIsSubmittingHourlyLeave(true);
     try {
-      await apiClient.post('/requests/leave', {
+      const payload = {
         slotBookingId: selectedLeaveBooking.bookingId,
         // Omitting the window means the whole shift, which is what the
         // server falls back to.
         startTime: hourlyLeaveForm.wholeShift ? undefined : hourlyLeaveForm.startTime,
         endTime: hourlyLeaveForm.wholeShift ? undefined : hourlyLeaveForm.endTime,
         reason: hourlyLeaveForm.reason,
-      });
+      };
+      if (editingLeaveId) {
+        await apiClient.put(`/requests/leave/${editingLeaveId}`, payload);
+      } else {
+        await apiClient.post('/requests/leave', payload);
+      }
 
       await fetchHourlyLeaveRequests();
-      logAction('Leave Requested', `Requested leave for booking ${selectedLeaveBooking.bookingId} on ${selectedLeaveBooking.dateKey}`);
+      logAction(
+        editingLeaveId ? 'Leave Request Edited' : 'Leave Requested',
+        `${editingLeaveId ? 'Edited' : 'Requested'} leave for booking ${selectedLeaveBooking.bookingId} on ${selectedLeaveBooking.dateKey}`,
+      );
       setIsRequestingHourlyLeave(false);
       resetHourlyLeaveForm();
       triggerSuccess();
@@ -2482,8 +2540,8 @@ export default function CsrDashboard() {
           <div className="space-y-4">
             {hourlyLeaveRequests.length > 0 ? (
               hourlyLeaveRequests.map((req) => (
-                <div key={req.id} className="p-5 bg-black/30 border border-white/5 rounded-2xl flex items-center justify-between group hover:border-white/10 transition-all">
-                  <div className="space-y-1">
+                <div key={req.id} className="p-5 bg-black/30 border border-white/5 rounded-2xl flex items-start justify-between gap-4 group hover:border-white/10 transition-all">
+                  <div className="space-y-1 min-w-0">
                     <div className="flex items-center gap-2">
                        <span className="text-sm font-black text-white">{req.date}</span>
                        <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${
@@ -2501,7 +2559,7 @@ export default function CsrDashboard() {
                         <>
                           <Calendar size={12} /> {req.date} {req.endDate && req.endDate !== req.date ? `- ${req.endDate}` : ''}
                         </>
-                      ) : req.type === 'shift_leave' ? (
+                      ) : isUrgentLeave(req) ? (
                         <>
                           <span className="text-orange-400">🚨 Яаралтай чөлөө</span> · {req.startTime} - {req.endTime}
                         </>
@@ -2518,6 +2576,26 @@ export default function CsrDashboard() {
                       </p>
                     )}
                   </div>
+                  {req.status === 'pending' && (
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => startEditingLeave(req)}
+                        title="Засах"
+                        className="w-9 h-9 rounded-xl bg-gray-800 text-gray-300 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all"
+                      >
+                        <Edit size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLeaveRequest(req.id)}
+                        title="Устгах"
+                        className="w-9 h-9 rounded-xl bg-gray-800 text-gray-300 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))
             ) : (
@@ -3098,7 +3176,7 @@ export default function CsrDashboard() {
                 </div>
 
                 <div className="relative">
-                  <h2 className="text-2xl font-black text-white mb-6 tracking-tight">Чөлөө авах</h2>
+                  <h2 className="text-2xl font-black text-white mb-6 tracking-tight">{editingLeaveId ? 'Чөлөөний хүсэлт засах' : 'Чөлөө авах'}</h2>
                   <form onSubmit={handleRequestHourlyLeave} className="space-y-4">
                     {upcomingConfirmedBookings.length === 0 ? (
                       <div className="p-4 bg-black/30 border border-white/5 rounded-2xl text-center">
@@ -3225,7 +3303,7 @@ export default function CsrDashboard() {
                         disabled={!selectedLeaveBooking || isSubmittingHourlyLeave}
                         className="flex-1 py-4 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 transition-all shadow-xl shadow-blue-900/20 uppercase tracking-widest text-xs disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
                       >
-                        {isSubmittingHourlyLeave ? 'Илгээж байна...' : 'Илгээх'}
+                        {isSubmittingHourlyLeave ? 'Илгээж байна...' : editingLeaveId ? 'Хадгалах' : 'Илгээх'}
                       </button>
                     </div>
                   </form>

@@ -119,6 +119,9 @@ export interface HourlyLeaveRequest {
   createdAt: string;
   comment?: string;
   approvedByName?: string;
+  // The confirmed booking this leave was requested against. Every request
+  // created since leave was tied to a booked shift carries one.
+  slotBookingId?: string;
 }
 
 export interface TradeRequest {

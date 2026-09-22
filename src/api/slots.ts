@@ -798,7 +798,9 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
   // console.warn, so the admin saw "saved" for a save that lost rows.
   const skipped: string[] = [];
   const deletedDescriptions: string[] = [];
-  const keptBookedSlots: string[] = [];
+  // Bookings removed because the shift under them was removed. Reported back
+  // so the admin sees exactly who was affected by their save.
+  const removedBookings: string[] = [];
   let skippedUnscoped = 0;
   try {
     await db.transaction(async (trx) => {
@@ -944,12 +946,17 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
         // is async) and unconditionally on a segment rename, which passes no
         // scope at all. Deleting nothing is always the safe answer here.
         //
-        // RULE 2: never silently delete a shift somebody has booked.
+        // RULE 2: a booked shift goes too, but never silently.
         // Identity matching is date|start|end|segment|type|location|is_rest,
-        // so merely editing a shift's TIME made the old row unmatched - and
-        // deleting it took every confirmed booking on it with no audit row,
-        // no notification and no way to find out who lost their shift.
-        // Booked shifts are now kept and reported back to the admin instead.
+        // so merely editing a shift's TIME makes the old row unmatched. That
+        // row used to be KEPT when somebody had booked it, which left the
+        // employee holding a booking on a shift the admin believed they had
+        // deleted - and, because a CSR may only hold one booking per day,
+        // locked them out of the replacement shift with "Энэ өдөр аль хэдийн
+        // захиалга хийсэн байна". The stale row is now removed along with
+        // its bookings, but every affected employee gets a notification and
+        // the whole list goes into the audit log, which is what was actually
+        // missing the first time this code lost people's shifts.
         // ------------------------------------------------------------------
         if (!syncScope?.segment) {
           if (existingRows.some((row: any) => !keptIds.has(String(row.id)))) {
@@ -967,42 +974,77 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
         if (staleRows.length === 0) continue;
 
         const staleIds = staleRows.map((row: any) => String(row.id));
-        const bookedRows = await trx('slot_bookings')
-          .whereIn('slot_id', staleIds)
-          .where({ status: 'confirmed' })
-          .select('slot_id');
-        const bookedSlotIds = new Set(bookedRows.map((row: any) => String(row.slot_id)));
+        const staleById = new Map(staleRows.map((row: any) => [String(row.id), row]));
 
-        const deletableRows = staleRows.filter((row: any) => !bookedSlotIds.has(String(row.id)));
-        for (const row of staleRows) {
-          if (!bookedSlotIds.has(String(row.id))) continue;
-          keptBookedSlots.push(
-            `${dateKey} ${displayTime(row.start_time)}-${displayTime(row.end_time)}`,
+        // Who is about to lose a shift, and which leave requests hang off
+        // those bookings. Read before anything is deleted.
+        const affectedBookings = await trx('slot_bookings')
+          .leftJoin('users', 'slot_bookings.user_id', 'users.id')
+          .whereIn('slot_bookings.slot_id', staleIds)
+          .andWhere('slot_bookings.status', 'confirmed')
+          .select(
+            'slot_bookings.id as booking_id',
+            'slot_bookings.slot_id as slot_id',
+            'slot_bookings.user_id as user_id',
+            'slot_bookings.user_name as booked_name',
+            'users.name as user_name',
           );
-        }
 
-        if (deletableRows.length === 0) continue;
-        const deletableIds = deletableRows.map((row: any) => row.id);
         try {
+          if (affectedBookings.length > 0) {
+            // A pending leave request against a shift that no longer exists
+            // is meaningless, so it goes with it. Decided requests are left
+            // alone as history; the FK clears their booking reference.
+            const bookingIds = affectedBookings.map((row: any) => row.booking_id);
+            const staleLeave = await trx('leave_requests')
+              .whereIn('slot_booking_id', bookingIds)
+              .andWhere({ status: 'pending' })
+              .select('id');
+            if (staleLeave.length > 0) {
+              const leaveIds = staleLeave.map((row: any) => String(row.id));
+              await trx('notifications')
+                .where({ related_entity_type: 'leave_request' })
+                .whereIn('related_entity_id', leaveIds)
+                .del();
+              await trx('leave_requests').whereIn('id', leaveIds).del();
+            }
+
+            for (const booking of affectedBookings) {
+              const row: any = staleById.get(String(booking.slot_id));
+              const when = row
+                ? `${dateKey} ${displayTime(row.start_time)}-${displayTime(row.end_time)}`
+                : dateKey;
+              removedBookings.push(`${when} — ${booking.user_name || booking.booked_name || '?'}`);
+              if (!booking.user_id) continue;
+              await trx('notifications').insert({
+                id: uuidv4(),
+                title: 'Таны захиалсан ээлж цуцлагдлаа',
+                content: `${when} ээлжийг хуваарийн өөрчлөлтийн улмаас устгасан тул таны захиалга цуцлагдлаа. Шинэчилсэн хуваариас дахин захиална уу.`,
+                type: 'schedule_change',
+                target_user_id: booking.user_id,
+                author_id: req.user.id,
+                related_entity_type: 'work_slots',
+                related_entity_id: String(booking.slot_id),
+              });
+            }
+          }
+
           await trx('trade_requests')
-            .whereIn('sender_slot_id', deletableIds)
-            .orWhereIn('receiver_slot_id', deletableIds)
+            .whereIn('sender_slot_id', staleIds)
+            .orWhereIn('receiver_slot_id', staleIds)
             .delete();
-          // Only cancelled/auto-assigned rows can remain here - confirmed
-          // ones were excluded above - but they still have to go before the
-          // slot itself can be removed.
-          await trx('slot_bookings').whereIn('slot_id', deletableIds).delete();
-          await trx('work_slots').whereIn('id', deletableIds).delete();
-          deleted += deletableRows.length;
+          await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
+          await trx('work_slots').whereIn('id', staleIds).delete();
+          deleted += staleRows.length;
           deletedDescriptions.push(
-            ...deletableRows.map((row: any) =>
+            ...staleRows.map((row: any) =>
               `${dateKey} ${displayTime(row.start_time)}-${displayTime(row.end_time)}`,
             ),
           );
         } catch (staleErr: any) {
           console.error('Stale rows deletion failed:', {
             date: dateKey,
-            staleIds: deletableIds,
+            staleIds,
             error: staleErr.message
           });
           throw staleErr;
@@ -1010,13 +1052,26 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
       }
     });
 
+    if (removedBookings.length > 0) {
+      await logAction(
+        req.user.id,
+        'SYNC_SCHEDULE_REMOVED_BOOKINGS',
+        'slot_bookings',
+        null,
+        `Removed ${removedBookings.length} confirmed booking(s) with their shifts: ` +
+        `${removedBookings.slice(0, 40).join(', ')}` +
+        `${removedBookings.length > 40 ? ` (+${removedBookings.length - 40} more)` : ''}`,
+        req,
+      );
+    }
+
     if (deleted > 0) {
       await logAction(
         req.user.id,
         'SYNC_SCHEDULE_DELETED_SLOTS',
         'work_slots',
         null,
-        `Removed ${deleted} unbooked shift(s) in scope ` +
+        `Removed ${deleted} shift(s) in scope ` +
         `${syncScope?.location}/${syncScope?.segment}/${syncScope?.employmentType}: ` +
         `${deletedDescriptions.slice(0, 40).join(', ')}` +
         `${deletedDescriptions.length > 40 ? ` (+${deletedDescriptions.length - 40} more)` : ''}`,
@@ -1028,10 +1083,9 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
       synced,
       deleted,
       skipped,
-      // Shifts the admin's payload no longer contained but which somebody has
-      // already booked. They were deliberately kept; the client surfaces this
-      // so the admin can remove the person first if the removal was intended.
-      keptBookedSlots,
+      // Bookings that went with a removed shift. The affected employees have
+      // been notified; the client shows the admin the same list.
+      removedBookings,
       // Dates where nothing could be reconciled because the request carried
       // no editing scope.
       skippedUnscopedDates: skippedUnscoped,
@@ -1062,7 +1116,27 @@ router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (r
       .leftJoin('users', 'slot_bookings.user_id', 'users.id')
       .where('slot_bookings.slot_id', req.params.id)
       .andWhere('slot_bookings.status', 'confirmed')
-      .select('users.email as email', 'users.name as name');
+      .select('slot_bookings.user_id as user_id', 'users.email as email', 'users.name as name');
+
+    // Tell them. Losing a booked shift without a word is how people turn up
+    // for a shift that no longer exists.
+    if (slot) {
+      const when = boolValue(slot.is_rest)
+        ? `${displayDate(slot.date)} (Амралт)`
+        : `${displayDate(slot.date)} ${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`;
+      for (const victim of victims) {
+        if (!victim.user_id) continue;
+        await createNotification({
+          title: 'Таны захиалсан ээлж цуцлагдлаа',
+          content: `${when} ээлжийг устгасан тул таны захиалга цуцлагдлаа. Шинэчилсэн хуваариас дахин захиална уу.`,
+          type: 'schedule_change',
+          targetUserId: victim.user_id,
+          authorId: (req as any).user?.id,
+          relatedEntityType: 'work_slots',
+          relatedEntityId: req.params.id,
+        });
+      }
+    }
 
     await db('trade_requests')
       .where({ sender_slot_id: req.params.id })
