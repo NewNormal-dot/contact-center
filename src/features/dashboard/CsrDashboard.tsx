@@ -694,7 +694,7 @@ const DayRow = React.memo(({
                           Цуцлах
                         </button>
                       )}
-                      {!isBookingOpen && bookingAccess.state === 'expired' && (
+                      {(bookingAccess.state === 'closed' || bookingAccess.state === 'expired') && (
                         <button 
                           onClick={() => onTradeShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
@@ -1909,8 +1909,8 @@ export default function CsrDashboard() {
   const renderNotificationsView = () => {
     const sortedNotifications = [...notifications]
       .filter(n => {
-        // Only show general notifications in this view
-        if (n.type !== 'general' && n.type !== 'important') return false;
+        // Include personal decisions alongside the general notification feed.
+        if (!['general', 'important', 'leave_decision', 'vacation_decision'].includes(n.type)) return false;
         
         // If it's a targeted notification, only show if it matches current user
         if (n.targetUserId) {
@@ -2024,7 +2024,7 @@ export default function CsrDashboard() {
             );
           })}
           
-          {notifications.length === 0 && (
+          {sortedNotifications.length === 0 && (
             <div className="text-center py-20 bg-gray-900/20 border border-dashed border-gray-800 rounded-3xl">
               <Bell size={48} className="mx-auto text-gray-700 mb-4" />
               <p className="text-gray-500 font-bold">Одоогоор мэдэгдэл байхгүй байна.</p>

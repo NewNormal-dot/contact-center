@@ -483,6 +483,7 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
   if (comment !== undefined && comment !== null && String(comment).length > 1000) {
     return res.status(400).json({ error: 'Тайлбар хэт урт байна (1000 тэмдэгт)' });
   }
+  const rejectionReason = typeof comment === 'string' ? comment.trim() : '';
 
   try {
     // LEFT join, not an inner join. leave_requests.user_id becomes NULL when
@@ -523,7 +524,7 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
         .where({ id, status: 'pending' })
         .update({
           status,
-          comment: comment || null,
+          comment: rejectionReason || null,
           approved_by: actingUserId,
           updated_at: trx.fn.now(),
         });
@@ -550,7 +551,7 @@ router.patch('/leave/:id', authenticate, authorize(['admin', 'superadmin']), asy
           title: isApproved ? 'Чөлөөний хүсэлт зөвшөөрөгдлөө' : 'Чөлөөний хүсэлт татгалзагдлаа',
           content: isApproved
             ? `Таны ${isShiftLeave ? `${displayDate(request.date)} ${displayTime(request.start_time)}-${displayTime(request.end_time)} ээлжийн` : request.type === 'daily' ? 'өдрийн' : 'цагийн'} чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} зөвшөөрлөө.`
-            : `Таны чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} татгалзлаа.${comment ? ` Шалтгаан: ${comment}` : ''}`,
+            : `Таны чөлөөний хүсэлтийг ${actingUser?.name || 'admin'} татгалзлаа.${rejectionReason ? ` Шалтгаан: ${rejectionReason}` : ''}`,
           type: 'leave_decision',
           relatedEntityType: 'leave_request',
           relatedEntityId: id,

@@ -205,6 +205,35 @@ describe('leave request notifications', () => {
     expect(csrCopies.length).toBe(0);
   });
 
+  it('shows the admin rejection reason in the requester notification', async () => {
+    const createLeave = await api('POST', '/api/requests/leave', csrToken, {
+      slotBookingId: BOOKING_ID,
+      reason: 'Family matter',
+    });
+
+    expect(createLeave.status).toBe(201);
+    const leaveId = createLeave.body.id;
+    const rejectionReason = 'Ээлжийн зохицуулалт хийх боломжгүй байна';
+
+    const reject = await api('PATCH', `/api/requests/leave/${leaveId}`, adminToken, {
+      status: 'rejected',
+      comment: `  ${rejectionReason}  `,
+    });
+
+    expect(reject.status).toBe(200);
+    expect(await db('leave_requests').where({ id: leaveId }).first()).toMatchObject({
+      status: 'rejected',
+      comment: rejectionReason,
+    });
+
+    const notifications = await api('GET', '/api/broadcasts/notifications', csrToken);
+    expect(notifications.status).toBe(200);
+    const requesterNotification = notifications.body.find((n: any) => n.type === 'leave_decision');
+    expect(requesterNotification).toBeTruthy();
+    expect(requesterNotification.content).toContain('татгалзлаа');
+    expect(requesterNotification.content).toContain(`Шалтгаан: ${rejectionReason}`);
+  });
+
   it('refuses leave that is not tied to a booked shift', async () => {
     const created = await api('POST', '/api/requests/leave', csrToken, {
       date: SHIFT_DATE,
