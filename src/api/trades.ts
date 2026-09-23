@@ -341,6 +341,9 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     const senderSlot = await db('work_slots').where({ id: senderSlotIdFinal }).first();
     const receiverSlot = await db('work_slots').where({ id: receiverSlotIdFinal }).first();
     if (!senderSlot || !receiverSlot) return res.status(404).json({ error: 'Солих ээлж олдсонгүй' });
+    if (Boolean(senderSlot.is_rest) !== Boolean(receiverSlot.is_rest)) {
+      return res.status(400).json({ error: 'Амралтын хуваарийг зөвхөн амралтын хуваарьтай сольж болно' });
+    }
 
     // The UI only ever offers a same-day swap, but the API accepted any two
     // slot ids. A hand-crafted request could therefore swap across dates and
@@ -477,9 +480,16 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     const senderSlot = await trx('work_slots').where({ id: trade.sender_slot_id }).first();
     const receiverSlot = await trx('work_slots').where({ id: trade.receiver_slot_id }).first();
     if (!senderSlot || !receiverSlot) throw new Error('Missing slots');
+    if (Boolean(senderSlot.is_rest) !== Boolean(receiverSlot.is_rest)) {
+      await trx.rollback();
+      return res.status(409).json({ error: 'Амралтын хуваарийг зөвхөн амралтын хуваарьтай сольж болно' });
+    }
 
-    const senderNewSlot = await findOrCreateAdjustedSlot(trx, { ...receiverSlot, segment: senderSlot.segment, employment_type: senderSlot.employment_type }, displayDate(receiverSlot.date), Number(senderSlot.duration), 'end');
-    const receiverNewSlot = await findOrCreateAdjustedSlot(trx, { ...senderSlot, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type }, displayDate(senderSlot.date), Number(receiverSlot.duration), 'start');
+    // Preserve each person's hours while sharing the other person's boundary:
+    // 15:00-22:00 (7h) <-> 09:00-15:00 (6h) becomes
+    // sender 09:00-16:00 and receiver 16:00-22:00.
+    const senderNewSlot = await findOrCreateAdjustedSlot(trx, { ...receiverSlot, segment: senderSlot.segment, employment_type: senderSlot.employment_type }, displayDate(receiverSlot.date), Number(senderSlot.duration), 'start');
+    const receiverNewSlot = await findOrCreateAdjustedSlot(trx, { ...senderSlot, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type }, displayDate(senderSlot.date), Number(receiverSlot.duration), 'end');
 
     const senderBooking = await trx('slot_bookings').where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id, status: 'confirmed' }).first();
     const receiverBooking = await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' }).first();

@@ -3091,7 +3091,7 @@ export default function CsrDashboard() {
                     <p className="text-gray-400 text-sm mb-6">{tradingModal.dateKey} өдрийн боломжит ээлжүүд:</p>
                     <div className="space-y-3 mb-8">
                       {(schedule[tradingModal.dateKey]?.shifts || [])
-                        .filter(s => !s.isBookedByMe)
+                        .filter(s => !s.isBookedByMe && s.isRest === Boolean(schedule[tradingModal.dateKey]?.shifts.find(candidate => candidate.isBookedByMe)?.isRest))
                         .map((shift, idx) => (
                           <button 
                             key={`trade-shift-${shift.id}-${idx}`}
