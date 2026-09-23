@@ -46,6 +46,21 @@ function minutesToSqlTime(value: number) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
 }
 
+function isRestSlot(slot: any) {
+  return Boolean(slot?.is_rest);
+}
+
+function canTradeSlotPair(senderSlot: any, receiverSlot: any) {
+  const senderRest = isRestSlot(senderSlot);
+  const receiverRest = isRestSlot(receiverSlot);
+  if (senderRest && receiverRest) return true;
+  if (senderRest !== receiverRest) {
+    const workSlot = senderRest ? receiverSlot : senderSlot;
+    return timeToMinutes(workSlot.start_time) === 9 * 60;
+  }
+  return timeToMinutes(senderSlot.start_time) !== timeToMinutes(receiverSlot.start_time);
+}
+
 function slotTimeLabel(slot: any) {
   if (slot?.is_rest) return 'Амралт';
   return `${displayTime(slot.start_time)}-${displayTime(slot.end_time)}`;
@@ -341,8 +356,8 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     const senderSlot = await db('work_slots').where({ id: senderSlotIdFinal }).first();
     const receiverSlot = await db('work_slots').where({ id: receiverSlotIdFinal }).first();
     if (!senderSlot || !receiverSlot) return res.status(404).json({ error: 'Солих ээлж олдсонгүй' });
-    if (Boolean(senderSlot.is_rest) !== Boolean(receiverSlot.is_rest)) {
-      return res.status(400).json({ error: 'Амралтын хуваарийг зөвхөн амралтын хуваарьтай сольж болно' });
+    if (!canTradeSlotPair(senderSlot, receiverSlot)) {
+      return res.status(400).json({ error: 'Ижил эхлэх цагтай ээлжийг trade хийх боломжгүй' });
     }
 
     // The UI only ever offers a same-day swap, but the API accepted any two
@@ -351,7 +366,7 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
     // one-booking-per-day rule the booking endpoint enforces so carefully.
     const senderDate = displayDate(senderSlot.date);
     const receiverDate = displayDate(receiverSlot.date);
-    if (senderDate !== receiverDate) {
+    if (senderDate !== receiverDate && !(isRestSlot(senderSlot) && isRestSlot(receiverSlot))) {
       return res.status(400).json({ error: 'Зөвхөн нэг өдрийн ээлжийг хооронд нь солих боломжтой' });
     }
 
@@ -480,16 +495,52 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
     const senderSlot = await trx('work_slots').where({ id: trade.sender_slot_id }).first();
     const receiverSlot = await trx('work_slots').where({ id: trade.receiver_slot_id }).first();
     if (!senderSlot || !receiverSlot) throw new Error('Missing slots');
-    if (Boolean(senderSlot.is_rest) !== Boolean(receiverSlot.is_rest)) {
+    if (!canTradeSlotPair(senderSlot, receiverSlot)) {
       await trx.rollback();
-      return res.status(409).json({ error: 'Амралтын хуваарийг зөвхөн амралтын хуваарьтай сольж болно' });
+      return res.status(409).json({ error: 'Ижил эхлэх цагтай ээлжийг trade хийх боломжгүй' });
     }
 
-    // Preserve each person's hours while sharing the other person's boundary:
-    // 15:00-22:00 (7h) <-> 09:00-15:00 (6h) becomes
-    // sender 09:00-16:00 and receiver 16:00-22:00.
-    const senderNewSlot = await findOrCreateAdjustedSlot(trx, { ...receiverSlot, segment: senderSlot.segment, employment_type: senderSlot.employment_type }, displayDate(receiverSlot.date), Number(senderSlot.duration), 'start');
-    const receiverNewSlot = await findOrCreateAdjustedSlot(trx, { ...senderSlot, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type }, displayDate(senderSlot.date), Number(receiverSlot.duration), 'end');
+    const directSwap = isRestSlot(senderSlot) || isRestSlot(receiverSlot);
+    let senderNewSlot: any;
+    let receiverNewSlot: any;
+    if (directSwap) {
+      senderNewSlot = receiverSlot;
+      receiverNewSlot = senderSlot;
+    } else if (timeToMinutes(senderSlot.start_time) > timeToMinutes(receiverSlot.start_time)) {
+      // Sender starts later, so sender takes the earlier position and keeps
+      // their duration; receiver continues from that new boundary.
+      senderNewSlot = await findOrCreateAdjustedSlot(
+        trx,
+        { ...receiverSlot, segment: senderSlot.segment, employment_type: senderSlot.employment_type },
+        displayDate(receiverSlot.date),
+        Number(senderSlot.duration),
+        'start',
+      );
+      receiverNewSlot = await findOrCreateAdjustedSlot(
+        trx,
+        { ...senderSlot, start_time: senderNewSlot.end_time, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type },
+        displayDate(senderSlot.date),
+        Number(receiverSlot.duration),
+        'start',
+      );
+    } else {
+      // Sender starts earlier, so receiver takes the earlier position and
+      // sender starts exactly where receiver's preserved duration ends.
+      receiverNewSlot = await findOrCreateAdjustedSlot(
+        trx,
+        { ...senderSlot, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type },
+        displayDate(senderSlot.date),
+        Number(receiverSlot.duration),
+        'start',
+      );
+      senderNewSlot = await findOrCreateAdjustedSlot(
+        trx,
+        { ...receiverSlot, start_time: receiverNewSlot.end_time, segment: senderSlot.segment, employment_type: senderSlot.employment_type },
+        displayDate(receiverSlot.date),
+        Number(senderSlot.duration),
+        'start',
+      );
+    }
 
     const senderBooking = await trx('slot_bookings').where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id, status: 'confirmed' }).first();
     const receiverBooking = await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' }).first();

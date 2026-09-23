@@ -389,6 +389,19 @@ const parseShiftWindow = (timeStr?: string): { start: string; end: string } | nu
   return null;
 };
 
+const canTradeDisplayedShift = (myShift: Shift, candidate: Shift) => {
+  const myRest = Boolean(myShift.isRest);
+  const candidateRest = Boolean(candidate.isRest);
+  if (myRest && candidateRest) return true;
+  if (myRest !== candidateRest) {
+    const workShift = myRest ? candidate : myShift;
+    return parseShiftWindow(workShift.time)?.start === '09:00';
+  }
+  const myStart = parseShiftWindow(myShift.time)?.start;
+  const candidateStart = parseShiftWindow(candidate.time)?.start;
+  return Boolean(myStart && candidateStart && myStart !== candidateStart);
+};
+
 // "Яаралтай чөлөө" is about WHEN the request was filed, not how much of the
 // shift it covers. A request raised less than a day before the shift starts
 // (the rules allow no later than 8 hours before) is the urgent one; anything
@@ -1102,6 +1115,7 @@ export default function CsrDashboard() {
       const shift: Shift = {
         id: String(slot.id),
         time,
+        isRest: Boolean(slot.isRest ?? slot.is_rest),
         totalSlots: Number(slot.capacity || slot.totalSlots || 1),
         bookedSlots: Number(slot.currentBookings ?? slot.current_bookings ?? bookedBy.length),
         isBookedByMe: bookedBy.some((b: any) => b.userId === csrProfile.id),
@@ -3090,17 +3104,23 @@ export default function CsrDashboard() {
                   <>
                     <p className="text-gray-400 text-sm mb-6">{tradingModal.dateKey} өдрийн боломжит ээлжүүд:</p>
                     <div className="space-y-3 mb-8">
-                      {(schedule[tradingModal.dateKey]?.shifts || [])
-                        .filter(s => !s.isBookedByMe && s.isRest === Boolean(schedule[tradingModal.dateKey]?.shifts.find(candidate => candidate.isBookedByMe)?.isRest))
-                        .map((shift, idx) => (
+                      {Object.entries(schedule)
+                        .flatMap(([candidateDateKey, day]) => day.shifts
+                          .filter(shift => {
+                            const myShift = schedule[tradingModal.dateKey]?.shifts.find(candidate => candidate.isBookedByMe);
+                            if (!myShift || shift.isBookedByMe || !canTradeDisplayedShift(myShift, shift)) return false;
+                            return candidateDateKey === tradingModal.dateKey || (myShift.isRest && shift.isRest);
+                          })
+                          .map(shift => ({ candidateDateKey, shift })))
+                        .map(({ candidateDateKey, shift }, idx) => (
                           <button 
-                            key={`trade-shift-${shift.id}-${idx}`}
+                            key={`trade-shift-${candidateDateKey}-${shift.id}-${idx}`}
                             onClick={() => setTradingModal({ ...tradingModal, step: 'employees', shift })}
                             className="w-full flex items-center justify-between p-4 bg-gray-800/50 border border-gray-700 rounded-2xl hover:border-blue-500/50 transition-all group"
                           >
                             <div className="flex items-center gap-3">
                               <Clock size={18} className="text-blue-400" />
-                              <span className="font-bold text-white">{formatShiftTimeForDisplay(shift.time)}</span>
+                              <span className="font-bold text-white">{candidateDateKey} · {formatShiftTimeForDisplay(shift.time)}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-gray-500">{shift.bookedSlots} ажилтан</span>
