@@ -1441,11 +1441,40 @@ export default function CsrDashboard() {
       return;
     }
 
+    const receiverShift = dayData?.shifts.find(shift => shift.id === receiverShiftId);
+    if (!receiverShift) {
+      alert('Нөгөө хүний ээлж олдсонгүй. Хуваариа дахин шинэчилнэ үү.');
+      return;
+    }
+
+    const secondPair = Object.entries(schedule)
+      .filter(([candidateDateKey]) => candidateDateKey !== dateKey)
+      .map(([candidateDateKey, candidateDay]) => ({
+        candidateDateKey,
+        senderShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === csrProfile.id)),
+        receiverShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === receiverId)),
+      }))
+      .find(({ senderShift, receiverShift }) => {
+        if (!senderShift || !receiverShift) return false;
+        const firstSenderRest = Boolean(myShift.isRest);
+        const firstReceiverRest = Boolean(receiverShift.isRest);
+        return firstSenderRest !== firstReceiverRest
+          && Boolean(senderShift.isRest) === firstReceiverRest
+          && Boolean(receiverShift.isRest) === firstSenderRest;
+      });
+
+    if (!secondPair?.senderShift || !secondPair.receiverShift) {
+      alert('Trade хийхэд хоёр талын эсрэг work/амралтын хуваарьтай хоёр дахь өдөр олдсонгүй.');
+      return;
+    }
+
     try {
       await apiClient.post('/trades', {
         receiver_id: receiverId,
         sender_slot_id: myShift.id,
         receiver_slot_id: receiverShiftId,
+        sender_next_slot_id: secondPair.senderShift.id,
+        receiver_next_slot_id: secondPair.receiverShift.id,
       });
       await fetchTradeRequests();
       await fetchNotifications();
@@ -3104,23 +3133,20 @@ export default function CsrDashboard() {
                   <>
                     <p className="text-gray-400 text-sm mb-6">{tradingModal.dateKey} өдрийн боломжит ээлжүүд:</p>
                     <div className="space-y-3 mb-8">
-                      {Object.entries(schedule)
-                        .flatMap(([candidateDateKey, day]) => day.shifts
-                          .filter(shift => {
-                            const myShift = schedule[tradingModal.dateKey]?.shifts.find(candidate => candidate.isBookedByMe);
-                            if (!myShift || shift.isBookedByMe || !canTradeDisplayedShift(myShift, shift)) return false;
-                            return candidateDateKey === tradingModal.dateKey || (myShift.isRest && shift.isRest);
-                          })
-                          .map(shift => ({ candidateDateKey, shift })))
-                        .map(({ candidateDateKey, shift }, idx) => (
+                      {(schedule[tradingModal.dateKey]?.shifts || [])
+                        .filter(shift => {
+                          const myShift = schedule[tradingModal.dateKey]?.shifts.find(candidate => candidate.isBookedByMe);
+                          return Boolean(myShift && !shift.isBookedByMe && canTradeDisplayedShift(myShift, shift));
+                        })
+                        .map((shift, idx) => (
                           <button 
-                            key={`trade-shift-${candidateDateKey}-${shift.id}-${idx}`}
+                            key={`trade-shift-${tradingModal.dateKey}-${shift.id}-${idx}`}
                             onClick={() => setTradingModal({ ...tradingModal, step: 'employees', shift })}
                             className="w-full flex items-center justify-between p-4 bg-gray-800/50 border border-gray-700 rounded-2xl hover:border-blue-500/50 transition-all group"
                           >
                             <div className="flex items-center gap-3">
                               <Clock size={18} className="text-blue-400" />
-                              <span className="font-bold text-white">{candidateDateKey} · {formatShiftTimeForDisplay(shift.time)}</span>
+                              <span className="font-bold text-white">{formatShiftTimeForDisplay(shift.time)}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-gray-500">{shift.bookedSlots} ажилтан</span>

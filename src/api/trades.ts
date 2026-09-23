@@ -132,6 +132,8 @@ function mapTrade(row: any) {
     receiverName: row.receiver_name,
     senderSlotId: row.sender_slot_id,
     receiverSlotId: row.receiver_slot_id,
+    senderNextSlotId: row.sender_next_slot_id,
+    receiverNextSlotId: row.receiver_next_slot_id,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -316,11 +318,13 @@ router.get('/', authenticate, async (req: any, res) => {
 });
 
 router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
-  const { receiver_id, receiverId, sender_slot_id, senderSlotId, receiver_slot_id, receiverSlotId } = req.body;
+  const { receiver_id, receiverId, sender_slot_id, senderSlotId, receiver_slot_id, receiverSlotId, sender_next_slot_id, senderNextSlotId, receiver_next_slot_id, receiverNextSlotId } = req.body;
   const senderId = req.user.id;
   const receiverIdFinal = receiver_id || receiverId;
   const senderSlotIdFinal = sender_slot_id || senderSlotId;
   const receiverSlotIdFinal = receiver_slot_id || receiverSlotId;
+  const senderNextSlotIdFinal = sender_next_slot_id || senderNextSlotId || null;
+  const receiverNextSlotIdFinal = receiver_next_slot_id || receiverNextSlotId || null;
 
   if (!receiverIdFinal || !senderSlotIdFinal || !receiverSlotIdFinal) {
     return res.status(400).json({ error: 'Солих хэрэглэгч болон ээлжийн мэдээлэл шаардлагатай' });
@@ -360,13 +364,28 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
       return res.status(400).json({ error: 'Ижил эхлэх цагтай ээлжийг trade хийх боломжгүй' });
     }
 
+    if ((senderNextSlotIdFinal && !receiverNextSlotIdFinal) || (!senderNextSlotIdFinal && receiverNextSlotIdFinal)) {
+      return res.status(400).json({ error: 'Хоёр дахь өдрийн хоёр талын ээлж хоёулаа шаардлагатай' });
+    }
+    if (senderNextSlotIdFinal && receiverNextSlotIdFinal) {
+      const [senderNextSlot, receiverNextSlot] = await Promise.all([
+        db('work_slots').where({ id: senderNextSlotIdFinal }).first(),
+        db('work_slots').where({ id: receiverNextSlotIdFinal }).first(),
+      ]);
+      if (!senderNextSlot || !receiverNextSlot) return res.status(404).json({ error: 'Хоёр дахь өдрийн ээлж олдсонгүй' });
+      const nextSenderBooking = await db('slot_bookings').where({ user_id: senderId, slot_id: senderNextSlotIdFinal, status: 'confirmed' }).first();
+      const nextReceiverBooking = await db('slot_bookings').where({ user_id: receiverIdFinal, slot_id: receiverNextSlotIdFinal, status: 'confirmed' }).first();
+      if (!nextSenderBooking || !nextReceiverBooking) return res.status(400).json({ error: 'Хоёр дахь өдөр хоёр талд баталгаатай ээлж байх ёстой' });
+      if (!canTradeSlotPair(senderNextSlot, receiverNextSlot)) return res.status(400).json({ error: 'Хоёр дахь өдрийн ээлжүүд trade хийх боломжгүй' });
+    }
+
     // The UI only ever offers a same-day swap, but the API accepted any two
     // slot ids. A hand-crafted request could therefore swap across dates and
     // leave a CSR holding TWO confirmed bookings on one day, defeating the
     // one-booking-per-day rule the booking endpoint enforces so carefully.
     const senderDate = displayDate(senderSlot.date);
     const receiverDate = displayDate(receiverSlot.date);
-    if (senderDate !== receiverDate && !(isRestSlot(senderSlot) && isRestSlot(receiverSlot))) {
+    if (senderDate !== receiverDate) {
       return res.status(400).json({ error: 'Зөвхөн нэг өдрийн ээлжийг хооронд нь солих боломжтой' });
     }
 
@@ -397,6 +416,8 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
       receiver_id: receiverIdFinal,
       sender_slot_id: senderSlotIdFinal,
       receiver_slot_id: receiverSlotIdFinal,
+      sender_next_slot_id: senderNextSlotIdFinal,
+      receiver_next_slot_id: receiverNextSlotIdFinal,
       status: 'pending',
     });
 
@@ -500,57 +521,95 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
       return res.status(409).json({ error: 'Ижил эхлэх цагтай ээлжийг trade хийх боломжгүй' });
     }
 
-    const directSwap = isRestSlot(senderSlot) || isRestSlot(receiverSlot);
-    let senderNewSlot: any;
-    let receiverNewSlot: any;
-    if (directSwap) {
-      senderNewSlot = receiverSlot;
-      receiverNewSlot = senderSlot;
-    } else if (timeToMinutes(senderSlot.start_time) > timeToMinutes(receiverSlot.start_time)) {
-      // Sender starts later, so sender takes the earlier position and keeps
-      // their duration; receiver continues from that new boundary.
-      senderNewSlot = await findOrCreateAdjustedSlot(
-        trx,
-        { ...receiverSlot, segment: senderSlot.segment, employment_type: senderSlot.employment_type },
-        displayDate(receiverSlot.date),
-        Number(senderSlot.duration),
-        'start',
-      );
-      receiverNewSlot = await findOrCreateAdjustedSlot(
-        trx,
-        { ...senderSlot, start_time: senderNewSlot.end_time, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type },
-        displayDate(senderSlot.date),
-        Number(receiverSlot.duration),
-        'start',
-      );
-    } else {
-      // Sender starts earlier, so receiver takes the earlier position and
-      // sender starts exactly where receiver's preserved duration ends.
-      receiverNewSlot = await findOrCreateAdjustedSlot(
-        trx,
-        { ...senderSlot, segment: receiverSlot.segment, employment_type: receiverSlot.employment_type },
-        displayDate(senderSlot.date),
-        Number(receiverSlot.duration),
-        'start',
-      );
-      senderNewSlot = await findOrCreateAdjustedSlot(
-        trx,
-        { ...receiverSlot, start_time: receiverNewSlot.end_time, segment: senderSlot.segment, employment_type: senderSlot.employment_type },
-        displayDate(receiverSlot.date),
-        Number(senderSlot.duration),
-        'start',
-      );
+    const senderNextSlot = trade.sender_next_slot_id
+      ? await trx('work_slots').where({ id: trade.sender_next_slot_id }).first()
+      : null;
+    const receiverNextSlot = trade.receiver_next_slot_id
+      ? await trx('work_slots').where({ id: trade.receiver_next_slot_id }).first()
+      : null;
+    if (Boolean(senderNextSlot) !== Boolean(receiverNextSlot)) {
+      await trx.rollback();
+      return res.status(409).json({ error: 'Хоёр дахь өдрийн trade мэдээлэл дутуу байна' });
     }
+    if (senderNextSlot && receiverNextSlot && !canTradeSlotPair(senderNextSlot, receiverNextSlot)) {
+      await trx.rollback();
+      return res.status(409).json({ error: 'Хоёр дахь өдрийн ээлжүүд trade хийх боломжгүй' });
+    }
+
+    const createTradeTargets = async (currentSender: any, currentReceiver: any, senderDuration: number, receiverDuration: number) => {
+      if (isRestSlot(currentSender) && isRestSlot(currentReceiver)) {
+        return { sender: currentReceiver, receiver: currentSender };
+      }
+
+      if (isRestSlot(currentSender) || isRestSlot(currentReceiver)) {
+        const workSlot = isRestSlot(currentSender) ? currentReceiver : currentSender;
+        if (!senderDuration || !receiverDuration) throw new Error('Missing work duration for rest trade');
+
+        if (isRestSlot(currentSender)) {
+          return {
+            sender: await findOrCreateAdjustedSlot(trx, { ...workSlot, segment: currentSender.segment, employment_type: currentSender.employment_type }, displayDate(currentSender.date), senderDuration, 'start'),
+            receiver: currentSender,
+          };
+        }
+
+        return {
+          sender: currentReceiver,
+          receiver: await findOrCreateAdjustedSlot(trx, { ...workSlot, segment: currentReceiver.segment, employment_type: currentReceiver.employment_type }, displayDate(currentReceiver.date), receiverDuration, 'start'),
+        };
+      }
+
+      if (timeToMinutes(currentSender.start_time) > timeToMinutes(currentReceiver.start_time)) {
+        const sender = await findOrCreateAdjustedSlot(trx, { ...currentReceiver, segment: currentSender.segment, employment_type: currentSender.employment_type }, displayDate(currentReceiver.date), senderDuration, 'start');
+        const receiver = await findOrCreateAdjustedSlot(trx, { ...currentSender, start_time: sender.end_time, segment: currentReceiver.segment, employment_type: currentReceiver.employment_type }, displayDate(currentSender.date), receiverDuration, 'start');
+        return { sender, receiver };
+      }
+
+      const receiver = await findOrCreateAdjustedSlot(trx, { ...currentSender, segment: currentReceiver.segment, employment_type: currentReceiver.employment_type }, displayDate(currentSender.date), receiverDuration, 'start');
+      const sender = await findOrCreateAdjustedSlot(trx, { ...currentReceiver, start_time: receiver.end_time, segment: currentSender.segment, employment_type: currentSender.employment_type }, displayDate(currentReceiver.date), senderDuration, 'start');
+      return { sender, receiver };
+    };
+
+    const firstTargets = await createTradeTargets(
+      senderSlot,
+      receiverSlot,
+      Number(senderNextSlot?.duration || senderSlot.duration),
+      Number(receiverNextSlot?.duration || receiverSlot.duration),
+    );
+    const secondTargets = senderNextSlot && receiverNextSlot
+      ? await createTradeTargets(senderNextSlot, receiverNextSlot, Number(senderSlot.duration), Number(receiverSlot.duration))
+      : null;
+    const senderNewSlot = firstTargets.sender;
+    const receiverNewSlot = firstTargets.receiver;
 
     const senderBooking = await trx('slot_bookings').where({ user_id: trade.sender_id, slot_id: trade.sender_slot_id, status: 'confirmed' }).first();
     const receiverBooking = await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: trade.receiver_slot_id, status: 'confirmed' }).first();
     if (!senderBooking || !receiverBooking) throw new Error('Bookings are no longer available');
+    const senderNextBooking = senderNextSlot
+      ? await trx('slot_bookings').where({ user_id: trade.sender_id, slot_id: senderNextSlot.id, status: 'confirmed' }).first()
+      : null;
+    const receiverNextBooking = receiverNextSlot
+      ? await trx('slot_bookings').where({ user_id: trade.receiver_id, slot_id: receiverNextSlot.id, status: 'confirmed' }).first()
+      : null;
+    if (senderNextSlot && receiverNextSlot && (!senderNextBooking || !receiverNextBooking)) {
+      throw new Error('Second-day bookings are no longer available');
+    }
+
+    const bookingPairs = [
+      { senderBooking, receiverBooking, senderTarget: senderNewSlot, receiverTarget: receiverNewSlot },
+      ...(senderNextSlot && receiverNextSlot
+        ? [{ senderBooking: senderNextBooking!, receiverBooking: receiverNextBooking!, senderTarget: secondTargets!.sender, receiverTarget: secondTargets!.receiver }]
+        : []),
+    ];
 
     // Capacity was never re-checked here, so accepting a trade could push a
     // shift past its quota - the one invariant the booking endpoint takes a
     // row lock to protect. Re-check both destinations before moving anyone.
-    const capacityError = await assertCapacityAvailable(trx, senderNewSlot, [senderBooking.id, receiverBooking.id])
-      || await assertCapacityAvailable(trx, receiverNewSlot, [senderBooking.id, receiverBooking.id]);
+    const capacityError = (await Promise.all(
+      bookingPairs.flatMap(pair => [
+        assertCapacityAvailable(trx, pair.senderTarget, [pair.senderBooking.id, pair.receiverBooking.id]),
+        assertCapacityAvailable(trx, pair.receiverTarget, [pair.senderBooking.id, pair.receiverBooking.id]),
+      ]),
+    )).find(Boolean);
     if (capacityError) {
       await trx.rollback();
       return res.status(409).json({ error: capacityError });
@@ -558,7 +617,8 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
 
     // Re-checked here as well as at creation: an admin may have approved a
     // Чөлөө in the meantime.
-    const leaveBlock = await approvedLeaveBlocking(trx, [senderBooking.id, receiverBooking.id]);
+    const allBookingIds = bookingPairs.flatMap(pair => [pair.senderBooking.id, pair.receiverBooking.id]);
+    const leaveBlock = await approvedLeaveBlocking(trx, allBookingIds);
     if (leaveBlock) {
       await trx.rollback();
       return res.status(409).json({ error: leaveBlock });
@@ -566,18 +626,22 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
 
     // The swap covers the shift, so any still-undecided request to be let
     // off it is withdrawn rather than carried onto the new shift.
-    await withdrawPendingLeaveForTrade(trx, [senderBooking.id, receiverBooking.id], req.user.id);
+    await withdrawPendingLeaveForTrade(trx, allBookingIds, req.user.id);
 
     // slot_bookings carries UNIQUE(slot_id, user_id) and cancelling is a soft
     // delete, so either CSR may still own a leftover cancelled row for the
     // slot we are about to move them onto. Without clearing it first the
     // swap below fails the constraint and the whole trade 500s. See the same
     // fix in bookHandler (src/api/slots.ts).
-    await clearLeftoverBooking(trx, senderNewSlot.id, trade.sender_id, senderBooking.id);
-    await clearLeftoverBooking(trx, receiverNewSlot.id, trade.receiver_id, receiverBooking.id);
+    for (const pair of bookingPairs) {
+      await clearLeftoverBooking(trx, pair.senderTarget.id, trade.sender_id, pair.senderBooking.id);
+      await clearLeftoverBooking(trx, pair.receiverTarget.id, trade.receiver_id, pair.receiverBooking.id);
+    }
 
-    await trx('slot_bookings').where({ id: senderBooking.id }).update({ slot_id: senderNewSlot.id, booked_at: trx.fn.now() });
-    await trx('slot_bookings').where({ id: receiverBooking.id }).update({ slot_id: receiverNewSlot.id, booked_at: trx.fn.now() });
+    for (const pair of bookingPairs) {
+      await trx('slot_bookings').where({ id: pair.senderBooking.id }).update({ slot_id: pair.senderTarget.id, booked_at: trx.fn.now() });
+      await trx('slot_bookings').where({ id: pair.receiverBooking.id }).update({ slot_id: pair.receiverTarget.id, booked_at: trx.fn.now() });
+    }
 
     const tradeUpdated = await trx('trade_requests')
       .where({ id, status: 'pending' })
