@@ -1494,6 +1494,9 @@ const cancelHandler = async (req: any, res: any) => {
     if (!booking) return res.status(404).json({ error: 'Захиалга олдсонгүй' });
 
     const slot = await db('work_slots').where({ id: booking.slot_id }).first();
+    if (slot && !boolValue(slot.booking_is_open)) {
+      return res.status(400).json({ error: 'Админ ээлжийн захиалгыг хаасан байна. Зөвхөн арилжаа хийх боломжтой.' });
+    }
     if (slot?.booking_deadline && new Date().getTime() > new Date(slot.booking_deadline).getTime()) {
       return res.status(400).json({ error: 'Цуцлах хугацаа дууссан байна. Зөвхөн арилжаа хийх боломжтой.' });
     }

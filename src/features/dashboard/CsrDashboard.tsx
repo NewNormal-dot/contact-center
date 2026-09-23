@@ -688,7 +688,7 @@ const DayRow = React.memo(({
                           Edit
                         </button>
                       )}
-                      {!isPast && (
+                      {canEditBooking && (
                         <button
                           onClick={() => onCancelShift(dateKey, myBookedShift.id)}
                           className="px-4 py-2.5 rounded-xl bg-red-600/15 border border-red-500/30 text-red-300 font-bold hover:bg-red-600 hover:text-white transition-all flex items-center gap-2"
@@ -1440,6 +1440,7 @@ export default function CsrDashboard() {
   const handleAcceptTrade = async (request: TradeRequest) => {
     try {
       await apiClient.patch(`/trades/${request.id}/respond`, { status: 'accepted' });
+      await fetchDbSchedule();
       await fetchTradeRequests();
       await fetchNotifications();
       setIncomingTradeModal(null);
