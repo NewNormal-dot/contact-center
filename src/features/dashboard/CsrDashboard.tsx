@@ -364,9 +364,16 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
 
 const formatShiftTimeForDisplay = (timeStr?: string) => {
   if (!timeStr) return '';
-  const compactMatch = timeStr.trim().match(/^(\d{1,2})-+(\d{1,2})$/);
-  if (!compactMatch) return timeStr;
-  return `${compactMatch[1].padStart(2, '0')}-${compactMatch[2].padStart(2, '0')}`;
+  const normalized = timeStr.trim().replace(/\s+/g, '');
+  const fullMatch = normalized.match(/^(\d{1,2}):(\d{2})-+(\d{1,2}):(\d{2})$/);
+  if (fullMatch) {
+    return `${fullMatch[1].padStart(2, '0')}:${fullMatch[2]} - ${fullMatch[3].padStart(2, '0')}:${fullMatch[4]}`;
+  }
+  const compactMatch = normalized.match(/^(\d{1,2})-+(\d{1,2})$/);
+  if (compactMatch) {
+    return `${compactMatch[1].padStart(2, '0')}:00 - ${compactMatch[2].padStart(2, '0')}:00`;
+  }
+  return timeStr;
 };
 
 // A shift's time is stored either as "09:00-18:00" or in the compact "9-18"
@@ -1564,7 +1571,7 @@ export default function CsrDashboard() {
     return /^[4-9]$/.test(roundedHours) ? roundedHours : '';
   }, []);
 
-  const getMyWeeklyBookingStats = React.useCallback((dateKey: string, sourceSchedule: Record<string, DayData>) => {
+  const getMyWeeklyBookingStats = React.useCallback((dateKey: string, sourceSchedule: Record<string, DayData>, excludeShiftId?: string) => {
     const weekDateKeys = getWeekDateKeys(dateKey);
     const hourCounts: Record<string, number> = {};
     let bookedDays = 0;
@@ -1572,7 +1579,7 @@ export default function CsrDashboard() {
 
     weekDateKeys.forEach((weekDateKey) => {
       const bookedShift = sourceSchedule[weekDateKey]?.shifts?.find((shift) =>
-        shift.bookedBy?.some((booking) => booking.userId === csrProfile.id),
+        shift.id !== excludeShiftId && shift.bookedBy?.some((booking) => booking.userId === csrProfile.id),
       );
       if (!bookedShift) return;
       const hourKey = getShiftRuleHourKey(bookedShift);
@@ -1585,8 +1592,8 @@ export default function CsrDashboard() {
     return { hourCounts, bookedDays, hours };
   }, [csrProfile.id, getShiftRuleHourKey]);
 
-  const validateShiftRuleBeforeBooking = React.useCallback((dateKey: string, targetShift: Shift, sourceSchedule: Record<string, DayData>) => {
-    const weekStats = getMyWeeklyBookingStats(dateKey, sourceSchedule);
+  const validateShiftRuleBeforeBooking = React.useCallback((dateKey: string, targetShift: Shift, sourceSchedule: Record<string, DayData>, excludeShiftId?: string) => {
+    const weekStats = getMyWeeklyBookingStats(dateKey, sourceSchedule, excludeShiftId);
     const targetHourKey = getShiftRuleHourKey(targetShift);
 
     // selectedDays is now purely a derived/informational total (sum of the
@@ -1676,7 +1683,7 @@ export default function CsrDashboard() {
       return;
     }
 
-    const ruleError = validateShiftRuleBeforeBooking(dateKey, targetShift, schedule);
+    const ruleError = validateShiftRuleBeforeBooking(dateKey, targetShift, schedule, myExistingShiftId);
     if (ruleError) {
       alert(ruleError);
       return;
@@ -2974,6 +2981,8 @@ export default function CsrDashboard() {
                     const dayData = schedule[bookingModal.dateKey];
                     const waves = getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '', dayData?.bookingCloseAt || '');
                     const isMyCurrentShift = Boolean(shift.bookedBy?.some((b: any) => b.userId === csrProfile.id));
+                    const currentShiftId = dayData?.shifts.find((candidate) => candidate.bookedBy?.some((b: any) => b.userId === csrProfile.id))?.id;
+                    const durationRuleError = validateShiftRuleBeforeBooking(bookingModal.dateKey, shift, schedule, currentShiftId);
                     return (
                       <div
                         key={`booking-shift-${shift.id}-${idx}`}
@@ -3014,9 +3023,11 @@ export default function CsrDashboard() {
                             const waveFull = booked >= wave.slotLimit;
                             const waveAccess = getWaveAccessState(wave, nowTick);
                             const waveOpen = waveAccess.state === 'open';
-                            const canBook = !isMyCurrentShift && !isFull && !waveFull && waveOpen;
+                            const canBook = !isMyCurrentShift && !isFull && !waveFull && waveOpen && !durationRuleError;
                             const statusLabel = waveFull
                               ? 'Дүүрсэн'
+                              : durationRuleError
+                                ? durationRuleError
                               : waveAccess.label;
                             return (
                               <div key={wave.id} className={`flex items-center justify-between gap-2 rounded-xl border px-2.5 py-2 ${canBook ? 'border-blue-500/30 bg-blue-500/5' : 'border-white/5 bg-black/20 opacity-70'}`}>

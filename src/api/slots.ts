@@ -1295,6 +1295,10 @@ const bookHandler = async (req: any, res: any) => {
       .select('slot_bookings.*')
       .first();
 
+    if (editBookingId && (!existingOnSameDay || String(editBookingId) !== String(existingOnSameDay.id))) {
+      return res.status(400).json({ error: 'Зөвхөн өөрийн одоо байгаа ээлжийг засах боломжтой' });
+    }
+
     if (existingOnSameDay && existingOnSameDay.slot_id !== slot_id && !editBookingId) {
       return res.status(400).json({ error: 'Энэ өдөр аль хэдийн захиалга хийсэн байна' });
     }
@@ -1333,6 +1337,10 @@ const bookHandler = async (req: any, res: any) => {
         .where({ 'slot_bookings.user_id': userId, 'work_slots.date': slot.date, 'slot_bookings.status': 'confirmed' })
         .select('slot_bookings.*')
         .first();
+
+      if (editBookingId && (!currentBooking || String(editBookingId) !== String(currentBooking.id))) {
+        return { status: 400, error: 'Зөвхөн өөрийн одоо байгаа ээлжийг засах боломжтой' };
+      }
 
       if (currentBooking && currentBooking.slot_id !== slot_id && !editBookingId) {
         return { status: 400, error: 'Энэ өдөр аль хэдийн захиалга хийсэн байна' };
