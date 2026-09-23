@@ -1718,24 +1718,48 @@ export default function CsrDashboard() {
       bookingWaveName: targetWave.name,
     };
 
-    const updatedShifts = dayData.shifts.map(s => {
-      if (s.id === targetShift.id) {
-        return {
-          ...s,
-          bookedSlots: s.bookedSlots + 1,
-          bookedBy: [...(s.bookedBy || []), bookingInfo]
-        };
-      }
-      return s;
-    });
-
     try {
       await apiClient.post('/slots/book', {
         slotId: targetShift.id,
         bookingWaveId: targetWave.id,
         editBookingId: myExistingBookingId,
       });
-      await fetchDbSchedule();
+
+      setSchedule(previous => {
+        const currentDay = previous[dateKey];
+        if (!currentDay) return previous;
+
+        const nextShifts = currentDay.shifts.map(shift => {
+          const existingBooking = shift.bookedBy?.find(booking => booking.userId === csrProfile.id);
+          const isTarget = shift.id === targetShift.id;
+
+          if (isTarget) {
+            const nextBooking = { ...bookingInfo, id: existingBooking?.id || myExistingBookingId };
+            return {
+              ...shift,
+              bookedSlots: existingBooking ? shift.bookedSlots : shift.bookedSlots + 1,
+              bookedBy: [...(shift.bookedBy || []).filter(booking => booking.userId !== csrProfile.id), nextBooking],
+              isBookedByMe: true,
+            };
+          }
+
+          if (existingBooking && myExistingBookingId) {
+            return {
+              ...shift,
+              bookedSlots: Math.max(0, shift.bookedSlots - 1),
+              bookedBy: (shift.bookedBy || []).filter(booking => booking.userId !== csrProfile.id),
+              isBookedByMe: false,
+            };
+          }
+
+          return shift;
+        });
+
+        return { ...previous, [dateKey]: { ...currentDay, shifts: nextShifts } };
+      });
+
+      // Reconcile the optimistic state with the authoritative server state.
+      void fetchDbSchedule();
       logAction(
         myExistingBookingId ? 'Shift Booking Edited' : 'Shift Booked',
         `${myExistingBookingId ? 'Edited' : 'Booked'} shift on ${dateKey} / ${targetWave.name}`,
