@@ -717,7 +717,7 @@ const DayRow = React.memo(({
                           Цуцлах
                         </button>
                       )}
-                      {(bookingAccess.state === 'closed' || bookingAccess.state === 'expired') && (
+                      {!isPast && (
                         <button 
                           onClick={() => onTradeShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
@@ -1452,18 +1452,18 @@ export default function CsrDashboard() {
       .map(([candidateDateKey, candidateDay]) => ({
         candidateDateKey,
         senderShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === csrProfile.id)),
-        receiverShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === receiverId)),
+        receiverNextShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === receiverId)),
       }))
-      .find(({ senderShift, receiverShift }) => {
-        if (!senderShift || !receiverShift) return false;
+      .find(({ senderShift, receiverNextShift }) => {
+        if (!senderShift || !receiverNextShift) return false;
         const firstSenderRest = Boolean(myShift.isRest);
         const firstReceiverRest = Boolean(receiverShift.isRest);
         return firstSenderRest !== firstReceiverRest
           && Boolean(senderShift.isRest) === firstReceiverRest
-          && Boolean(receiverShift.isRest) === firstSenderRest;
+          && Boolean(receiverNextShift.isRest) === firstSenderRest;
       });
 
-    if (!secondPair?.senderShift || !secondPair.receiverShift) {
+    if (!secondPair?.senderShift || !secondPair.receiverNextShift) {
       alert('Trade хийхэд хоёр талын эсрэг work/амралтын хуваарьтай хоёр дахь өдөр олдсонгүй.');
       return;
     }
@@ -1474,7 +1474,7 @@ export default function CsrDashboard() {
         sender_slot_id: myShift.id,
         receiver_slot_id: receiverShiftId,
         sender_next_slot_id: secondPair.senderShift.id,
-        receiver_next_slot_id: secondPair.receiverShift.id,
+        receiver_next_slot_id: secondPair.receiverNextShift.id,
       });
       await fetchTradeRequests();
       await fetchNotifications();
@@ -3136,7 +3136,7 @@ export default function CsrDashboard() {
                       {(schedule[tradingModal.dateKey]?.shifts || [])
                         .filter(shift => {
                           const myShift = schedule[tradingModal.dateKey]?.shifts.find(candidate => candidate.isBookedByMe);
-                          return Boolean(myShift && !shift.isBookedByMe && canTradeDisplayedShift(myShift, shift));
+                          return Boolean(myShift && !shift.isBookedByMe && (shift.bookedBy?.length || 0) > 0 && canTradeDisplayedShift(myShift, shift));
                         })
                         .map((shift, idx) => (
                           <button 
@@ -3149,7 +3149,7 @@ export default function CsrDashboard() {
                               <span className="font-bold text-white">{formatShiftTimeForDisplay(shift.time)}</span>
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500">{shift.bookedSlots} ажилтан</span>
+                              <span className="text-xs text-gray-500">{shift.bookedBy?.length || 0} ажилтан</span>
                               <ChevronDown size={16} className="text-gray-600 group-hover:text-blue-400 -rotate-90" />
                             </div>
                           </button>
