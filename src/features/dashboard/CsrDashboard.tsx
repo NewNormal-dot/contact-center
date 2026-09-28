@@ -1444,24 +1444,26 @@ export default function CsrDashboard() {
       return;
     }
 
-    const secondPair = Object.entries(schedule)
-      .filter(([candidateDateKey]) => candidateDateKey !== dateKey)
-      .map(([candidateDateKey, candidateDay]) => ({
-        candidateDateKey,
-        senderShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === csrProfile.id)),
-        receiverNextShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === receiverId)),
-      }))
-      .find(({ senderShift, receiverNextShift }) => {
-        if (!senderShift || !receiverNextShift) return false;
-        const firstSenderRest = Boolean(myShift.isRest);
-        const firstReceiverRest = Boolean(receiverShift.isRest);
-        return firstSenderRest !== firstReceiverRest
-          && Boolean(senderShift.isRest) === firstReceiverRest
-          && Boolean(receiverNextShift.isRest) === firstSenderRest;
-      });
+    const requiresComplementaryDay = Boolean(myShift.isRest) !== Boolean(receiverShift.isRest);
+    const secondPair = requiresComplementaryDay
+      ? Object.entries(schedule)
+          .filter(([candidateDateKey]) => candidateDateKey !== dateKey)
+          .map(([candidateDateKey, candidateDay]) => ({
+            candidateDateKey,
+            senderShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === csrProfile.id)),
+            receiverNextShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === receiverId)),
+          }))
+          .find(({ senderShift, receiverNextShift }) => {
+            if (!senderShift || !receiverNextShift) return false;
+            const firstSenderRest = Boolean(myShift.isRest);
+            const firstReceiverRest = Boolean(receiverShift.isRest);
+            return Boolean(senderShift.isRest) === firstReceiverRest
+              && Boolean(receiverNextShift.isRest) === firstSenderRest;
+          })
+      : undefined;
 
-    if (!secondPair?.senderShift || !secondPair.receiverNextShift) {
-      alert('Trade хийхэд хоёр талын эсрэг work/амралтын хуваарьтай хоёр дахь өдөр олдсонгүй.');
+    if (requiresComplementaryDay && (!secondPair?.senderShift || !secondPair.receiverNextShift)) {
+      alert('Амралт болон ажлын өдрийг солиход нөгөө өдөр хоёр талын эсрэг хуваарьтай байх шаардлагатай.');
       return;
     }
 
@@ -1470,8 +1472,8 @@ export default function CsrDashboard() {
         receiver_id: receiverId,
         sender_slot_id: myShift.id,
         receiver_slot_id: receiverShiftId,
-        sender_next_slot_id: secondPair.senderShift.id,
-        receiver_next_slot_id: secondPair.receiverNextShift.id,
+        sender_next_slot_id: secondPair?.senderShift?.id,
+        receiver_next_slot_id: secondPair?.receiverNextShift?.id,
       });
       await fetchTradeRequests();
       await fetchNotifications();
