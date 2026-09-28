@@ -54,11 +54,12 @@ function canTradeSlotPair(senderSlot: any, receiverSlot: any) {
   const senderRest = isRestSlot(senderSlot);
   const receiverRest = isRestSlot(receiverSlot);
   if (senderRest && receiverRest) return true;
-  if (senderRest !== receiverRest) {
-    const workSlot = senderRest ? receiverSlot : senderSlot;
-    return timeToMinutes(workSlot.start_time) === 9 * 60;
-  }
+  if (senderRest !== receiverRest) return true;
   return timeToMinutes(senderSlot.start_time) !== timeToMinutes(receiverSlot.start_time);
+}
+
+function positionAnchor(slot: any): 'start' | 'end' {
+  return timeToMinutes(slot.start_time) < 12 * 60 ? 'start' : 'end';
 }
 
 function slotTimeLabel(slot: any) {
@@ -543,18 +544,19 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
 
       if (isRestSlot(currentSender) || isRestSlot(currentReceiver)) {
         const workSlot = isRestSlot(currentSender) ? currentReceiver : currentSender;
-        if (!senderDuration || !receiverDuration) throw new Error('Missing work duration for rest trade');
 
         if (isRestSlot(currentSender)) {
+          if (!senderDuration) throw new Error('Missing sender work duration for rest trade');
           return {
-            sender: await findOrCreateAdjustedSlot(trx, { ...workSlot, segment: currentSender.segment, employment_type: currentSender.employment_type }, displayDate(currentSender.date), senderDuration, 'start'),
+            sender: await findOrCreateAdjustedSlot(trx, { ...workSlot, segment: currentSender.segment, employment_type: currentSender.employment_type }, displayDate(currentSender.date), senderDuration, positionAnchor(workSlot)),
             receiver: currentSender,
           };
         }
 
+        if (!receiverDuration) throw new Error('Missing receiver work duration for rest trade');
         return {
           sender: currentReceiver,
-          receiver: await findOrCreateAdjustedSlot(trx, { ...workSlot, segment: currentReceiver.segment, employment_type: currentReceiver.employment_type }, displayDate(currentReceiver.date), receiverDuration, 'start'),
+          receiver: await findOrCreateAdjustedSlot(trx, { ...workSlot, segment: currentReceiver.segment, employment_type: currentReceiver.employment_type }, displayDate(currentReceiver.date), receiverDuration, positionAnchor(workSlot)),
         };
       }
 

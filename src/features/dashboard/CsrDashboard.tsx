@@ -393,10 +393,7 @@ const canTradeDisplayedShift = (myShift: Shift, candidate: Shift) => {
   const myRest = Boolean(myShift.isRest);
   const candidateRest = Boolean(candidate.isRest);
   if (myRest && candidateRest) return true;
-  if (myRest !== candidateRest) {
-    const workShift = myRest ? candidate : myShift;
-    return parseShiftWindow(workShift.time)?.start === '09:00';
-  }
+  if (myRest !== candidateRest) return true;
   const myStart = parseShiftWindow(myShift.time)?.start;
   const candidateStart = parseShiftWindow(candidate.time)?.start;
   return Boolean(myStart && candidateStart && myStart !== candidateStart);
