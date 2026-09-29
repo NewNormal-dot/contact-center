@@ -572,14 +572,27 @@ router.patch('/:id/respond', authenticate, authorize(['csr']), async (req: any, 
       return { sender, receiver };
     };
 
+    const pickPreservedDuration = (slot: any, fallbackSlot: any) => {
+      const slotDuration = Number(slot?.duration || 0);
+      const fallbackDuration = Number(fallbackSlot?.duration || 0);
+      if (slot && !isRestSlot(slot) && slotDuration > 0) return slotDuration;
+      if (fallbackSlot && !isRestSlot(fallbackSlot) && fallbackDuration > 0) return fallbackDuration;
+      return slotDuration || fallbackDuration || 0;
+    };
+
     const firstTargets = await createTradeTargets(
       senderSlot,
       receiverSlot,
-      Number(senderNextSlot?.duration || senderSlot.duration),
-      Number(receiverNextSlot?.duration || receiverSlot.duration),
+      pickPreservedDuration(senderNextSlot || senderSlot, senderSlot),
+      pickPreservedDuration(receiverNextSlot || receiverSlot, receiverSlot),
     );
     const secondTargets = senderNextSlot && receiverNextSlot
-      ? await createTradeTargets(senderNextSlot, receiverNextSlot, Number(senderSlot.duration), Number(receiverSlot.duration))
+      ? await createTradeTargets(
+          senderNextSlot,
+          receiverNextSlot,
+          pickPreservedDuration(senderSlot, senderNextSlot),
+          pickPreservedDuration(receiverSlot, receiverNextSlot),
+        )
       : null;
     const senderNewSlot = firstTargets.sender;
     const receiverNewSlot = firstTargets.receiver;
