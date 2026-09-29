@@ -91,8 +91,8 @@ async function createSchema() {
     t.uuid('receiver_id');
     t.uuid('sender_slot_id');
     t.uuid('receiver_slot_id');
-    t.uuid('sender_next_slot_id');
-    t.uuid('receiver_next_slot_id');
+    t.uuid('sender_next_slot_id').references('id').inTable('work_slots');
+    t.uuid('receiver_next_slot_id').references('id').inTable('work_slots');
     t.string('status').defaultTo('pending');
     t.uuid('approved_by');
     t.dateTime('receiver_responded_at');
@@ -601,6 +601,13 @@ describe('POST /api/slots/sync-schedules - reconciliation deletes', () => {
       capacity: 3, booking_is_open: 0, segment: 'Postpaid',
       employment_type: 'Full Time', location: 'Ulaanbaatar', is_rest: 0,
     });
+    await db('trade_requests').insert({
+      id: '66666666-6666-4666-8666-777777777777',
+      sender_id: CSR_ID,
+      receiver_id: ADMIN_ID,
+      sender_next_slot_id: removable,
+      status: 'pending',
+    });
 
     const response = await api('POST', '/api/slots/sync-schedules', adminToken, {
       dateKeys: [date],
@@ -611,6 +618,7 @@ describe('POST /api/slots/sync-schedules - reconciliation deletes', () => {
     expect(response.status).toBe(200);
     expect(response.body.deleted).toBe(1);
     expect(await db('work_slots').where({ id: removable }).first()).toBeUndefined();
+    expect(await db('trade_requests').where({ id: '66666666-6666-4666-8666-777777777777' }).first()).toBeUndefined();
 
     const audit = await db('audit_logs').where({ action: 'SYNC_SCHEDULE_DELETED_SLOTS' }).first();
     expect(audit).toBeTruthy();

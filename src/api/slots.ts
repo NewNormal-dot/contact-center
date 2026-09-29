@@ -529,6 +529,18 @@ router.get('/my-bookings', authenticate, async (req: any, res) => {
 
 const SLOTS_CACHE_TTL_MS = Number(process.env.SLOTS_CACHE_TTL_MS || 5000);
 
+async function deleteTradesReferencingSlots(conn: any, slotIds: string[]) {
+  if (slotIds.length === 0) return 0;
+  return conn('trade_requests')
+    .where(function (this: any) {
+      this.whereIn('sender_slot_id', slotIds)
+        .orWhereIn('receiver_slot_id', slotIds)
+        .orWhereIn('sender_next_slot_id', slotIds)
+        .orWhereIn('receiver_next_slot_id', slotIds);
+    })
+    .delete();
+}
+
 interface SlotsCacheState {
   expiresAt: number;
   version: number;
@@ -1048,10 +1060,7 @@ router.post('/sync-schedules', authenticate, authorize(['admin', 'superadmin']),
             }
           }
 
-          await trx('trade_requests')
-            .whereIn('sender_slot_id', staleIds)
-            .orWhereIn('receiver_slot_id', staleIds)
-            .delete();
+          await deleteTradesReferencingSlots(trx, staleIds);
           await trx('slot_bookings').whereIn('slot_id', staleIds).delete();
           await trx('work_slots').whereIn('id', staleIds).delete();
           deleted += staleRows.length;
@@ -1157,10 +1166,7 @@ router.delete('/:id', authenticate, authorize(['admin', 'superadmin']), async (r
       }
     }
 
-    await db('trade_requests')
-      .where({ sender_slot_id: req.params.id })
-      .orWhere({ receiver_slot_id: req.params.id })
-      .delete();
+    await deleteTradesReferencingSlots(db, [req.params.id]);
     await db('slot_bookings').where({ slot_id: req.params.id }).delete();
     await db('work_slots').where({ id: req.params.id }).delete();
 
