@@ -91,6 +91,8 @@ async function createSchema() {
     t.uuid('receiver_id');
     t.uuid('sender_slot_id');
     t.uuid('receiver_slot_id');
+    t.uuid('sender_next_slot_id');
+    t.uuid('receiver_next_slot_id');
     t.string('status').defaultTo('pending');
     t.uuid('approved_by');
     t.dateTime('receiver_responded_at');
@@ -208,9 +210,11 @@ beforeAll(async () => {
   await seed();
 
   const slotRoutes = (await import('../slots')).default;
+  const tradeRoutes = (await import('../trades')).default;
   const app = express();
   app.use(express.json({ limit: '10mb' }));
   app.use('/api/slots', slotRoutes);
+  app.use('/api/trades', tradeRoutes);
 
   csrToken = jwt.sign({ id: CSR_ID, email: 'csr@test.mn', role: 'csr', name: 'Test CSR' }, process.env.JWT_SECRET!, { expiresIn: '1h' });
   adminToken = jwt.sign({ id: ADMIN_ID, email: 'admin@test.mn', role: 'admin', name: 'Test Admin' }, process.env.JWT_SECRET!, { expiresIn: '1h' });
@@ -341,6 +345,148 @@ describe('POST /api/slots/book - cancel then re-book the same shift', () => {
     const rejected = await api('POST', '/api/slots/book', csrToken, { slotId: full });
     expect(rejected.status).toBe(400);
     expect(rejected.body.error).toContain('Орон тоо');
+  });
+});
+
+describe('POST /api/trades - trade validation rules', () => {
+  it('allows a work/work swap when the start times differ, even if the durations differ', async () => {
+    const receiverId = '33333333-3333-4333-8333-333333333333';
+    const senderSlotId = '11111111-1111-4111-8111-222222222222';
+    const receiverSlotId = '22222222-2222-4222-8222-333333333333';
+
+    await db('users').insert({
+      id: receiverId,
+      email: 'receiver@test.mn',
+      password_hash: 'x',
+      name: 'Receiver CSR',
+      role: 'csr',
+      status: 'active',
+      segment: 'Postpaid',
+      employment_type: 'Full Time',
+      location: 'Ulaanbaatar',
+      code: 'C002',
+    });
+
+    const day = futureDate();
+    await db('work_slots').insert([
+      {
+        id: senderSlotId,
+        date: day,
+        start_time: '09:00:00',
+        end_time: '14:00:00',
+        duration: 5,
+        capacity: 2,
+        booking_is_open: 1,
+        booking_open_at: new Date(Date.now() - 3_600_000),
+        booking_deadline: new Date(Date.now() + 7 * 86_400_000),
+        segment: 'Postpaid',
+        employment_type: 'Full Time',
+        location: 'Ulaanbaatar',
+        is_rest: 0,
+      },
+      {
+        id: receiverSlotId,
+        date: day,
+        start_time: '15:00:00',
+        end_time: '20:00:00',
+        duration: 5,
+        capacity: 2,
+        booking_is_open: 1,
+        booking_open_at: new Date(Date.now() - 3_600_000),
+        booking_deadline: new Date(Date.now() + 7 * 86_400_000),
+        segment: 'Postpaid',
+        employment_type: 'Full Time',
+        location: 'Ulaanbaatar',
+        is_rest: 0,
+      },
+    ]);
+
+    await db('slot_bookings').insert([
+      { id: 'aaaaaaaa-aaaa-4aaa-8aaa-bbbbbbbbbbbb', slot_id: senderSlotId, user_id: CSR_ID, status: 'confirmed', booked_at: new Date() },
+      { id: 'bbbbbbbb-bbbb-4bbb-8bbb-cccccccccccc', slot_id: receiverSlotId, user_id: receiverId, status: 'confirmed', booked_at: new Date() },
+    ]);
+
+    const response = await api('POST', '/api/trades', csrToken, {
+      receiver_id: receiverId,
+      sender_slot_id: senderSlotId,
+      receiver_slot_id: receiverSlotId,
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.id).toBeTruthy();
+  });
+
+  it('allows a rest/rest swap across different dates, while still rejecting same-start work shifts', async () => {
+    const receiverId = '44444444-4444-4444-8444-444444444444';
+    const senderRestId = '33333333-3333-4333-8333-444444444444';
+    const receiverRestId = '55555555-5555-4555-8555-555555555555';
+
+    await db('users').insert({
+      id: receiverId,
+      email: 'receiver2@test.mn',
+      password_hash: 'x',
+      name: 'Receiver CSR 2',
+      role: 'csr',
+      status: 'active',
+      segment: 'Postpaid',
+      employment_type: 'Full Time',
+      location: 'Ulaanbaatar',
+      code: 'C003',
+    });
+
+    const senderDate = futureDate();
+    const receiverDate = futureDate(1);
+    await db('work_slots').insert([
+      {
+        id: senderRestId,
+        date: senderDate,
+        start_time: '00:00:00',
+        end_time: '00:00:00',
+        duration: 0,
+        capacity: 1,
+        booking_is_open: 1,
+        booking_open_at: new Date(Date.now() - 3_600_000),
+        booking_deadline: new Date(Date.now() + 7 * 86_400_000),
+        segment: 'Postpaid',
+        employment_type: 'Full Time',
+        location: 'Ulaanbaatar',
+        is_rest: 1,
+      },
+      {
+        id: receiverRestId,
+        date: receiverDate,
+        start_time: '00:00:00',
+        end_time: '00:00:00',
+        duration: 0,
+        capacity: 1,
+        booking_is_open: 1,
+        booking_open_at: new Date(Date.now() - 3_600_000),
+        booking_deadline: new Date(Date.now() + 7 * 86_400_000),
+        segment: 'Postpaid',
+        employment_type: 'Full Time',
+        location: 'Ulaanbaatar',
+        is_rest: 1,
+      },
+    ]);
+
+    await db('slot_bookings').insert([
+      { id: 'cccccccc-cccc-4ccc-8ccc-dddddddddddd', slot_id: senderRestId, user_id: CSR_ID, status: 'confirmed', booked_at: new Date() },
+      { id: 'dddddddd-dddd-4ddd-8ddd-eeeeeeeeeeee', slot_id: receiverRestId, user_id: receiverId, status: 'confirmed', booked_at: new Date() },
+    ]);
+
+    const allowed = await api('POST', '/api/trades', csrToken, {
+      receiver_id: receiverId,
+      sender_slot_id: senderRestId,
+      receiver_slot_id: receiverRestId,
+    });
+    expect(allowed.status).toBe(201);
+
+    const sameStart = await api('POST', '/api/trades', csrToken, {
+      receiver_id: receiverId,
+      sender_slot_id: senderRestId,
+      receiver_slot_id: senderRestId,
+    });
+    expect(sameStart.status).toBe(400);
   });
 });
 
