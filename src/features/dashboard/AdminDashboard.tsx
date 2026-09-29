@@ -79,6 +79,12 @@ import ForecastDashboard from "./ForecastDashboard";
 import { POLLING_INTERVALS } from "../../config/polling";
 import { rememberVersion, versionHeader, forgetVersion } from "../../lib/collectionVersions";
 import { startPolling } from "../../lib/startPolling";
+import {
+  REST_SHIFT_LABEL,
+  normalizeShiftTemplateValue as normalizeShiftTime,
+  isValidShiftTemplateTime,
+  isValidShiftTemplateValue,
+} from "../../utils/shiftTime";
 
 const ENG_MONTHS = [
   "JAN",
@@ -373,20 +379,6 @@ const DEFAULT_SHIFT_TEMPLATES = [
   { id: "27", time: "20-01", label: "20-01" },
 ];
 
-const REST_SHIFT_LABEL = "Амралт";
-const REST_SHIFT_INPUT = "амралт";
-
-const isRestShiftText = (value: string) =>
-  value.trim().toLowerCase() === REST_SHIFT_INPUT;
-
-const compactShiftTimeInput = (value: string) =>
-  value.trim().replace(/\s+/g, "").replace(/-+/g, "-");
-
-const normalizeShiftTime = (value: string) => {
-  const trimmed = value.trim();
-  if (isRestShiftText(trimmed) || trimmed === REST_SHIFT_LABEL) return REST_SHIFT_LABEL;
-  return compactShiftTimeInput(trimmed);
-};
 // Matches whole-hour shorthand like "09-18" (used by the quick shift-time
 // text input / templates) AND full HH:MM-HH:MM shifts like "10:00-16:00"
 // (used by the shift time-range picker). Previously this only matched the
@@ -397,8 +389,7 @@ const normalizeShiftTime = (value: string) => {
 // counts at all, even though the shift itself was saved and booked/shown to
 // CSRs correctly (the backend's own time parser has always supported
 // minutes - see parseShiftTimeRange in src/api/slots.ts).
-const isValidShiftTime = (value: string) =>
-  /^(?:[01]\d|2[0-3])(?::[0-5]\d)?-(?:[01]\d|2[0-3])(?::[0-5]\d)?$/.test(value);
+const isValidShiftTime = (value: string) => isValidShiftTemplateTime(value);
 
 // Parses a single "HH" or "HH:MM" side of a shift-time string into minutes
 // since midnight. Returns null if the format isn't recognized.
@@ -407,11 +398,6 @@ const parseShiftClockToMinutes = (value: string): number | null => {
   if (!match) return null;
   return Number(match[1]) * 60 + Number(match[2] || "0");
 };
-const isValidShiftTemplateValue = (value: string) => {
-  const normalized = normalizeShiftTime(value);
-  return normalized === REST_SHIFT_LABEL || isValidShiftTime(normalized);
-};
-
 type BookingWaveDraft = {
   id: string;
   name: string;
@@ -630,7 +616,7 @@ const mapDbSlotsToSchedules = (slots: any[] = []) => {
           id: String(slot.id),
           time: isRest
             ? REST_SHIFT_LABEL
-            : `${String(slot.startTime || slot.start_time || '').slice(0, 5)}-${String(slot.endTime || slot.end_time || '').slice(0, 5)}`,
+            : normalizeShiftTime(`${String(slot.startTime || slot.start_time || '').slice(0, 5)}-${String(slot.endTime || slot.end_time || '').slice(0, 5)}`),
           isRest,
           // The backend already computes and stores the authoritative
           // duration (src/api/slots.ts calculateDuration) when the shift was
@@ -8506,7 +8492,7 @@ export default function AdminDashboard() {
                           </div>
                           <div>
                             <p className="text-lg font-black text-white">
-                              {template.time}
+                              {getShiftTimeKey(template.time)}
                             </p>
                             <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
                               {template.time === REST_SHIFT_LABEL ? "Амрах slot тохируулна" : `${getHoursForShift(template.time)} цаг`}

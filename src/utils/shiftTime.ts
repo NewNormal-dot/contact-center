@@ -124,12 +124,28 @@ export const isRestShiftText = (value: string) =>
 export const compactShiftTimeInput = (value: string) =>
   value.trim().replace(/\s+/g, '').replace(/-+/g, '-');
 
+export const normalizeShiftTimeRange = (value: string) => {
+  const match = String(value ?? '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*[-–—]\s*(\d{1,2})(?::(\d{2}))?$/);
+  if (!match) return '';
+
+  const [, rawStartHour, rawStartMinute = '00', rawEndHour, rawEndMinute = '00'] = match;
+  const startHour = Number(rawStartHour);
+  const startMinute = Number(rawStartMinute);
+  const endHour = Number(rawEndHour);
+  const endMinute = Number(rawEndMinute);
+  if (startHour > 23 || startMinute > 59 || endHour > 23 || endMinute > 59) return '';
+
+  const formatTime = (hour: number, minute: number) =>
+    `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  return `${formatTime(startHour, startMinute)}-${formatTime(endHour, endMinute)}`;
+};
+
 /** Trims and canonicalises a template value, mapping any spelling of the
  *  rest day onto the single stored label. */
 export const normalizeShiftTemplateValue = (value: string) => {
   const trimmed = String(value ?? '').trim();
   if (isRestShiftText(trimmed) || trimmed === REST_SHIFT_LABEL) return REST_SHIFT_LABEL;
-  return compactShiftTimeInput(trimmed);
+  return normalizeShiftTimeRange(trimmed) || compactShiftTimeInput(trimmed);
 };
 
 /** "09-18" and "10:00-16:00" are both accepted; so is the rest label. */

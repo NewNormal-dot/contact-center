@@ -49,7 +49,13 @@ async function readVacationQuotas(conn: any = db) {
 
 async function readShiftTemplates(conn: any = db) {
   const rows = await conn('shift_templates').select('id', 'time', 'label').orderBy('display_order', 'asc');
-  return rows.map((r: any) => ({ id: String(r.id), time: r.time, label: r.label }));
+  const seen = new Set<string>();
+  return rows.flatMap((row: any) => {
+    const time = normalizeShiftTemplateValue(String(row.time || row.label || ''));
+    if (!isValidShiftTemplateValue(time) || seen.has(time)) return [];
+    seen.add(time);
+    return [{ id: String(row.id), time, label: time }];
+  });
 }
 
 /** 409 body: the caller needs the current list to show what they would lose. */

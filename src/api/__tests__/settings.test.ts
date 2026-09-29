@@ -218,7 +218,22 @@ describe('shift templates - one list for every admin', () => {
     expect(saved.status).toBe(200);
 
     const read = await api('GET', '/api/settings/shift-templates', csrToken);
-    expect(read.body.map((t: any) => t.time)).toEqual(['14-22', '09-18', REST]);
+    expect(read.body.map((t: any) => t.time)).toEqual(['14:00-22:00', '09:00-18:00', REST]);
+  });
+
+  it('normalizes and deduplicates legacy mixed-format rows when read', async () => {
+    await db('shift_templates').insert([
+      { id: '11111111-1111-4111-8111-111111111111', time: '12-20', label: '12-20', display_order: 0 },
+      { id: '22222222-2222-4222-8222-222222222222', time: '12:00-20:00', label: '12:00-20:00', display_order: 1 },
+      { id: '33333333-3333-4333-8333-333333333333', time: '15-20', label: '15-20', display_order: 2 },
+      { id: '44444444-4444-4444-8444-444444444444', time: '15:00-20:00', label: '15:00-20:00', display_order: 3 },
+    ]);
+
+    const read = await api('GET', '/api/settings/shift-templates', csrToken);
+    expect(read.body.map((template: any) => template.time)).toEqual([
+      '12:00-20:00',
+      '15:00-20:00',
+    ]);
   });
 
   it('always keeps the rest day, even when the client omits it', async () => {
@@ -232,10 +247,10 @@ describe('shift templates - one list for every admin', () => {
 
   it('collapses duplicates instead of hitting the unique constraint', async () => {
     const saved = await api('PUT', '/api/settings/shift-templates', adminToken, {
-      templates: [{ time: '09-18' }, { time: ' 09 - 18 ' }, { time: '09-18' }],
+      templates: [{ time: '09-18' }, { time: ' 09:00 – 18:00 ' }, { time: '09:00-18:00' }],
     });
     expect(saved.status).toBe(200);
-    expect(saved.body.filter((t: any) => t.time === '09-18')).toHaveLength(1);
+    expect(saved.body.filter((t: any) => t.time === '09:00-18:00')).toHaveLength(1);
   });
 
   it('replaces the previous list rather than accumulating', async () => {
@@ -243,7 +258,7 @@ describe('shift templates - one list for every admin', () => {
     await api('PUT', '/api/settings/shift-templates', adminToken, { templates: [{ time: '10-19' }] });
 
     const read = await api('GET', '/api/settings/shift-templates', csrToken);
-    expect(read.body.map((t: any) => t.time).sort()).toEqual([REST, '10-19'].sort());
+    expect(read.body.map((t: any) => t.time).sort()).toEqual([REST, '10:00-19:00'].sort());
   });
 
   it('accepts a shift with minutes, not just whole hours', async () => {
@@ -260,7 +275,7 @@ describe('shift templates - one list for every admin', () => {
     const saved = await api('PUT', '/api/settings/shift-templates', adminToken, {
       templates: [{ time: 'nonsense' }, { time: '25-99' }, { time: '09-18' }],
     });
-    expect(saved.body.map((t: any) => t.time).sort()).toEqual([REST, '09-18'].sort());
+    expect(saved.body.map((t: any) => t.time).sort()).toEqual([REST, '09:00-18:00'].sort());
   });
 
   it('lets a CSR read the list but not change it', async () => {

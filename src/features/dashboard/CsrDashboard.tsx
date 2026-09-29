@@ -13,6 +13,7 @@ import { SHOW_VACATION_FEATURE } from '../../config/features';
 import { validatePasswordStrength } from '../../utils/passwordValidation';
 import { POLLING_INTERVALS } from '../../config/polling';
 import { startPolling } from '../../lib/startPolling';
+import { normalizeShiftTemplateValue } from '../../utils/shiftTime';
 
 const WEEKDAYS = ['Ням', 'Даваа', 'Мягмар', 'Лхагва', 'Пүрэв', 'Баасан', 'Бямба'];
 
@@ -363,17 +364,7 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
 };
 
 const formatShiftTimeForDisplay = (timeStr?: string) => {
-  if (!timeStr) return '';
-  const normalized = timeStr.trim().replace(/\s+/g, '');
-  const fullMatch = normalized.match(/^(\d{1,2}):(\d{2})-+(\d{1,2}):(\d{2})$/);
-  if (fullMatch) {
-    return `${fullMatch[1].padStart(2, '0')}:${fullMatch[2]} - ${fullMatch[3].padStart(2, '0')}:${fullMatch[4]}`;
-  }
-  const compactMatch = normalized.match(/^(\d{1,2})-+(\d{1,2})$/);
-  if (compactMatch) {
-    return `${compactMatch[1].padStart(2, '0')}:00 - ${compactMatch[2].padStart(2, '0')}:00`;
-  }
-  return timeStr;
+  return timeStr ? normalizeShiftTemplateValue(timeStr) : '';
 };
 
 // A shift's time is stored either as "09:00-18:00" or in the compact "9-18"

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { toSqlDate, toSqlTime, toSqlDateTime, displayTime } from '../sqlDate';
 import { sanitizeCell, sanitizeRows, sanitizeAoa } from '../excel';
 import { getClientKey } from '../../middleware/rateLimiter';
+import { normalizeShiftTemplateValue } from '../shiftTime';
 
 // Each block below pins a bug that actually shipped. The comment says which.
 
@@ -44,6 +45,22 @@ describe('sqlDate - Mongolia (UTC+8, no DST) vs a UTC server', () => {
   it('rejects malformed times rather than inventing one', () => {
     expect(toSqlTime('25:00')).toBeNull();
     expect(toSqlTime('not a time')).toBeNull();
+  });
+});
+
+describe('shift time normalization', () => {
+  it.each([
+    ['12-20', '12:00-20:00'],
+    ['15:00-20:00', '15:00-20:00'],
+    [' 9 – 18 ', '09:00-18:00'],
+    ['18-01', '18:00-01:00'],
+  ])('normalizes %s to %s', (input, expected) => {
+    expect(normalizeShiftTemplateValue(input)).toBe(expected);
+  });
+
+  it('keeps minute-level shifts distinct and rejects invalid clock values', () => {
+    expect(normalizeShiftTemplateValue('09:30-18:00')).toBe('09:30-18:00');
+    expect(normalizeShiftTemplateValue('25-99')).toBe('25-99');
   });
 });
 
