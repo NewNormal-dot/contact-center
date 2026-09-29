@@ -380,13 +380,14 @@ router.post('/', authenticate, authorize(['csr']), async (req: any, res) => {
       if (!canTradeSlotPair(senderNextSlot, receiverNextSlot)) return res.status(400).json({ error: 'Хоёр дахь өдрийн ээлжүүд trade хийх боломжгүй' });
     }
 
-    // The UI only ever offers a same-day swap, but the API accepted any two
-    // slot ids. A hand-crafted request could therefore swap across dates and
-    // leave a CSR holding TWO confirmed bookings on one day, defeating the
-    // one-booking-per-day rule the booking endpoint enforces so carefully.
+    // A rest/rest trade is a legitimate cross-date swap: the workers are
+    // exchanging days off, not trying to hold two bookings on the same day.
+    // Work/work exchanges remain same-day only, and the complementary-day
+    // rest/work flow is handled by the second-pair payload below.
     const senderDate = displayDate(senderSlot.date);
     const receiverDate = displayDate(receiverSlot.date);
-    if (senderDate !== receiverDate) {
+    const bothRest = isRestSlot(senderSlot) && isRestSlot(receiverSlot);
+    if (senderDate !== receiverDate && !bothRest) {
       return res.status(400).json({ error: 'Зөвхөн нэг өдрийн ээлжийг хооронд нь солих боломжтой' });
     }
 
