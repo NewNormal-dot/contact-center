@@ -34,9 +34,11 @@ function normalizeLocation(value: unknown) {
   return String(value || 'Ulaanbaatar').trim() === 'Darkhan' ? 'Darkhan' : 'Ulaanbaatar';
 }
 
-function timeToMinutes(value: string) {
-  const [h, m] = String(value || '00:00').split(':').map(Number);
-  return (Number(h) || 0) * 60 + (Number(m) || 0);
+function timeToMinutes(value: string | Date) {
+  if (value instanceof Date) return value.getUTCHours() * 60 + value.getUTCMinutes();
+  const match = String(value || '').trim().match(/(?:^|[T ])(\d{1,2}):(\d{2})/);
+  if (!match) return 0;
+  return Number(match[1]) * 60 + Number(match[2]);
 }
 
 function minutesToSqlTime(value: number) {

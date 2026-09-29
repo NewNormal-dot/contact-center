@@ -372,8 +372,8 @@ describe('POST /api/trades - trade validation rules', () => {
       {
         id: senderSlotId,
         date: day,
-        start_time: '09:00:00',
-        end_time: '14:00:00',
+        start_time: '1900-01-01T09:00:00.000Z',
+        end_time: '1900-01-01T14:00:00.000Z',
         duration: 5,
         capacity: 2,
         booking_is_open: 1,
@@ -387,8 +387,8 @@ describe('POST /api/trades - trade validation rules', () => {
       {
         id: receiverSlotId,
         date: day,
-        start_time: '15:00:00',
-        end_time: '20:00:00',
+        start_time: '1900-01-01T15:00:00.000Z',
+        end_time: '1900-01-01T20:00:00.000Z',
         duration: 5,
         capacity: 2,
         booking_is_open: 1,
@@ -414,6 +414,37 @@ describe('POST /api/trades - trade validation rules', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.id).toBeTruthy();
+
+    const sameStartSlotId = '66666666-6666-4666-8666-666666666666';
+    await db('work_slots').insert({
+      id: sameStartSlotId,
+      date: day,
+      start_time: '1900-01-01T09:00:00.000Z',
+      end_time: '1900-01-01T15:00:00.000Z',
+      duration: 6,
+      capacity: 2,
+      booking_is_open: 1,
+      booking_open_at: new Date(Date.now() - 3_600_000),
+      booking_deadline: new Date(Date.now() + 7 * 86_400_000),
+      segment: 'Postpaid',
+      employment_type: 'Full Time',
+      location: 'Ulaanbaatar',
+      is_rest: 0,
+    });
+    await db('slot_bookings').insert({
+      id: 'eeeeeeee-eeee-4eee-8eee-ffffffffffff',
+      slot_id: sameStartSlotId,
+      user_id: receiverId,
+      status: 'confirmed',
+      booked_at: new Date(),
+    });
+    const rejected = await api('POST', '/api/trades', csrToken, {
+      receiver_id: receiverId,
+      sender_slot_id: senderSlotId,
+      receiver_slot_id: sameStartSlotId,
+    });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toContain('Ижил эхлэх цаг');
   });
 
   it('allows a rest/rest swap across different dates, while still rejecting same-start work shifts', async () => {
