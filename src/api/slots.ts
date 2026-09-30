@@ -69,9 +69,12 @@ function normalizeSegmentForDisplay(value: unknown) {
 }
 
 function segmentsMatch(slotSegment: unknown, userSegment: unknown) {
+  // Segments are fully separate business units - no cross-segment
+  // matching, "VIP" included. A segment named "VIP" grants no special
+  // access to a "Premium" segment's shifts. (Removed 2026-09-29.)
   const slotValue = String(slotSegment || '').trim();
   const userValue = String(userSegment || '').trim();
-  return slotValue === userValue || (userValue === 'VIP' && slotValue === 'Premium');
+  return slotValue === userValue;
 }
 
 function normalizeTime(value: unknown) {

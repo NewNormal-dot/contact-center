@@ -14,15 +14,12 @@ import { validatePasswordStrength } from '../../utils/passwordValidation';
 import { POLLING_INTERVALS } from '../../config/polling';
 import { startPolling } from '../../lib/startPolling';
 import { normalizeShiftTemplateValue } from '../../utils/shiftTime';
-
 const WEEKDAYS = ['Ням', 'Даваа', 'Мягмар', 'Лхагва', 'Пүрэв', 'Баасан', 'Бямба'];
-
 const EMPLOYEE_LOCATIONS = ['Ulaanbaatar', 'Darkhan'] as const;
 const normalizeEmployeeLocation = (value: unknown): typeof EMPLOYEE_LOCATIONS[number] | '' => {
   const normalized = String(value ?? '').trim().toLowerCase();
   return EMPLOYEE_LOCATIONS.find((location) => location.toLowerCase() === normalized) || '';
 };
-
 const MONTHS = [
   '1-р сар', '2-р сар', '3-р сар', '4-р сар', '5-р сар', '6-р сар',
   '7-р сар', '8-р сар', '9-р сар', '10-р сар', '11-р сар', '12-р сар'
@@ -31,76 +28,63 @@ const ENG_MONTHS = [
   'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
   'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'
 ];
-
 function formatMonthEng(monthKey: string) {
   const [year, month] = monthKey.split('-').map(Number);
   return `${ENG_MONTHS[month - 1]} ${year}`;
 }
-
 function formatDateDisplay(date: Date) {
   const month = ENG_MONTHS[date.getMonth()];
   const day = date.getDate();
   const dayName = WEEKDAYS[date.getDay()];
   return `${month} ${day}, ${dayName}`;
 }
-
 function formatDateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
-
 function formatMonthKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
 }
-
 type WeeklyShiftRule = {
   selectedDays: number;
   restDays: number;
   hourCounts: Record<string, number>;
   totalHours: number;
 };
-
 const DEFAULT_WEEKLY_SHIFT_RULE: WeeklyShiftRule = {
   selectedDays: 0,
   restDays: 0,
   hourCounts: {},
   totalHours: 0,
 };
-
 // Key format must match the backend exactly (src/api/rules.ts
 // makeSegmentTypeKey/makeMonthlyFontHourKey): location|segment|employmentType.
 // Location defaults to "Ulaanbaatar" so old data/keys saved before the
 // location dimension existed keep resolving the same way they always did.
 const makeSegmentTypeKey = (segment: string, employmentType: string, location: string = 'Ulaanbaatar') =>
   `${location || 'Ulaanbaatar'}|${segment || 'All'}|${employmentType || 'Full Time'}`;
-
 const makeMonthlyFontHourKey = (monthKey: string, segment: string, employmentType: string, location: string = 'Ulaanbaatar') =>
   `${monthKey}|${makeSegmentTypeKey(segment, employmentType, location)}`;
-
 const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
   const rawHourCounts = value?.hourCounts && typeof value.hourCounts === 'object' ? value.hourCounts : {};
   const hourCounts: Record<string, number> = {};
-
   Object.entries(rawHourCounts).forEach(([hour, count]) => {
     const normalizedHour = String(hour);
     if (!/^(?:[4-9]|rest)$/.test(normalizedHour)) return;
     hourCounts[normalizedHour] = Math.max(0, Math.min(31, Number(count) || 0));
   });
-
   if (value?.sixHourShifts !== undefined && hourCounts['6'] === undefined) {
     hourCounts['6'] = Math.max(0, Math.min(31, Number(value.sixHourShifts) || 0));
   }
   if (value?.sevenHourShifts !== undefined && hourCounts['7'] === undefined) {
     hourCounts['7'] = Math.max(0, Math.min(31, Number(value.sevenHourShifts) || 0));
   }
-
   const restDays = Math.max(0, Math.min(31, Number(value?.restDays ?? hourCounts.rest ?? 0) || 0));
   if (restDays > 0 || hourCounts.rest !== undefined) hourCounts.rest = restDays;
-
   return {
     selectedDays: Math.max(0, Math.min(31, Number(value?.selectedDays ?? 0) || 0)),
     restDays,
@@ -108,7 +92,6 @@ const normalizeWeeklyShiftRule = (value: any): WeeklyShiftRule => {
     totalHours: Math.max(0, Math.min(744, Number(value?.totalHours ?? 0) || 0)),
   };
 };
-
 const getWeekStartDateKey = (dateKey: string) => {
   const [year, month, day] = dateKey.split('-').map(Number);
   const date = new Date(year, month - 1, day);
@@ -117,7 +100,6 @@ const getWeekStartDateKey = (dateKey: string) => {
   date.setDate(date.getDate() + diffToMonday);
   return formatDateKey(date);
 };
-
 const getWeekDateKeys = (dateKey: string) => {
   const [year, month, day] = getWeekStartDateKey(dateKey).split('-').map(Number);
   const start = new Date(year, month - 1, day);
@@ -127,33 +109,27 @@ const getWeekDateKeys = (dateKey: string) => {
     return formatDateKey(current);
   });
 };
-
 // Generate display days: 7 days past, Today, and until the Sunday of the next week
 function generateFullScheduleWindow(referenceDate: Date) {
   const days = [];
   const refStartOfDay = new Date(referenceDate);
   refStartOfDay.setHours(0, 0, 0, 0);
-
   // Calculate days until the Sunday of the next week
   const dayOfWeek = refStartOfDay.getDay(); // 0 (Sun) to 6 (Sat)
   const daysToThisSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
   const totalFutureDays = daysToThisSunday + 7;
-
   // Start from 7 days ago
   for (let i = -7; i <= totalFutureDays; i++) {
     const date = new Date(refStartOfDay);
     date.setDate(refStartOfDay.getDate() + i);
-    
     const isToday = i === 0;
     const isYesterday = i === -1;
     const isTomorrow = i === 1;
     const isPast = i < 0;
-
     days.push({ date, isToday, isTomorrow, isYesterday, isPast });
   }
   return days;
 }
-
 interface Shift {
   id: string;
   time: string;
@@ -170,7 +146,6 @@ interface Shift {
   // cancel or move the shift - only trade it, or request Чөлөө.
   bookingCloseAt?: string;
 }
-
 interface BookingWave {
   id: string;
   name: string;
@@ -179,7 +154,6 @@ interface BookingWave {
   bookingOpenAt?: string;
   bookingCloseAt?: string;
 }
-
 interface DayData {
   shifts: Shift[];
   holidayName?: string;
@@ -187,8 +161,6 @@ interface DayData {
   bookingOpenAt?: string;
   bookingCloseAt?: string;
 }
-
-
 const getBookingWavesForShift = (
   shift: Shift | any,
   dayBookingOpen = false,
@@ -206,9 +178,7 @@ const getBookingWavesForShift = (
       bookingCloseAt: wave.bookingCloseAt || '',
     }))
     .filter((wave: BookingWave) => wave.slotLimit > 0);
-
   if (normalized.length > 0) return normalized;
-
   return [{
     id: 'default',
     name: 'Нийт захиалах эрх',
@@ -218,20 +188,17 @@ const getBookingWavesForShift = (
     bookingCloseAt: dayBookingCloseAt || '',
   }];
 };
-
 const getTimestamp = (value?: string) => {
   if (!value) return NaN;
   const time = new Date(value).getTime();
   return Number.isNaN(time) ? NaN : time;
 };
-
 const formatCountdown = (milliseconds: number) => {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
   const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-
   const parts: string[] = [];
   if (days > 0) parts.push(`${days} өдөр`);
   if (hours > 0) parts.push(`${hours} цаг`);
@@ -239,19 +206,15 @@ const formatCountdown = (milliseconds: number) => {
   parts.push(`${seconds} секунд`);
   return parts.join(' ');
 };
-
 const getWaveAccessState = (wave: BookingWave, now = Date.now()) => {
   if (!wave.bookingOpen) {
     return { state: 'closed' as const, label: 'Хаалттай', countdown: '' };
   }
-
   const openAt = getTimestamp(wave.bookingOpenAt);
   const closeAt = getTimestamp(wave.bookingCloseAt);
-
   if (!Number.isNaN(closeAt) && closeAt <= now) {
     return { state: 'expired' as const, label: 'Хаагдсан', countdown: '' };
   }
-
   if (!Number.isNaN(openAt) && openAt > now) {
     const countdown = formatCountdown(openAt - now);
     return {
@@ -261,7 +224,6 @@ const getWaveAccessState = (wave: BookingWave, now = Date.now()) => {
       targetTime: openAt,
     };
   }
-
   if (!Number.isNaN(closeAt)) {
     const countdown = formatCountdown(closeAt - now);
     return {
@@ -271,25 +233,20 @@ const getWaveAccessState = (wave: BookingWave, now = Date.now()) => {
       targetTime: closeAt,
     };
   }
-
   return { state: 'open' as const, label: 'Нээлттэй', countdown: '' };
 };
-
 const isWaveCurrentlyOpen = (wave: BookingWave, now = Date.now()) => {
   if (!wave.bookingOpen) return false;
   return getWaveAccessState(wave, now).state === 'open';
 };
-
 const getWaveBookedCount = (shift: Shift | any, waveId: string) => {
   const bookedBy = Array.isArray(shift?.bookedBy) ? shift.bookedBy : [];
   if (waveId === 'default') return bookedBy.length;
   return bookedBy.filter((booking: any) => booking.bookingWaveId === waveId).length;
 };
-
 const getOpenBookingWaves = (shift: Shift | any, dayData?: DayData, now = Date.now()) =>
   getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '', dayData?.bookingCloseAt || '')
     .filter(wave => isWaveCurrentlyOpen(wave, now) && getWaveBookedCount(shift, wave.id) < wave.slotLimit);
-
 const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
   const shifts = dayData?.shifts || [];
   let scheduledCountdown = '';
@@ -299,7 +256,6 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
   let hasOpenWave = false;
   let hasBookableWave = false;
   let hasExpiredWave = false;
-
   shifts.forEach((shift: Shift) => {
     getBookingWavesForShift(shift, !!dayData?.bookingOpen, dayData?.bookingOpenAt || '', dayData?.bookingCloseAt || '')
       .forEach((wave) => {
@@ -315,7 +271,6 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
           }
           return;
         }
-
         if (access.state === 'scheduled' && access.targetTime && access.targetTime < scheduledTarget) {
           scheduledTarget = access.targetTime;
           scheduledCountdown = access.countdown;
@@ -325,7 +280,6 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
         }
       });
   });
-
   if (hasBookableWave) {
     return {
       state: 'open' as const,
@@ -335,7 +289,6 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
       closeTarget,
     };
   }
-
   if (hasOpenWave) {
     return {
       state: 'full' as const,
@@ -345,7 +298,6 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
       closeTarget,
     };
   }
-
   if (scheduledCountdown) {
     return {
       state: 'scheduled' as const,
@@ -355,18 +307,14 @@ const getDayBookingAccess = (dayData?: DayData, now = Date.now()) => {
       closeTarget: Number.POSITIVE_INFINITY,
     };
   }
-
   if (hasExpiredWave) {
     return { state: 'expired' as const, canBook: false, label: 'Хаагдсан', countdown: '', closeTarget: Number.POSITIVE_INFINITY };
   }
-
   return { state: 'closed' as const, canBook: false, label: 'Хаалттай', countdown: '', closeTarget: Number.POSITIVE_INFINITY };
 };
-
 const formatShiftTimeForDisplay = (timeStr?: string) => {
   return timeStr ? normalizeShiftTemplateValue(timeStr) : '';
 };
-
 // A shift's time is stored either as "09:00-18:00" or in the compact "9-18"
 // form. Leave is now requested inside a shift's own hours, so both forms
 // have to resolve to a real HH:MM window.
@@ -379,17 +327,23 @@ const parseShiftWindow = (timeStr?: string): { start: string; end: string } | nu
   if (compact) return { start: pad(compact[1]), end: pad(compact[2]) };
   return null;
 };
-
 const canTradeDisplayedShift = (myShift: Shift, candidate: Shift) => {
   const myRest = Boolean(myShift.isRest);
   const candidateRest = Boolean(candidate.isRest);
-  if (myRest && candidateRest) return true;
+  // Two rest days swapped for each other changes nothing - not a valid trade.
+  if (myRest && candidateRest) return false;
+  // Exactly one side rest: eligible in principle - the required
+  // complementary (reversed) second day is resolved by the caller via
+  // GET /trades/candidate-second-days before the request is sent.
   if (myRest !== candidateRest) return true;
-  const myStart = parseShiftWindow(myShift.time)?.start;
-  const candidateStart = parseShiftWindow(candidate.time)?.start;
-  return Boolean(myStart && candidateStart && myStart !== candidateStart);
+  // Both work shifts: blocked if they share a start OR an end time, since
+  // either makes the duration-preserving swap a no-op for one side (see
+  // computeWorkSwap in src/api/trades.ts).
+  const myWindow = parseShiftWindow(myShift.time);
+  const candidateWindow = parseShiftWindow(candidate.time);
+  if (!myWindow || !candidateWindow) return false;
+  return myWindow.start !== candidateWindow.start && myWindow.end !== candidateWindow.end;
 };
-
 // "Яаралтай чөлөө" is about WHEN the request was filed, not how much of the
 // shift it covers. A request raised less than a day before the shift starts
 // (the rules allow no later than 8 hours before) is the urgent one; anything
@@ -401,51 +355,41 @@ const isUrgentLeave = (request: { date?: string; startTime?: string; createdAt?:
   if (!Number.isFinite(shiftStart) || !Number.isFinite(filedAt)) return false;
   return (shiftStart - filedAt) / (1000 * 60 * 60) < 24;
 };
-
 const getShiftEndTime = (timeStr: string) => {
   const regularMatch = timeStr.match(/\d{1,2}:\d{2}\s*-\s*(\d{1,2}):(\d{2})/);
   if (regularMatch) {
     return { hours: Number(regularMatch[1]), minutes: Number(regularMatch[2]) };
   }
-
   const compactMatch = formatShiftTimeForDisplay(timeStr).match(/^\d{2}-(\d{2})$/);
   if (compactMatch) {
     return { hours: Number(compactMatch[1]), minutes: 0 };
   }
-
   return null;
 };
-
 // Function to generate mock schedule based on a reference date
 function generateInitialSchedule(referenceDate: Date) {
   const schedule: Record<string, DayData> = {};
   const refStart = new Date(referenceDate);
   refStart.setHours(0, 0, 0, 0);
-
   // Range: 7 days past to end of next week
   const dayOfWeek = refStart.getDay();
   const daysToThisSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
   const totalFutureDays = daysToThisSunday + 7;
-  
   const start = new Date(refStart);
   start.setDate(start.getDate() - 7);
-  
   const end = new Date(refStart);
   end.setDate(end.getDate() + totalFutureDays);
-  
   const current = new Date(start);
   while (current <= end) {
     const key = formatDateKey(current);
     const isPast = current.getTime() < refStart.getTime();
     const isToday = current.getTime() === refStart.getTime();
     const isTomorrow = current.getTime() === refStart.getTime() + (24 * 60 * 60 * 1000);
-    
-    // Simulate admin uploads: 
+    // Simulate admin uploads:
     // Past, Today, and Tomorrow always have data.
     // Future (beyond tomorrow) has data for the next 2 days only.
     const diffDays = Math.floor((current.getTime() - refStart.getTime()) / (1000 * 60 * 60 * 24));
     const hasSupervisorData = isPast || isToday || isTomorrow || (diffDays > 1 && diffDays <= 3);
-    
     if (hasSupervisorData) {
       // Deterministic booking for mock:
       // Past: 70% chance
@@ -454,32 +398,30 @@ function generateInitialSchedule(referenceDate: Date) {
       let isBookedByMe = false;
       if (isPast) isBookedByMe = (current.getDate() % 3) !== 0;
       if (isToday) isBookedByMe = true;
-
       const mockEmployees = [
         { userId: '2', userName: 'Дорж' },
         { userId: '3', userName: 'Болд' },
         { userId: '4', userName: 'Сараа' },
         { userId: '5', userName: 'Гэрэл' }
       ];
-
       schedule[key] = {
         shifts: [
-          { 
-            id: `s-${key}-1`, 
-            time: '09:00 - 15:00', 
-            totalSlots: 5, 
-            bookedSlots: isBookedByMe ? 3 : 2, 
+          {
+            id: `s-${key}-1`,
+            time: '09:00 - 15:00',
+            totalSlots: 5,
+            bookedSlots: isBookedByMe ? 3 : 2,
             isBookedByMe,
-            bookedBy: isBookedByMe 
+            bookedBy: isBookedByMe
               ? [{ userId: '1', userName: 'Бат-Эрдэнэ' }, ...mockEmployees.slice(0, 2)]
               : mockEmployees.slice(0, 2),
             segment: 'Postpaid'
           },
-          { 
-            id: `s-${key}-2`, 
-            time: '15:00 - 21:00', 
-            totalSlots: 5, 
-            bookedSlots: 1, 
+          {
+            id: `s-${key}-2`,
+            time: '15:00 - 21:00',
+            totalSlots: 5,
+            bookedSlots: 1,
             isBookedByMe: false,
             bookedBy: mockEmployees.slice(2, 3),
             segment: 'Prepaid'
@@ -490,13 +432,10 @@ function generateInitialSchedule(referenceDate: Date) {
     } else {
       schedule[key] = { shifts: [] };
     }
-    
     current.setDate(current.getDate() + 1);
   }
-  
   return schedule;
 }
-
 interface Notification {
   id: number;
   title: string;
@@ -504,16 +443,14 @@ interface Notification {
   time: string;
   unread: boolean;
 }
-
 function formatDateHeader(date: Date) {
   const month = ENG_MONTHS[date.getMonth()];
   const day = date.getDate();
   const dayName = WEEKDAYS[date.getDay()];
   return `${month} ${day}, ${dayName}`;
 }
-
-const DayRow = React.memo(({ 
-  date, isToday, isTomorrow, isYesterday, isPast, 
+const DayRow = React.memo(({
+  date, isToday, isTomorrow, isYesterday, isPast,
   dayData, csrProfile,
   onBookShift, onTradeShift, nowTick,
   onCancelShift,
@@ -532,6 +469,22 @@ const DayRow = React.memo(({
   // other open/bookable slots at all, isBookingOpen is already false, which
   // also correctly hides the Edit option in that case.
   const canEditBooking = isBookingOpen && (bookingAccess.closeTarget - nowTick > 10 * 60 * 1000);
+  // Trade only becomes available once booking has closed for THIS shift and
+  // at least 3 hours remain before it starts - mirrors
+  // MIN_HOURS_BEFORE_TRADE_ACTION in src/api/trades.ts, which is what
+  // actually enforces it server-side; this only controls whether the
+  // button appears. Rest days are gated only by not being in the past.
+  const myShiftWaves = myBookedShift
+    ? getBookingWavesForShift(myBookedShift, !!dayData.bookingOpen, dayData.bookingOpenAt || '', dayData.bookingCloseAt || '')
+    : [];
+  const myShiftBookingStillOpen = myShiftWaves.some((wave: any) => isWaveCurrentlyOpen(wave, nowTick));
+  const myShiftWindow = myBookedShift && !myBookedShift.isRest ? parseShiftWindow(myBookedShift.time) : null;
+  const myShiftHoursUntilStart = myShiftWindow
+    ? (new Date(`${dateKey}T${myShiftWindow.start}:00+08:00`).getTime() - nowTick) / (1000 * 60 * 60)
+    : Infinity;
+  const canTradeToday = Boolean(myBookedShift) && !isPast && (
+    myBookedShift.isRest ? true : (!myShiftBookingStillOpen && myShiftHoursUntilStart >= 3)
+  );
   const bookingStatusText = bookingAccess.state === 'scheduled'
     ? `Захиалга ${bookingAccess.label.toLowerCase()}`
     : bookingAccess.state === 'open' || bookingAccess.state === 'full'
@@ -546,21 +499,20 @@ const DayRow = React.memo(({
       : bookingAccess.state === 'full'
         ? 'Дүүрсэн'
         : 'Захиалах';
-
   return (
-    <div 
+    <div
       id={isYesterday ? 'yesterday-row' : undefined}
       className={`relative rounded-3xl transition-all duration-500 ${
-        isToday 
-          ? 'rgb-border p-[1px] shadow-[0_0_30px_rgba(59,130,246,0.2)]' 
+        isToday
+          ? 'rgb-border p-[1px] shadow-[0_0_30px_rgba(59,130,246,0.2)]'
           : isTomorrow || isYesterday
             ? 'p-[1px] scale-[1.005] z-10'
             : ''
       }`}
     >
       <div className={`relative rounded-3xl p-3 md:p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 ${
-        isPast 
-          ? 'bg-gray-900/20 border border-gray-800/50 opacity-40' 
+        isPast
+          ? 'bg-gray-900/20 border border-gray-800/50 opacity-40'
           : isToday
             ? 'bg-gray-900/95 backdrop-blur-xl border border-blue-500/30 shadow-[0_0_20px_rgba(59,130,246,0.1)]'
             : isTomorrow
@@ -573,14 +525,14 @@ const DayRow = React.memo(({
       }`}>
         <div className="flex items-center gap-4 md:gap-8">
           <div className={`w-16 h-16 md:w-24 md:h-24 flex-shrink-0 rounded-3xl flex flex-col items-center justify-center border transition-all duration-500 shadow-2xl ${
-            isToday 
-              ? 'bg-gradient-to-br from-blue-500 to-blue-700 border-blue-400 shadow-blue-900/40 scale-105' 
+            isToday
+              ? 'bg-gradient-to-br from-blue-500 to-blue-700 border-blue-400 shadow-blue-900/40 scale-105'
               : isTomorrow
                 ? 'bg-gradient-to-br from-purple-500/20 to-purple-600/5 border-purple-500/30 text-purple-500 shadow-purple-900/10'
                 : isYesterday
                   ? 'bg-gradient-to-br from-orange-500/20 to-orange-600/5 border-orange-500/30 text-orange-500 shadow-orange-900/10'
-                  : shouldBeRed 
-                    ? 'bg-gradient-to-br from-red-500/20 to-red-600/5 border-red-500/30 text-red-500 shadow-red-900/10' 
+                  : shouldBeRed
+                    ? 'bg-gradient-to-br from-red-500/20 to-red-600/5 border-red-500/30 text-red-500 shadow-red-900/10'
                     : 'bg-gradient-to-br from-gray-800 to-gray-900 border-gray-700 text-gray-400 shadow-black/20'
           }`}>
             <span className={`text-[8px] md:text-[12px] font-black uppercase tracking-[0.2em] opacity-80 mb-0.5 md:mb-1 ${isToday ? 'text-blue-100' : ''}`}>
@@ -593,7 +545,6 @@ const DayRow = React.memo(({
               {WEEKDAYS[date.getDay()]}
             </span>
           </div>
-
           <div>
             <div className="flex items-center gap-3">
               {(isToday || isTomorrow || isYesterday) && (
@@ -617,13 +568,13 @@ const DayRow = React.memo(({
               )}
             </div>
             <p className="text-gray-500 text-sm font-medium mt-1 break-words max-w-full">
-              {isPast 
-                ? 'Ажиллаж дууссан' 
-                : !hasData 
-                  ? 'Хуваарь ороогүй байна' 
+              {isPast
+                ? 'Ажиллаж дууссан'
+                : !hasData
+                  ? 'Хуваарь ороогүй байна'
                   : !myBookedShift
                     ? bookingStatusText
-                  : isToday 
+                  : isToday
                     ? (() => {
                         const endTime = getShiftEndTime(myBookedShift.time);
                         if (!endTime) return 'Батлагдсан хуваарь';
@@ -636,7 +587,6 @@ const DayRow = React.memo(({
             </p>
           </div>
         </div>
-
         <div className="flex flex-wrap items-center gap-3">
           {hasData ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -688,7 +638,7 @@ const DayRow = React.memo(({
                         </div>
                       </div>
                       {canEditBooking && (
-                        <button 
+                        <button
                           onClick={() => onBookShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
                         >
@@ -705,8 +655,8 @@ const DayRow = React.memo(({
                           Цуцлах
                         </button>
                       )}
-                      {!isPast && (
-                        <button 
+                      {canTradeToday && (
+                        <button
                           onClick={() => onTradeShift(dateKey)}
                           className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
                         >
@@ -741,7 +691,7 @@ const DayRow = React.memo(({
             </div>
           ) : (
             !isPast && (
-              <button 
+              <button
                 disabled
                 className="px-6 py-2.5 rounded-xl bg-gray-800/50 text-gray-600 font-bold border border-gray-800 flex items-center gap-2 cursor-not-allowed opacity-50"
               >
@@ -755,7 +705,6 @@ const DayRow = React.memo(({
     </div>
   );
 });
-
 export default function CsrDashboard() {
   const { profile: csrProfile } = useAuth();
   const [activeTab, setActiveTab] = useState('schedule');
@@ -774,13 +723,11 @@ export default function CsrDashboard() {
   const [filterStep, setFilterStep] = useState<'year' | 'month'>('year');
   const [tempYear, setTempYear] = useState(new Date().getFullYear());
   const [nowTick, setNowTick] = useState(Date.now());
-  
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [tradeRequests, setTradeRequests] = useState<TradeRequest[]>([]);
   const [hourlyLeaveRequests, setHourlyLeaveRequests] = useState<HourlyLeaveRequest[]>([]);
   const [vacationRequests, setVacationRequests] = useState<VacationRequest[]>([]);
   const [vacationQuotas, setVacationQuotas] = useState<VacationQuota[]>([]);
-
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
@@ -793,11 +740,9 @@ export default function CsrDashboard() {
   const [monthlyFontHourRules, setMonthlyFontHourRules] = useState<Record<string, number>>({});
   const [weeklyShiftRules, setWeeklyShiftRules] = useState<Record<string, WeeklyShiftRule>>({});
   const unreadTrainingCount = trainingMaterials.filter(m => !m.seenBy?.some(s => s.userId === csrProfile?.id)).length;
-
   useEffect(() => {
     setIsStatsExpanded(false);
   }, [activeTab, selectedMonth]);
-
   useEffect(() => {
     if (activeTab === 'schedule') {
       setMonthNavActive(false);
@@ -805,10 +750,8 @@ export default function CsrDashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
-
   const calculateHours = (timeStr: string) => {
     if (!timeStr || timeStr === 'Амралт') return 0;
-    
     // Regular format 09:00 - 18:00
     if (timeStr.includes(' - ')) {
       const [start, end] = timeStr.split(' - ');
@@ -818,7 +761,6 @@ export default function CsrDashboard() {
       if (diff < 0) diff += 24 * 60;
       return diff / 60;
     }
-
     // Custom compact format like 09-17 or 09-01
     const parts = timeStr.split(/[-:]+/).filter(Boolean);
     if (parts.length >= 2) {
@@ -826,15 +768,12 @@ export default function CsrDashboard() {
       const sM = parts.length > 2 ? parseInt(parts[1]) : 0;
       const eH = parts.length > 2 ? parseInt(parts[parts.length - 2]) : parseInt(parts[parts.length - 1]);
       const eM = parts.length > 2 ? parseInt(parts[parts.length - 1]) : 0;
-
       let diff = (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0));
       if (diff < 0) diff += 24 * 60;
       return diff / 60;
     }
-
     return 0;
   };
-
   const currentMonthKey = selectedMonth;
   const csrSegment = csrProfile?.lineType || '';
   const csrEmploymentType = csrProfile?.employmentType || 'Full Time';
@@ -846,24 +785,20 @@ export default function CsrDashboard() {
   const activeWeeklyRule = normalizeWeeklyShiftRule(
     weeklyShiftRules[makeSegmentTypeKey(csrSegment, csrEmploymentType, csrLocation)],
   );
-
   const holidayDates = React.useMemo(() => {
     return new Set((holidays as any[]).filter(h => h?.date).map(h => h.date));
   }, [holidays]);
-
   const { monthlyBookedHours, regularWorkedHours, holidayWorkedHours, totalAvailableHours } = React.useMemo(() => {
     let monthlyBookedHours = 0;
     let regularWorkedHours = 0;
     let holidayWorkedHours = 0;
     let totalAvailableHours = 0;
-    
     Object.entries(schedule).forEach(([dateKey, dayData]: [string, DayData]) => {
       if (dateKey.startsWith(currentMonthKey)) {
         const now = new Date();
         now.setHours(0, 0, 0, 0);
         const isPastDate = new Date(dateKey) < now;
         const isHoliday = holidayDates.has(dateKey);
-        
         dayData.shifts.forEach(shift => {
           const hours = calculateHours(shift.time);
           totalAvailableHours += isHoliday ? 0 : hours;
@@ -882,7 +817,6 @@ export default function CsrDashboard() {
     });
     return { monthlyBookedHours, regularWorkedHours, holidayWorkedHours, totalAvailableHours };
   }, [schedule, currentMonthKey, csrProfile?.id, holidayDates]);
-
   const { sickHours, leaveHours } = React.useMemo(() => {
     const approvedVacations = vacationRequests.filter(r => r.month === currentMonthKey && r.status === 'approved');
     const sickHours = approvedVacations.filter(r => r.type === 'sick').reduce((acc, r) => {
@@ -891,7 +825,6 @@ export default function CsrDashboard() {
       const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
       return acc + (days * 8);
     }, 0);
-    
     const leaveHours = approvedVacations.filter(r => r.type === 'leave' || r.type === 'vacation').reduce((acc, r) => {
       const start = new Date(r.startDate);
       const end = new Date(r.endDate);
@@ -900,22 +833,18 @@ export default function CsrDashboard() {
     }, 0);
     return { sickHours, leaveHours };
   }, [vacationRequests, currentMonthKey]);
-
   const totalExecutionHours = regularWorkedHours + sickHours + leaveHours;
   const effectiveMonthlyFontTime = Math.max(monthlyFontTime, monthlyBookedHours);
   const progressBaseHours = Math.max(effectiveMonthlyFontTime, totalExecutionHours, 1);
   const executionPointerPercent = Math.min((totalExecutionHours / progressBaseHours) * 100, 100);
   const getProgressWidth = (hours: number) => `${Math.max(0, Math.min((hours / progressBaseHours) * 100, 100))}%`;
   const overtimeHours = Math.max(0, totalExecutionHours - effectiveMonthlyFontTime);
-
   const hasMonthData = React.useMemo(() => {
     return Object.keys(schedule).some(key => key.startsWith(currentMonthKey) && schedule[key].shifts.length > 0);
   }, [schedule, currentMonthKey]);
-
   const displayDays = React.useMemo(() => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-
     const days: Array<{ date: Date; isToday: boolean; isPast: boolean; isTomorrow: boolean; isYesterday: boolean }> = [];
     const buildDay = (date: Date) => {
       const isToday = date.toDateString() === now.toDateString();
@@ -924,7 +853,6 @@ export default function CsrDashboard() {
       const isYesterday = new Date(date.getTime() + 24 * 60 * 60 * 1000).toDateString() === now.toDateString();
       return { date, isToday, isPast, isTomorrow, isYesterday };
     };
-
     if (!monthNavActive) {
       // Default rolling view: 10 days back through 10 days forward from
       // today, regardless of calendar month boundaries.
@@ -939,7 +867,6 @@ export default function CsrDashboard() {
       }
       return days;
     }
-
     // Explicit month navigation (prev/next arrows): show the full calendar
     // month - a full history for past/current months, a full bookable
     // calendar for future months.
@@ -953,8 +880,6 @@ export default function CsrDashboard() {
     }
     return days;
   }, [selectedMonth, monthNavActive]);
-
-
   const mapNotificationForUi = (raw: any): AppNotification => {
     const readAt = raw.readAt || raw.read_at;
     return {
@@ -972,10 +897,8 @@ export default function CsrDashboard() {
         : [],
     } as AppNotification;
   };
-
   const fetchNotifications = async () => {
     if (!csrProfile) return [];
-
     try {
       const response = await apiClient.get('/broadcasts/notifications');
       const data = (response.data || []).map(mapNotificationForUi);
@@ -990,7 +913,6 @@ export default function CsrDashboard() {
       return filtered;
     }
   };
-
   const mapVacationRequestForUi = (raw: any): VacationRequest => {
     const startDate = raw.startDate || raw.start_date || '';
     const endDate = raw.endDate || raw.end_date || startDate;
@@ -1009,7 +931,6 @@ export default function CsrDashboard() {
       approvedBy: raw.approvedBy || raw.approved_by,
     };
   };
-
   // The per-month vacation cap, set by an admin. Read-only here.
   const fetchVacationQuotas = async () => {
     try {
@@ -1029,7 +950,6 @@ export default function CsrDashboard() {
       // back to the default for any month with no quota.
     }
   };
-
   // A month with no configured quota falls back to the same default the
   // admin UI shows for an untouched month, so the two sides agree.
   const DEFAULT_VACATION_LIMIT = 5;
@@ -1041,10 +961,8 @@ export default function CsrDashboard() {
     },
     [vacationQuotas],
   );
-
   const fetchVacationRequests = async () => {
     if (!csrProfile) return [];
-
     try {
       const response = await apiClient.get('/requests/vacation');
       const data = (response.data || []).map(mapVacationRequestForUi);
@@ -1058,25 +976,15 @@ export default function CsrDashboard() {
       return local;
     }
   };
-
-
-
-
-
   const mapSlotsToSchedule = React.useCallback((slots: any[]): Record<string, DayData> => {
     const next: Record<string, DayData> = {};
     (slots || []).forEach((slot: any) => {
       const dateKey = String(slot.date || '').slice(0, 10);
       if (!dateKey) return;
-      // No "All" wildcard match here - segments are fully separate business
-      // units (see src/api/slots.ts, which stopped creating/accepting "All"
-      // as a segment for the same reason). A leftover/orphan slot with
-      // segment "All" from before that rule existed would otherwise be
-      // invisible in the admin's segment-filtered schedule view (since "All"
-      // never matches a specific segment there) while still being bookable
-      // by every CSR of every segment here - exactly the kind of mismatch
-      // that must not happen.
-      const matchesSegment = (slot.segment === csrProfile.lineType) || (csrProfile.lineType === 'VIP' && slot.segment === 'Premium');
+      // Segments are fully separate business units - no cross-segment
+      // matching, "VIP" included. A segment named "VIP" grants no special
+      // access to a "Premium" segment's shifts. (Removed 2026-09-29.)
+      const matchesSegment = slot.segment === csrProfile.lineType;
       const matchesEmployment = (slot.employmentType || slot.employment_type || 'Full Time') === csrProfile.employmentType;
       const slotLocation = normalizeEmployeeLocation(slot.location) || 'Ulaanbaatar';
       const csrLocationForMatch = normalizeEmployeeLocation(csrProfile.location) || 'Ulaanbaatar';
@@ -1141,7 +1049,6 @@ export default function CsrDashboard() {
         shifts: [...(next[dateKey]?.shifts || []), shift],
       };
     });
-
     // Stamp holiday names onto the schedule too (including holiday-only
     // dates that have no shifts at all), so the whole day view - shifts AND
     // holidays - comes from the server (DB) and stays identical on every
@@ -1156,10 +1063,8 @@ export default function CsrDashboard() {
         holidayName: holiday.name,
       };
     });
-
     return next;
   }, [csrProfile, holidays]);
-
   const fetchDbSchedule = React.useCallback(async () => {
     try {
       const response = await apiClient.get('/slots');
@@ -1175,7 +1080,6 @@ export default function CsrDashboard() {
     }
     return null;
   }, [mapSlotsToSchedule]);
-
   const fetchTradeRequests = React.useCallback(async () => {
     try {
       const response = await apiClient.get('/trades');
@@ -1200,7 +1104,6 @@ export default function CsrDashboard() {
       return [];
     }
   }, []);
-
   const fetchShiftRules = async () => {
     try {
       const response = await apiClient.get('/rules');
@@ -1210,9 +1113,7 @@ export default function CsrDashboard() {
       console.error('Error fetching shift rules:', error);
     }
   };
-
   const mapHolidayForUi = (raw: any) => ({ date: raw.date, name: raw.name });
-
   const fetchHolidays = async () => {
     try {
       const response = await apiClient.get('/settings/holidays');
@@ -1224,7 +1125,6 @@ export default function CsrDashboard() {
       return [];
     }
   };
-
   const mapHourlyLeaveForUi = (raw: any): HourlyLeaveRequest => ({
     id: String(raw.id),
     csrId: raw.userId || raw.user_id || csrProfile?.id || '',
@@ -1241,7 +1141,6 @@ export default function CsrDashboard() {
     approvedByName: raw.approvedByName || raw.approver_name || undefined,
     slotBookingId: raw.slotBookingId || raw.slot_booking_id || undefined,
   });
-
   const mapTrainingForUi = (raw: any): TrainingMaterial => ({
     id: String(raw.id),
     title: raw.title || '',
@@ -1256,7 +1155,6 @@ export default function CsrDashboard() {
       ? [{ userId: csrProfile.id, userName: csrProfile.name, seenAt: raw.completedAt || raw.completed_at }]
       : [],
   } as TrainingMaterial);
-
   // Training materials used to be read from localStorage, which is
   // per-browser and was only ever seeded at login - and nothing wrote
   // materials to the server in the first place, so the list was always
@@ -1273,7 +1171,6 @@ export default function CsrDashboard() {
       return [];
     }
   };
-
   const fetchHourlyLeaveRequests = async () => {
     if (!csrProfile) return [];
     try {
@@ -1286,11 +1183,9 @@ export default function CsrDashboard() {
       return [];
     }
   };
-
   // Real-time listeners (Mocked with Polling)
   useEffect(() => {
     if (!csrProfile) return;
-
     // NOTE: schedule, tradeRequests, vacationRequests, hourlyLeaveRequests
     // and holidays are now fetched EXCLUSIVELY from the shared Azure SQL DB
     // (fetchDbSchedule / fetchTradeRequests / fetchVacationRequests /
@@ -1346,7 +1241,6 @@ export default function CsrDashboard() {
     const stopHolidays = startPolling(fetchHolidays, POLLING_INTERVALS.HOLIDAYS);
     const stopVacationQuotas = startPolling(fetchVacationQuotas, POLLING_INTERVALS.SHARED_SETTINGS);
     const stopHourlyLeave = startPolling(fetchHourlyLeaveRequests, POLLING_INTERVALS.REQUESTS);
-
     return () => {
       stopSchedule();
       stopNotifications();
@@ -1358,45 +1252,40 @@ export default function CsrDashboard() {
       stopHourlyLeave();
     };
   }, [csrProfile]);
-
   const [bookingModal, setBookingModal] = useState<{
     isOpen: boolean;
     dateKey: string;
   } | null>(null);
-
   const [tradingModal, setTradingModal] = useState<{
     isOpen: boolean;
     dateKey: string;
-    step: 'times' | 'employees';
+    step: 'times' | 'employees' | 'secondDay';
     shift?: Shift;
+    selectedReceiver?: { userId: string; userName: string };
+    candidates?: Array<{ date: string; senderNextSlotId: string; receiverNextSlotId: string }>;
+    candidateError?: string;
+    isLoadingCandidates?: boolean;
   } | null>(null);
-
   const [incomingTradeModal, setIncomingTradeModal] = useState<TradeRequest | null>(null);
-
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ old: '', new: '', confirm: '' });
   const [showSuccess, setShowSuccess] = useState(false);
-
   const triggerSuccess = () => {
     setShowSuccess(true);
     setTimeout(() => setShowSuccess(false), 3000);
   };
-
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csrProfile) return;
-
     if (passwordForm.new !== passwordForm.confirm) {
       alert('Шинэ нууц үгнүүд зөрүүтэй байна!');
       return;
     }
-
     const passwordError = validatePasswordStrength(passwordForm.new);
     if (passwordError) {
       alert(passwordError);
       return;
     }
-
     try {
       const passwordResponse = await apiClient.post('/auth/change-password', {
         oldPassword: passwordForm.old,
@@ -1405,7 +1294,6 @@ export default function CsrDashboard() {
       if (passwordResponse.data?.token) {
         localStorage.setItem('token', passwordResponse.data.token);
       }
-
       logAction('Password Changed', `Changed password for ${csrProfile.name}`);
       alert('Нууц үг амжилттай солигдлоо!');
       setIsChangingPassword(false);
@@ -1417,54 +1305,38 @@ export default function CsrDashboard() {
       return;
     }
   };
-
-  const handleSendTradeRequest = async (receiverId: string, receiverName: string, receiverShiftId: string, receiverShiftTime: string, dateKey: string) => {
-    const dayData = schedule[dateKey] as DayData | undefined;
+  const fetchTradeCandidateSecondDays = async (senderSlotId: string, receiverSlotId: string, receiverId: string) => {
+    const response = await apiClient.get('/trades/candidate-second-days', {
+      params: { senderSlotId, receiverSlotId, receiverId },
+    });
+    return response.data as {
+      candidates: Array<{ date: string; senderNextSlotId: string; receiverNextSlotId: string }>;
+      applicable: boolean;
+      blockedReason?: string;
+    };
+  };
+  const submitTradeRequest = async (
+    receiverId: string,
+    receiverName: string,
+    receiverShiftId: string,
+    senderNextSlotId?: string,
+    receiverNextSlotId?: string,
+  ) => {
+    const dayData = schedule[tradingModal!.dateKey] as DayData | undefined;
     const myShift = dayData
       ? dayData.shifts.find(sh => sh.bookedBy?.some(b => b.userId === csrProfile.id))
       : undefined;
-
     if (!myShift) {
       alert('Танд солих ээлж байхгүй байна. Эхлээд ээлж захиална уу.');
       return;
     }
-
-    const receiverShift = dayData?.shifts.find(shift => shift.id === receiverShiftId);
-    if (!receiverShift) {
-      alert('Нөгөө хүний ээлж олдсонгүй. Хуваариа дахин шинэчилнэ үү.');
-      return;
-    }
-
-    const requiresComplementaryDay = Boolean(myShift.isRest) !== Boolean(receiverShift.isRest);
-    const secondPair = requiresComplementaryDay
-      ? Object.entries(schedule)
-          .filter(([candidateDateKey]) => candidateDateKey !== dateKey)
-          .map(([candidateDateKey, candidateDay]) => ({
-            candidateDateKey,
-            senderShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === csrProfile.id)),
-            receiverNextShift: candidateDay.shifts.find(shift => shift.bookedBy?.some(booking => booking.userId === receiverId)),
-          }))
-          .find(({ senderShift, receiverNextShift }) => {
-            if (!senderShift || !receiverNextShift) return false;
-            const firstSenderRest = Boolean(myShift.isRest);
-            const firstReceiverRest = Boolean(receiverShift.isRest);
-            return Boolean(senderShift.isRest) === firstReceiverRest
-              && Boolean(receiverNextShift.isRest) === firstSenderRest;
-          })
-      : undefined;
-
-    if (requiresComplementaryDay && (!secondPair?.senderShift || !secondPair.receiverNextShift)) {
-      alert('Амралт болон ажлын өдрийг солиход нөгөө өдөр хоёр талын эсрэг хуваарьтай байх шаардлагатай.');
-      return;
-    }
-
     try {
       await apiClient.post('/trades', {
         receiver_id: receiverId,
         sender_slot_id: myShift.id,
         receiver_slot_id: receiverShiftId,
-        sender_next_slot_id: secondPair?.senderShift?.id,
-        receiver_next_slot_id: secondPair?.receiverNextShift?.id,
+        sender_next_slot_id: senderNextSlotId,
+        receiver_next_slot_id: receiverNextSlotId,
       });
       await fetchTradeRequests();
       await fetchNotifications();
@@ -1476,7 +1348,63 @@ export default function CsrDashboard() {
       alert(error.response?.data?.error || 'Хүсэлт илгээхэд алдаа гарлаа.');
     }
   };
-
+  // "times" step: pick your own shift (or rest day) to offer.
+  // "employees" step: pick who to trade with -> calls this.
+  // Same-day work<->work sends immediately. Rest<->work first asks the
+  // server which future day(s) this same week reverse the pattern for
+  // THIS specific pair of people, and only then sends (or, with more than
+  // one candidate, lets the CSR pick which day).
+  const handleSelectTradePartner = async (user: { userId: string; userName: string }) => {
+    if (!tradingModal?.shift) return;
+    const dayData = schedule[tradingModal.dateKey] as DayData | undefined;
+    const myShift = dayData
+      ? dayData.shifts.find(sh => sh.bookedBy?.some(b => b.userId === csrProfile.id))
+      : undefined;
+    if (!myShift) {
+      alert('Танд солих ээлж байхгүй байна. Эхлээд ээлж захиална уу.');
+      return;
+    }
+    const requiresSecondDay = Boolean(myShift.isRest) !== Boolean(tradingModal.shift.isRest);
+    if (!requiresSecondDay) {
+      await submitTradeRequest(user.userId, user.userName, tradingModal.shift.id);
+      return;
+    }
+    setTradingModal({ ...tradingModal, selectedReceiver: user, isLoadingCandidates: true, candidateError: undefined, candidates: undefined });
+    try {
+      const result = await fetchTradeCandidateSecondDays(myShift.id, tradingModal.shift.id, user.userId);
+      if (!result.candidates || result.candidates.length === 0) {
+        setTradingModal(prev => prev ? {
+          ...prev,
+          isLoadingCandidates: false,
+          candidateError: result.blockedReason || 'Энэ 7 хоногт тохирох хос өдөр олдсонгүй. Trade хийх боломжгүй.',
+        } : prev);
+        return;
+      }
+      if (result.candidates.length === 1) {
+        const only = result.candidates[0];
+        await submitTradeRequest(user.userId, user.userName, tradingModal.shift.id, only.senderNextSlotId, only.receiverNextSlotId);
+        return;
+      }
+      setTradingModal(prev => prev ? { ...prev, step: 'secondDay', isLoadingCandidates: false, candidates: result.candidates } : prev);
+    } catch (error: any) {
+      console.error('Error fetching candidate second days:', error);
+      setTradingModal(prev => prev ? {
+        ...prev,
+        isLoadingCandidates: false,
+        candidateError: error.response?.data?.error || 'Хос өдөр хайхад алдаа гарлаа.',
+      } : prev);
+    }
+  };
+  const handleConfirmSecondDay = async (candidate: { date: string; senderNextSlotId: string; receiverNextSlotId: string }) => {
+    if (!tradingModal?.shift || !tradingModal.selectedReceiver) return;
+    await submitTradeRequest(
+      tradingModal.selectedReceiver.userId,
+      tradingModal.selectedReceiver.userName,
+      tradingModal.shift.id,
+      candidate.senderNextSlotId,
+      candidate.receiverNextSlotId,
+    );
+  };
   const handleAcceptTrade = async (request: TradeRequest) => {
     try {
       await apiClient.patch(`/trades/${request.id}/respond`, { status: 'accepted' });
@@ -1491,7 +1419,6 @@ export default function CsrDashboard() {
       alert(error.response?.data?.error || 'Хүсэлт зөвшөөрөхөд алдаа гарлаа.');
     }
   };
-
   const handleDeclineTrade = async (request: TradeRequest) => {
     try {
       await apiClient.patch(`/trades/${request.id}/respond`, { status: 'rejected' });
@@ -1504,13 +1431,10 @@ export default function CsrDashboard() {
       alert(error.response?.data?.error || 'Хүсэлт татгалзахад алдаа гарлаа.');
     }
   };
-
   const isUnread = (notif: AppNotification) => {
     return !notif.seenBy.some(s => s.userId === csrProfile.id);
   };
-
   const unreadCount = notifications.filter(n => (n.type === 'general' || n.type === 'important') && isUnread(n)).length;
-
   // Scroll to yesterday on mount
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1522,37 +1446,30 @@ export default function CsrDashboard() {
     }, 200);
     return () => clearTimeout(timer);
   }, [activeTab]);
-
   const markAsRead = async (id: string) => {
     const notif = notifications.find(n => n.id === id);
     if (!notif || !csrProfile) return;
-
     const alreadySeen = notif.seenBy?.some(s => s.userId === csrProfile.id);
     if (!alreadySeen) {
       try {
         await apiClient.post('/broadcasts/notifications/read', { notification_id: id });
-
         const updatedSeenBy = [...(notif.seenBy || []), {
           userId: csrProfile.id,
           userName: csrProfile.name,
           seenAt: new Date().toISOString()
         }];
-
         updateLocalItem('notifications', id, { seenBy: updatedSeenBy });
         setNotifications(prev => prev.map(n => n.id === id ? { ...n, seenBy: updatedSeenBy } : n));
-
         logAction('Notification Read', `Read notification: ${notif.title}`);
       } catch (error) {
         console.error('Error marking as read:', error);
       }
     }
   };
-
   const markAllAsRead = async () => {
     if (!csrProfile) return;
     const unreadNotifs = notifications.filter(n => isUnread(n));
     if (unreadNotifs.length === 0) return;
-
     try {
       // Previously this only updated local state/localStorage - the DB
       // never learned these were read, so the next poll/refresh brought
@@ -1565,7 +1482,6 @@ export default function CsrDashboard() {
           }),
         ),
       );
-
       const seenEntry = {
         userId: csrProfile.id,
         userName: csrProfile.name,
@@ -1574,7 +1490,6 @@ export default function CsrDashboard() {
       unreadNotifs.forEach(notif => {
         updateLocalItem('notifications', notif.id, { seenBy: [...(notif.seenBy || []), seenEntry] });
       });
-
       // Update local state
       setNotifications(prev => prev.map(n => {
         if (unreadNotifs.some(un => un.id === n.id)) {
@@ -1585,31 +1500,26 @@ export default function CsrDashboard() {
         }
         return n;
       }));
-      
       logAction('All Notifications Read', 'Marked all notifications as read');
     } catch (error) {
       console.error('Error marking all as read:', error);
     }
   };
-
   useEffect(() => {
     if (activeTab === 'notifications') {
       markAllAsRead();
     }
   }, [activeTab]);
-
   const getShiftRuleHourKey = React.useCallback((shift: Shift) => {
     if (shift.time === 'Амралт') return 'rest';
     const roundedHours = String(Math.round(calculateHours(shift.time)));
     return /^[4-9]$/.test(roundedHours) ? roundedHours : '';
   }, []);
-
   const getMyWeeklyBookingStats = React.useCallback((dateKey: string, sourceSchedule: Record<string, DayData>, excludeShiftId?: string) => {
     const weekDateKeys = getWeekDateKeys(dateKey);
     const hourCounts: Record<string, number> = {};
     let bookedDays = 0;
     let hours = 0;
-
     weekDateKeys.forEach((weekDateKey) => {
       const bookedShift = sourceSchedule[weekDateKey]?.shifts?.find((shift) =>
         shift.id !== excludeShiftId && shift.bookedBy?.some((booking) => booking.userId === csrProfile.id),
@@ -1621,14 +1531,11 @@ export default function CsrDashboard() {
       bookedDays += 1;
       if (hourKey) hourCounts[hourKey] = (hourCounts[hourKey] || 0) + 1;
     });
-
     return { hourCounts, bookedDays, hours };
   }, [csrProfile.id, getShiftRuleHourKey]);
-
   const validateShiftRuleBeforeBooking = React.useCallback((dateKey: string, targetShift: Shift, sourceSchedule: Record<string, DayData>, excludeShiftId?: string) => {
     const weekStats = getMyWeeklyBookingStats(dateKey, sourceSchedule, excludeShiftId);
     const targetHourKey = getShiftRuleHourKey(targetShift);
-
     // selectedDays is now purely a derived/informational total (sum of the
     // per-duration counts an admin explicitly sets - see AdminDashboard's
     // updateDynamicWeeklyRule), not an independent limit. Enforcing it here
@@ -1653,14 +1560,11 @@ export default function CsrDashboard() {
         }
       }
     }
-
     return '';
   }, [activeWeeklyRule, getMyWeeklyBookingStats, getShiftRuleHourKey]);
-
   const handleBookShift = React.useCallback(async (dateKey: string, shiftId?: string, bookingWaveId?: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
-
     // Find my existing confirmed booking on this date, if any - needed to
     // distinguish "editing my current booking" from "trying to book a
     // second shift the same day" (the latter stays blocked).
@@ -1673,9 +1577,7 @@ export default function CsrDashboard() {
         myExistingShiftId = s.id;
       }
     });
-
     const dayAccess = getDayBookingAccess(dayData, nowTick);
-
     if (myExistingBookingId && !shiftId) {
       // "Edit" entry point: open the picker instead of blocking. Editing
       // has its own (stricter) cutoff enforced server-side, but we also
@@ -1688,12 +1590,10 @@ export default function CsrDashboard() {
       setBookingModal({ isOpen: true, dateKey });
       return;
     }
-
     if (myExistingBookingId && shiftId === myExistingShiftId) {
       alert('Та аль хэдийн энэ ээлжийг сонгосон байна.');
       return;
     }
-
     if (!myExistingBookingId) {
       if (!dayAccess.canBook) {
         return;
@@ -1703,44 +1603,35 @@ export default function CsrDashboard() {
         return;
       }
     }
-
     if (!shiftId) {
       setBookingModal({ isOpen: true, dateKey });
       return;
     }
-
     const targetShift = dayData.shifts.find(s => s.id === shiftId);
-
     if (!targetShift) {
       alert('Энэ ээлж дүүрсэн эсвэл байхгүй байна.');
       return;
     }
-
     const ruleError = validateShiftRuleBeforeBooking(dateKey, targetShift, schedule, myExistingShiftId);
     if (ruleError) {
       alert(ruleError);
       return;
     }
-
     const availableWaves = getOpenBookingWaves(targetShift, dayData, nowTick);
     const targetWave = bookingWaveId
       ? getBookingWavesForShift(targetShift, !!dayData.bookingOpen, dayData.bookingOpenAt || '', dayData.bookingCloseAt || '').find(wave => wave.id === bookingWaveId)
       : availableWaves[0];
-
     if (!targetWave || !isWaveCurrentlyOpen(targetWave, nowTick)) {
       return;
     }
-
     if (getWaveBookedCount(targetShift, targetWave.id) >= targetWave.slotLimit) {
       alert('Энэ захиалах эрхийн slot дүүрсэн байна.');
       return;
     }
-
     if (targetShift.bookedSlots >= targetShift.totalSlots) {
       alert('Энэ ээлж дүүрсэн байна.');
       return;
     }
-
     const bookedAt = new Date().toISOString();
     const bookingInfo = {
       userId: csrProfile.id,
@@ -1750,7 +1641,6 @@ export default function CsrDashboard() {
       bookingWaveId: targetWave.id,
       bookingWaveName: targetWave.name,
     };
-
     const updatedShifts = dayData.shifts.map(s => {
       if (s.id === targetShift.id) {
         return {
@@ -1761,7 +1651,6 @@ export default function CsrDashboard() {
       }
       return s;
     });
-
     try {
       await apiClient.post('/slots/book', {
         slotId: targetShift.id,
@@ -1779,11 +1668,9 @@ export default function CsrDashboard() {
       alert(error.response?.data?.error || 'Ээлж захиалахад алдаа гарлаа.');
     }
   }, [schedule, csrProfile, nowTick, validateShiftRuleBeforeBooking, fetchDbSchedule]);
-
   const handleCancelShift = React.useCallback(async (dateKey: string, shiftId: string) => {
     const dayData = schedule[dateKey];
     if (!dayData) return;
-
     try {
       await apiClient.post(`/slots/${shiftId}/cancel`, { slotId: shiftId });
       await fetchDbSchedule();
@@ -1794,15 +1681,12 @@ export default function CsrDashboard() {
       alert(error.response?.data?.error || 'Ээлж цуцлахад алдаа гарлаа.');
     }
   }, [schedule, csrProfile, fetchDbSchedule]);
-
   const handleTradeShift = React.useCallback((dateKey: string) => {
     setTradingModal({ isOpen: true, dateKey, step: 'times' });
   }, []);
-
   const renderScheduleView = () => {
     const [year, month] = selectedMonth.split('-').map(Number);
     const currentMonthName = ENG_MONTHS[month - 1];
-
     const goToPrevMonth = () => {
       const prevDate = new Date(year, month - 2, 1);
       setSelectedMonth(formatMonthKey(prevDate));
@@ -1813,7 +1697,6 @@ export default function CsrDashboard() {
       setSelectedMonth(formatMonthKey(nextDate));
       setMonthNavActive(true);
     };
-
     return (
       <div className="w-full space-y-4">
         <div className="relative">
@@ -1846,37 +1729,34 @@ export default function CsrDashboard() {
                 </p>
               </div>
             </div>
-            
             <div className="relative pt-1 pb-1">
-              <div 
+              <div
                 className="absolute top-0 transition-all duration-1000 flex flex-col items-center"
-                style={{ 
+                style={{
                   left: `${executionPointerPercent}%`,
                   transform: 'translateX(-50%)'
                 }}
               >
                 <div className="w-px h-2 bg-gradient-to-b from-blue-500 to-transparent"></div>
               </div>
-
               <div className="h-2.5 bg-gray-800/50 rounded-full overflow-hidden flex border border-gray-700/30">
-                <div 
+                <div
                   className="h-full bg-white transition-all duration-1000 shadow-[0_0_10px_rgba(255,255,255,0.2)]"
                   style={{ width: getProgressWidth(regularWorkedHours) }}
                 />
-                <div 
+                <div
                   className="h-full bg-red-500 transition-all duration-1000 shadow-[0_0_10px_rgba(239,68,68,0.2)]"
                   style={{ width: getProgressWidth(sickHours) }}
                 />
-                <div 
+                <div
                   className="h-full bg-orange-500 transition-all duration-1000 shadow-[0_0_10px_rgba(249,115,22,0.2)]"
                   style={{ width: getProgressWidth(leaveHours) }}
                 />
               </div>
             </div>
-
             <AnimatePresence>
               {isStatsExpanded && (
-                <motion.div 
+                <motion.div
                   initial={{ height: 0, opacity: 0, marginTop: 0 }}
                   animate={{ height: 'auto', opacity: 1, marginTop: 12 }}
                   exit={{ height: 0, opacity: 0, marginTop: 0 }}
@@ -1909,28 +1789,25 @@ export default function CsrDashboard() {
               )}
             </AnimatePresence>
           </div>
-
-          <button 
+          <button
             onClick={() => setIsStatsExpanded(!isStatsExpanded)}
             className="absolute -bottom-3 left-1/2 -translate-x-1/2 p-1.5 rounded-full bg-gray-900 border border-gray-800 text-gray-500 hover:text-white hover:border-gray-600 transition-all duration-300 shadow-xl z-10"
           >
-            <ChevronDown 
-              size={16} 
+            <ChevronDown
+              size={16}
               className={`transition-transform duration-500 ${isStatsExpanded ? 'rotate-180' : ''}`}
             />
           </button>
         </div>
-
-        <div 
+        <div
           id="schedule-container"
           className="relative grid grid-cols-1 gap-3 max-h-[calc(100vh-320px)] overflow-y-auto pr-2 custom-scrollbar scroll-smooth"
         >
           {displayDays.map(({ date, isToday, isTomorrow, isYesterday, isPast }, idx) => {
             const dateKey = formatDateKey(date);
             const dayData = schedule[dateKey] || { shifts: [] };
-
             return (
-              <DayRow 
+              <DayRow
                 key={`day-${dateKey}-${idx}`}
                 date={date}
                 isToday={isToday}
@@ -1950,13 +1827,11 @@ export default function CsrDashboard() {
       </div>
     );
   };
-
   const renderNotificationsView = () => {
     const sortedNotifications = [...notifications]
       .filter(n => {
         // Include personal decisions alongside the general notification feed.
         if (!['general', 'important', 'leave_decision', 'vacation_decision'].includes(n.type)) return false;
-        
         // If it's a targeted notification, only show if it matches current user
         if (n.targetUserId) {
           return n.targetUserId === csrProfile.id;
@@ -1965,7 +1840,6 @@ export default function CsrDashboard() {
         return true;
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
     return (
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="space-y-4">
@@ -1973,14 +1847,13 @@ export default function CsrDashboard() {
             const seen = notif.seenBy?.find(s => s.userId === csrProfile.id);
             const isDeadlinePassed = notif.deadline && new Date(notif.deadline) < new Date();
             const isLatest = index === 0;
-            
             return (
-              <div 
-                key={`notif-${notif.id}-${index}`} 
+              <div
+                key={`notif-${notif.id}-${index}`}
                 onClick={() => !seen && markAsRead(notif.id)}
                 className={`p-6 rounded-2xl border transition-all cursor-pointer ${
-                  !seen 
-                    ? 'bg-blue-600/5 border-blue-500/20 shadow-lg shadow-blue-900/5' 
+                  !seen
+                    ? 'bg-blue-600/5 border-blue-500/20 shadow-lg shadow-blue-900/5'
                     : 'bg-gray-900/40 border-gray-800 opacity-60'
                 } ${isLatest ? 'p-8 border-blue-500/40 bg-blue-600/10 opacity-100' : ''}`}
               >
@@ -2001,7 +1874,6 @@ export default function CsrDashboard() {
                         )}
                       </div>
                       <p className={`${isLatest ? 'text-lg' : 'text-sm'} text-gray-400 leading-relaxed mb-4`}>{notif.content}</p>
-                      
                       <div className="flex flex-wrap items-center gap-6">
                         {notif.deadline && (
                           <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
@@ -2019,29 +1891,26 @@ export default function CsrDashboard() {
                           </div>
                         )}
                       </div>
-
                       {notif.tradeRequestId && (
                         <div className="mt-4 p-4 bg-gray-800/50 border border-gray-700 rounded-2xl">
                           {(() => {
                             const request = tradeRequests.find(r => r.id === notif.tradeRequestId);
                             if (!request) return <p className="text-xs text-gray-500 italic">Хүсэлт олдохгүй байна.</p>;
-                            
                             if (request.status === 'approved') {
                               return <p className="text-xs text-green-400 font-bold flex items-center gap-2"><CheckCircle2 size={14} /> Зөвшөөрөгдсөн</p>;
                             }
                             if (request.status === 'rejected') {
                               return <p className="text-xs text-red-400 font-bold flex items-center gap-2"><X size={14} /> Татгалзсан</p>;
                             }
-                            
                             // If pending and I am the receiver
                             if (request.receiverId === csrProfile.id) {
                               return (
                                 <div className="flex gap-2">
-                                  <button 
+                                  <button
                                     onClick={() => handleDeclineTrade(request)}
                                     className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-xl transition-all"
                                   >Татгалзах</button>
-                                  <button 
+                                  <button
                                     onClick={() => handleAcceptTrade(request)}
                                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all"
                                   >Зөвшөөрөх</button>
@@ -2054,9 +1923,8 @@ export default function CsrDashboard() {
                       )}
                     </div>
                   </div>
-                  
                   {!seen && !isDeadlinePassed && (
-                    <button 
+                    <button
                       onClick={() => markAsRead(notif.id)}
                       className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2 shrink-0"
                     >
@@ -2068,7 +1936,6 @@ export default function CsrDashboard() {
               </div>
             );
           })}
-          
           {sortedNotifications.length === 0 && (
             <div className="text-center py-20 bg-gray-900/20 border border-dashed border-gray-800 rounded-3xl">
               <Bell size={48} className="mx-auto text-gray-700 mb-4" />
@@ -2079,13 +1946,11 @@ export default function CsrDashboard() {
       </div>
     );
   };
-
   const [isRequestingVacation, setIsRequestingVacation] = useState(false);
   const [isRequestingHourlyLeave, setIsRequestingHourlyLeave] = useState(false);
   const [isSubmittingHourlyLeave, setIsSubmittingHourlyLeave] = useState(false);
   // Id of the pending request being edited; null means a new one.
   const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
-
   useEffect(() => {
     if (!SHOW_VACATION_FEATURE && activeTab === 'vacation') {
       setActiveTab('schedule');
@@ -2094,7 +1959,6 @@ export default function CsrDashboard() {
       setIsRequestingVacation(false);
     }
   }, [activeTab, isRequestingVacation]);
-
   const [vacationForm, setVacationForm] = useState<{
     month: string;
     startDate: string;
@@ -2102,21 +1966,16 @@ export default function CsrDashboard() {
     reason: string;
     type: 'vacation' | 'sick' | 'leave';
   }>({ month: formatMonthKey(new Date()), startDate: '', endDate: '', reason: '', type: 'vacation' });
-
   const handleRequestVacation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csrProfile) return;
-    
     const limit = getVacationLimit(vacationForm.month);
     const currentRequests = vacationRequests.filter(r => r.month === vacationForm.month && r.status === 'approved').length;
-
     if (currentRequests >= limit) {
       alert(`${vacationForm.month} сард амралт авах хүний тоо хэтэрсэн байна. (Квот: ${limit})`);
       return;
     }
-
     let requestId = Math.random().toString(36).substr(2, 9);
-
     try {
       const response = await apiClient.post('/requests/vacation', {
         startDate: vacationForm.startDate,
@@ -2129,7 +1988,6 @@ export default function CsrDashboard() {
       alert(error.response?.data?.error || 'Амралтын хүсэлт илгээхэд алдаа гарлаа.');
       return;
     }
-
     const newRequest: VacationRequest = {
       id: requestId,
       csrId: csrProfile.id,
@@ -2143,7 +2001,6 @@ export default function CsrDashboard() {
       status: 'pending',
       createdAt: new Date().toISOString()
     };
-
     try {
       addLocalItem('vacationRequests', newRequest);
       logAction('Vacation Requested', `Requested vacation for ${vacationForm.month}`);
@@ -2153,7 +2010,6 @@ export default function CsrDashboard() {
       console.error('Error requesting vacation:', error);
     }
   };
-
   // Чөлөө is now requested against a booked shift only, so the form holds a
   // booking id and a window inside that shift - never a free-typed date.
   const [hourlyLeaveForm, setHourlyLeaveForm] = useState({
@@ -2163,7 +2019,6 @@ export default function CsrDashboard() {
     endTime: '',
     reason: ''
   });
-
   // Shifts this CSR may request Чөлөө for: booked, still ahead, and with
   // booking already CLOSED. While booking is open there is nothing to ask
   // permission for - the shift can simply be cancelled or moved - so those
@@ -2194,11 +2049,8 @@ export default function CsrDashboard() {
     closed.sort((a, b) => a.hoursAway - b.hoursAway);
     return { closed, stillOpen };
   }, [schedule, csrProfile]);
-
   const upcomingConfirmedBookings = leaveEligibleBookings.closed;
-
   const selectedLeaveBooking = upcomingConfirmedBookings.find(b => b.bookingId === hourlyLeaveForm.slotBookingId) || null;
-
   const selectLeaveBooking = (bookingId: string) => {
     const booking = upcomingConfirmedBookings.find(b => b.bookingId === bookingId);
     setHourlyLeaveForm(prev => ({
@@ -2209,7 +2061,6 @@ export default function CsrDashboard() {
       endTime: booking?.endTime || '',
     }));
   };
-
   const resetHourlyLeaveForm = () => {
     setEditingLeaveId(null);
     setHourlyLeaveForm({
@@ -2220,7 +2071,6 @@ export default function CsrDashboard() {
       reason: ''
     });
   };
-
   const startEditingLeave = (request: HourlyLeaveRequest) => {
     const booking = upcomingConfirmedBookings.find(b => b.bookingId === request.slotBookingId);
     if (!booking) {
@@ -2239,7 +2089,6 @@ export default function CsrDashboard() {
     });
     setIsRequestingHourlyLeave(true);
   };
-
   const handleDeleteLeaveRequest = async (id: string) => {
     if (!window.confirm('Энэ чөлөөний хүсэлтийг устгах уу?')) return;
     try {
@@ -2252,11 +2101,9 @@ export default function CsrDashboard() {
       alert(error.response?.data?.error || 'Чөлөөний хүсэлт устгахад алдаа гарлаа.');
     }
   };
-
   const handleRequestHourlyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csrProfile) return;
-
     if (!selectedLeaveBooking) {
       alert('Ээлжээ сонгоно уу.');
       return;
@@ -2287,7 +2134,6 @@ export default function CsrDashboard() {
         return;
       }
     }
-
     setIsSubmittingHourlyLeave(true);
     try {
       const payload = {
@@ -2303,7 +2149,6 @@ export default function CsrDashboard() {
       } else {
         await apiClient.post('/requests/leave', payload);
       }
-
       await fetchHourlyLeaveRequests();
       logAction(
         editingLeaveId ? 'Leave Request Edited' : 'Leave Requested',
@@ -2319,9 +2164,7 @@ export default function CsrDashboard() {
       setIsSubmittingHourlyLeave(false);
     }
   };
-
   const [selectedMaterial, setSelectedMaterial] = useState<TrainingMaterial | null>(null);
-
   // The list endpoint deliberately omits attachment payloads (a base64 file
   // per row would make the polled list enormous), so pull the body only when
   // the material is actually opened.
@@ -2338,7 +2181,6 @@ export default function CsrDashboard() {
       console.error('Error loading training attachment:', error);
     }
   };
-
   const markMaterialAsRead = async (id: string) => {
     if (!csrProfile) return;
     const material = trainingMaterials.find(m => m.id === id);
@@ -2352,11 +2194,9 @@ export default function CsrDashboard() {
             userName: csrProfile.name,
             seenAt: new Date().toISOString()
           }];
-          
           // Update local state immediately; training_completions on the
           // server is the record of truth and the next poll confirms it.
           setTrainingMaterials(prev => prev.map(m => m.id === id ? { ...m, seenBy: updatedSeenBy } : m));
-          
           logAction('Training Material Viewed', `Viewed training material: ${material.title}`);
         } catch (error) {
           console.error('Error marking material as read:', error);
@@ -2364,7 +2204,6 @@ export default function CsrDashboard() {
       }
     }
   };
-
   const renderTrainingView = () => (
     <div className="space-y-8 max-w-6xl mx-auto py-8">
       <div className="flex items-center justify-between mb-8">
@@ -2373,34 +2212,32 @@ export default function CsrDashboard() {
           <p className="text-gray-400 mt-1">Таны мэдлэг чадварыг дээшлүүлэх материалууд.</p>
         </div>
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {trainingMaterials.map((material, idx) => {
           const seen = material.seenBy?.find(s => s.userId === csrProfile.id);
           const isDeadlinePassed = material.deadline && new Date(material.deadline) < new Date();
-          
           return (
-            <div 
-              key={`training-card-${material.id}-${idx}`} 
+            <div
+              key={`training-card-${material.id}-${idx}`}
               className="bg-gray-900/40 border border-gray-800 p-6 rounded-3xl space-y-4 hover:border-blue-500/30 transition-all group relative"
             >
-              <div 
+              <div
                 onClick={() => void openMaterial(material)}
                 className="aspect-video bg-gray-800 rounded-2xl overflow-hidden relative cursor-pointer"
               >
                 {material.thumbnailUrl ? (
-                  <LazyMedia 
-                    src={material.thumbnailUrl} 
-                    alt={material.title} 
-                    type="Image" 
-                    className="w-full h-full" 
+                  <LazyMedia
+                    src={material.thumbnailUrl}
+                    alt={material.title}
+                    type="Image"
+                    className="w-full h-full"
                   />
                 ) : material.type === 'Image' && material.url.startsWith('data:') ? (
-                  <LazyMedia 
-                    src={material.url} 
-                    alt={material.title} 
-                    type="Image" 
-                    className="w-full h-full" 
+                  <LazyMedia
+                    src={material.url}
+                    alt={material.title}
+                    type="Image"
+                    className="w-full h-full"
                   />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 bg-gray-800/50">
@@ -2445,13 +2282,11 @@ export default function CsrDashboard() {
       </div>
     </div>
   );
-
   const renderVacationView = () => {
     const months = Array.from({ length: 12 }, (_, i) => i + 1);
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth() + 1;
-
     return (
       <div className="max-w-6xl mx-auto py-4 sm:py-8 space-y-6 sm:space-y-8">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2459,19 +2294,17 @@ export default function CsrDashboard() {
             <h2 className="text-2xl sm:text-3xl font-outfit font-black text-white tracking-tight">Ээлжийн амралт</h2>
             <p className="text-xs sm:text-sm text-gray-400 mt-1">{vacationYear} оны амралт захиалах хэсэг.</p>
           </div>
-          
           <div className="relative">
-            <button 
+            <button
               onClick={() => setIsVacationFilterOpen(!isVacationFilterOpen)}
               className="flex items-center gap-2 bg-gray-800 border border-gray-700 text-white px-4 py-2.5 rounded-xl font-bold hover:border-blue-500 transition-all"
             >
               <Filter size={18} className="text-blue-400" />
               <span className="text-sm">{vacationYear} он</span>
             </button>
-
             <AnimatePresence>
               {isVacationFilterOpen && (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 10 }}
@@ -2496,7 +2329,6 @@ export default function CsrDashboard() {
             </AnimatePresence>
           </div>
         </div>
-
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
           {months.map(m => {
             const monthStr = `${vacationYear}-${String(m).padStart(2, '0')}`;
@@ -2507,13 +2339,12 @@ export default function CsrDashboard() {
             const totalRequested = approved + pending;
             const isFull = totalRequested >= quota.limit;
             const alreadyRequested = vacationRequests.some(r => r.month === monthStr && r.csrId === csrProfile.id);
-
             return (
-              <div 
+              <div
                 key={monthStr}
                 className={`relative p-6 rounded-3xl border transition-all duration-500 ${
-                  isPast 
-                    ? 'bg-gray-900/20 border-gray-800/50 opacity-40 grayscale' 
+                  isPast
+                    ? 'bg-gray-900/20 border-gray-800/50 opacity-40 grayscale'
                     : 'bg-gray-900/40 border-gray-800 hover:border-blue-500/30 group'
                 }`}
               >
@@ -2532,7 +2363,6 @@ export default function CsrDashboard() {
                     <Palmtree size={20} />
                   </div>
                 </div>
-
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Квот</span>
@@ -2540,14 +2370,12 @@ export default function CsrDashboard() {
                       {totalRequested} / {quota.limit}
                     </span>
                   </div>
-                  
                   <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                    <div 
+                    <div
                       className={`h-full transition-all duration-1000 ${isFull ? 'bg-red-500' : 'bg-blue-500'}`}
                       style={{ width: `${Math.min((totalRequested / quota.limit) * 100, 100)}%` }}
                     />
                   </div>
-
                   <button
                     disabled={isPast || isFull || alreadyRequested}
                     onClick={() => {
@@ -2570,7 +2398,6 @@ export default function CsrDashboard() {
       </div>
     );
   };
-
   const renderHourlyLeaveView = () => (
     <div className="max-w-5xl mx-auto space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
@@ -2578,7 +2405,7 @@ export default function CsrDashboard() {
           <h2 className="text-3xl font-black text-white tracking-tight">Чөлөө</h2>
           <p className="text-gray-400 mt-1">Чөлөө авах хүсэлт илгээх болон хянах.</p>
         </div>
-        <button 
+        <button
           onClick={() => { resetHourlyLeaveForm(); setIsRequestingHourlyLeave(true); }}
           className="flex items-center gap-3 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-900/20 uppercase tracking-widest text-xs"
         >
@@ -2586,7 +2413,6 @@ export default function CsrDashboard() {
           Шинэ хүсэлт
         </button>
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-gray-900/40 border border-gray-800 rounded-3xl p-8 backdrop-blur-xl">
           <div className="flex items-center gap-3 mb-8">
@@ -2595,7 +2421,6 @@ export default function CsrDashboard() {
             </div>
             <h3 className="text-xl font-black text-white">Миний хүсэлтүүд</h3>
           </div>
-
           <div className="space-y-4">
             {hourlyLeaveRequests.length > 0 ? (
               hourlyLeaveRequests.map((req) => (
@@ -2665,7 +2490,6 @@ export default function CsrDashboard() {
             )}
           </div>
         </div>
-
         <div className="bg-gradient-to-br from-blue-600/10 to-purple-600/10 border border-blue-500/20 rounded-3xl p-8 backdrop-blur-xl">
            <h3 className="text-xl font-black text-white mb-4">Санамж</h3>
            <ul className="space-y-4">
@@ -2686,30 +2510,27 @@ export default function CsrDashboard() {
       </div>
     </div>
   );
-
   return (
     <div className="flex min-h-screen flex-col lg:h-screen lg:flex-row lg:overflow-hidden bg-[#0a0a0a] text-white overflow-x-hidden font-sans">
-      <Sidebar 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab} 
-        unreadCount={unreadCount} 
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        unreadCount={unreadCount}
         unreadTrainingCount={unreadTrainingCount}
         onChangePassword={() => setIsChangingPassword(true)}
         isCollapsed={isSidebarCollapsed}
         setIsCollapsed={setIsSidebarCollapsed}
         role="csr"
       />
-      
       <main className="flex-1 min-w-0 flex flex-col relative overflow-x-hidden overflow-y-auto">
         <header className="min-h-16 sm:min-h-20 border-b border-gray-800 flex flex-wrap items-center justify-between gap-3 px-3 sm:px-8 py-3 bg-gray-900/30 backdrop-blur-md z-40 relative">
           <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
             {activeTab === 'schedule' ? 'Ажлын хуваарь' : SHOW_VACATION_FEATURE && activeTab === 'vacation' ? 'Ээлжийн амралт' : activeTab === 'hourlyLeave' ? 'Чөлөө' : activeTab === 'training' ? 'Сургалт' : 'Мэдэгдэл'}
           </h1>
-          
           <div className="flex items-center justify-end gap-2 sm:gap-4 ml-auto">
             {activeTab === 'schedule' && (
               <div className="relative">
-                <button 
+                <button
                   onClick={() => {
                     setIsFilterOpen(!isFilterOpen);
                     setFilterStep('year');
@@ -2719,10 +2540,9 @@ export default function CsrDashboard() {
                   <Filter size={18} className="text-blue-400" />
                   <span className="text-sm">Шүүлтүүр</span>
                 </button>
-
                 <AnimatePresence>
                   {isFilterOpen && (
-                    <motion.div 
+                    <motion.div
                       initial={{ opacity: 0, y: 10, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -2740,8 +2560,8 @@ export default function CsrDashboard() {
                                   setFilterStep('month');
                                 }}
                                 className={`py-4 rounded-2xl font-black text-xl transition-all border ${
-                                  tempYear === y 
-                                    ? 'bg-blue-600 border-blue-400 text-white shadow-xl shadow-blue-900/40 scale-[1.02]' 
+                                  tempYear === y
+                                    ? 'bg-blue-600 border-blue-400 text-white shadow-xl shadow-blue-900/40 scale-[1.02]'
                                     : 'bg-gray-800/50 border-gray-700 text-gray-400 hover:bg-gray-800 hover:border-gray-600'
                                 }`}
                               >
@@ -2754,7 +2574,7 @@ export default function CsrDashboard() {
                         <div className="space-y-4">
                           <div className="flex items-center justify-between mb-4 px-1">
                             <h4 className="text-2xl font-black text-white tracking-tight">{tempYear} он</h4>
-                            <button 
+                            <button
                               onClick={() => setFilterStep('year')}
                               className="text-xs font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 transition-colors"
                             >
@@ -2774,8 +2594,8 @@ export default function CsrDashboard() {
                                     setIsFilterOpen(false);
                                   }}
                                   className={`py-3 rounded-xl text-sm font-black transition-all border ${
-                                    isSelected 
-                                      ? 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-900/20' 
+                                    isSelected
+                                      ? 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-900/20'
                                       : 'bg-gray-800/50 border-gray-700 text-gray-400 hover:bg-gray-800 hover:border-gray-600'
                                   }`}
                                 >
@@ -2792,11 +2612,9 @@ export default function CsrDashboard() {
               </div>
             )}
           </div>
-
           <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-end">
             <DigitalClock months={ENG_MONTHS} weekdays={['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']} />
-
-            <button 
+            <button
               onClick={() => setActiveTab('notifications')}
               className="hidden lg:flex relative p-2.5 text-gray-400 hover:text-white transition-all hover:bg-white/5 rounded-xl border border-transparent hover:border-white/10"
             >
@@ -2809,7 +2627,6 @@ export default function CsrDashboard() {
             </button>
           </div>
         </header>
-
         <div className="flex-1 p-4 sm:p-8 overflow-y-auto">
           {activeTab === 'schedule' && renderScheduleView()}
           {activeTab === 'notifications' && renderNotificationsView()}
@@ -2818,7 +2635,6 @@ export default function CsrDashboard() {
           {activeTab === 'training' && renderTrainingView()}
         </div>
       </main>
-
       {/* Vacation Request Modal */}
       <AnimatePresence>
         {SHOW_VACATION_FEATURE && isRequestingVacation && (
@@ -2833,12 +2649,11 @@ export default function CsrDashboard() {
                     <span className="font-bold">{formatMonthEng(vacationForm.month)}</span>
                   </div>
                 </div>
-                
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Эхлэх</label>
-                    <input 
-                      type="date" 
+                    <input
+                      type="date"
                       required
                       value={vacationForm.startDate}
                       onChange={e => setVacationForm(prev => ({ ...prev, startDate: e.target.value }))}
@@ -2847,8 +2662,8 @@ export default function CsrDashboard() {
                   </div>
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Дуусах</label>
-                    <input 
-                      type="date" 
+                    <input
+                      type="date"
                       required
                       value={vacationForm.endDate}
                       onChange={e => setVacationForm(prev => ({ ...prev, endDate: e.target.value }))}
@@ -2858,7 +2673,7 @@ export default function CsrDashboard() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Шалтгаан</label>
-                  <textarea 
+                  <textarea
                     required
                     value={vacationForm.reason}
                     onChange={e => setVacationForm(prev => ({ ...prev, reason: e.target.value }))}
@@ -2875,7 +2690,6 @@ export default function CsrDashboard() {
           </div>
         )}
       </AnimatePresence>
-
       {/* Change Password Modal */}
       <AnimatePresence>
         {isChangingPassword && (
@@ -2907,7 +2721,6 @@ export default function CsrDashboard() {
             </motion.div>
           </div>
         )}
-
         {/* Material Viewer Modal */}
         {selectedMaterial && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -2922,10 +2735,9 @@ export default function CsrDashboard() {
                   {(() => {
                     const isDeadlinePassed = selectedMaterial.deadline && new Date(selectedMaterial.deadline) < new Date();
                     const alreadySeen = selectedMaterial.seenBy?.some(s => s.userId === csrProfile.id);
-                    
                     if (!alreadySeen && !isDeadlinePassed) {
                       return (
-                        <button 
+                        <button
                           onClick={() => {
                             markMaterialAsRead(selectedMaterial.id);
                             setSelectedMaterial(null);
@@ -2944,21 +2756,20 @@ export default function CsrDashboard() {
                   </button>
                 </div>
               </div>
-              
               <div className="flex-1 overflow-auto bg-black flex items-center justify-center p-4">
                 {selectedMaterial.type === 'Image' ? (
-                  <LazyMedia 
-                    src={selectedMaterial.url} 
-                    alt={selectedMaterial.title} 
-                    type="Image" 
-                    className="max-w-full max-h-full rounded-xl" 
+                  <LazyMedia
+                    src={selectedMaterial.url}
+                    alt={selectedMaterial.title}
+                    type="Image"
+                    className="max-w-full max-h-full rounded-xl"
                     objectFit="contain"
                   />
                 ) : selectedMaterial.type === 'Video' ? (
-                  <LazyMedia 
-                    src={selectedMaterial.url} 
-                    type="Video" 
-                    className="max-w-full max-h-full rounded-xl" 
+                  <LazyMedia
+                    src={selectedMaterial.url}
+                    type="Video"
+                    className="max-w-full max-h-full rounded-xl"
                     objectFit="contain"
                   />
                 ) : selectedMaterial.type === 'PDF' ? (
@@ -2971,15 +2782,15 @@ export default function CsrDashboard() {
                     <div>
                       <h3 className="text-xl font-bold text-white mb-2">{selectedMaterial.type === 'File' ? 'Файл татах' : 'Гадна холбоос'}</h3>
                       <p className="text-gray-400 max-w-md mx-auto">
-                        {selectedMaterial.type === 'File' 
-                          ? 'Энэ материалыг шууд үзэх боломжгүй тул татаж авч үзнэ үү.' 
+                        {selectedMaterial.type === 'File'
+                          ? 'Энэ материалыг шууд үзэх боломжгүй тул татаж авч үзнэ үү.'
                           : 'Энэ материал нь гадны вэбсайт дээр байрлаж байна. Та доорх товчийг дарж шинэ цонхонд нээнэ үү.'}
                       </p>
                     </div>
-                    <a 
-                      href={selectedMaterial.url} 
+                    <a
+                      href={selectedMaterial.url}
                       download={selectedMaterial.type === 'File' ? selectedMaterial.title : undefined}
-                      target={selectedMaterial.type === 'File' ? undefined : "_blank"} 
+                      target={selectedMaterial.type === 'File' ? undefined : "_blank"}
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 px-8 py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20"
                     >
@@ -3007,7 +2818,6 @@ export default function CsrDashboard() {
                     <X size={24} className="text-gray-500" />
                   </button>
                 </div>
-
                 <div className="space-y-2.5 mb-6">
                   {(schedule[bookingModal.dateKey]?.shifts || []).map((shift, idx) => {
                     const isFull = shift.bookedSlots >= shift.totalSlots;
@@ -3041,7 +2851,6 @@ export default function CsrDashboard() {
                             )}
                           </div>
                         </div>
-
                         <div className="w-full h-1.5 mt-2.5 rounded-full bg-gray-800 overflow-hidden">
                           <motion.div
                             initial={{ width: 0 }}
@@ -3049,7 +2858,6 @@ export default function CsrDashboard() {
                             className={`h-full rounded-full ${isMyCurrentShift ? 'bg-green-500' : isFull ? 'bg-red-500' : 'bg-blue-500'}`}
                           />
                         </div>
-
                         <div className="mt-2.5 space-y-1.5">
                           {waves.map(wave => {
                             const booked = getWaveBookedCount(shift, wave.id);
@@ -3099,8 +2907,7 @@ export default function CsrDashboard() {
                     );
                   })}
                 </div>
-
-                <button 
+                <button
                   onClick={() => setBookingModal(null)}
                   className="w-full py-4 bg-gray-800 text-white font-bold rounded-2xl hover:bg-gray-700 transition-all"
                 >
@@ -3110,7 +2917,6 @@ export default function CsrDashboard() {
             </div>
           )}
         </AnimatePresence>
-
         {/* Trade Request Modal */}
         <AnimatePresence>
           {tradingModal?.isOpen && (
@@ -3118,46 +2924,77 @@ export default function CsrDashboard() {
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setTradingModal(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
               <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl sm:rounded-3xl p-4 sm:p-8 shadow-2xl">
                 <h2 className="text-2xl font-black text-white mb-2">Ээлж солих</h2>
-                
+
                 {tradingModal.step === 'times' ? (
                   <>
-                    <p className="text-gray-400 text-sm mb-6">{tradingModal.dateKey} өдрийн боломжит ээлжүүд:</p>
+                    <p className="text-gray-400 text-sm mb-6">{tradingModal.dateKey} өдрийн бүх ээлж:</p>
                     <div className="space-y-3 mb-8">
-                      {(schedule[tradingModal.dateKey]?.shifts || [])
-                        .filter(shift => {
-                          const myShift = schedule[tradingModal.dateKey]?.shifts.find(candidate => candidate.isBookedByMe);
-                          return Boolean(myShift && !shift.isBookedByMe && (shift.bookedBy?.length || 0) > 0 && canTradeDisplayedShift(myShift, shift));
-                        })
-                        .map((shift, idx) => (
-                          <button 
-                            key={`trade-shift-${tradingModal.dateKey}-${shift.id}-${idx}`}
-                            onClick={() => setTradingModal({ ...tradingModal, step: 'employees', shift })}
-                            className="w-full flex items-center justify-between p-4 bg-gray-800/50 border border-gray-700 rounded-2xl hover:border-blue-500/50 transition-all group"
-                          >
-                            <div className="flex items-center gap-3">
-                              <Clock size={18} className="text-blue-400" />
-                              <span className="font-bold text-white">{formatShiftTimeForDisplay(shift.time)}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500">{shift.bookedBy?.length || 0} ажилтан</span>
-                              <ChevronDown size={16} className="text-gray-600 group-hover:text-blue-400 -rotate-90" />
-                            </div>
-                          </button>
-                        ))}
+                      {(() => {
+                        const dayShifts = schedule[tradingModal.dateKey]?.shifts || [];
+                        const myShift = dayShifts.find(candidate => candidate.isBookedByMe);
+                        return dayShifts
+                          .filter(shift => shift.id !== myShift?.id)
+                          .map((shift, idx) => {
+                            const otherPeopleCount = (shift.bookedBy || []).filter(u => u.userId !== csrProfile.id).length;
+                            const structurallyEligible = Boolean(myShift) && canTradeDisplayedShift(myShift, shift);
+                            const eligible = structurallyEligible && otherPeopleCount > 0;
+                            const reason = !myShift
+                              ? 'Танд энэ өдөр захиалга байхгүй.'
+                              : !structurallyEligible
+                                ? (Boolean(myShift.isRest) && Boolean(shift.isRest)
+                                    ? 'Хоёулаа амралттай ээлжийг солих боломжгүй.'
+                                    : 'Ижил эхлэх эсвэл ижил дуусах цагтай тул солих боломжгүй.')
+                                : otherPeopleCount === 0
+                                  ? 'Энэ ээлжинд хэн ч захиалаагүй байна.'
+                                  : '';
+                            return (
+                              <button
+                                key={`trade-shift-${tradingModal.dateKey}-${shift.id}-${idx}`}
+                                disabled={!eligible}
+                                onClick={() => eligible && setTradingModal({ ...tradingModal, step: 'employees', shift, candidateError: undefined, candidates: undefined })}
+                                className={`w-full flex items-center justify-between p-4 border rounded-2xl transition-all group ${
+                                  eligible
+                                    ? 'bg-gray-800/50 border-gray-700 hover:border-blue-500/50 cursor-pointer'
+                                    : 'bg-gray-900/30 border-gray-800 opacity-50 cursor-not-allowed'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <Clock size={18} className={eligible ? 'text-blue-400' : 'text-gray-600'} />
+                                  <div className="text-left">
+                                    <span className="font-bold text-white block">{formatShiftTimeForDisplay(shift.time)}</span>
+                                    {!eligible && reason && (
+                                      <span className="text-[10px] text-gray-500">{reason}</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-gray-500">{otherPeopleCount} ажилтан</span>
+                                  {eligible && <ChevronDown size={16} className="text-gray-600 group-hover:text-blue-400 -rotate-90" />}
+                                </div>
+                              </button>
+                            );
+                          });
+                      })()}
                     </div>
                   </>
-                ) : (
+                ) : tradingModal.step === 'employees' ? (
                   <>
                     <div className="flex items-center gap-2 mb-4">
-                      <button 
-                        onClick={() => setTradingModal({ ...tradingModal, step: 'times', shift: undefined })}
+                      <button
+                        onClick={() => setTradingModal({ ...tradingModal, step: 'times', shift: undefined, candidateError: undefined, candidates: undefined })}
                         className="p-1 text-gray-500 hover:text-white transition-colors"
                       >
                         <ChevronDown size={20} className="rotate-90" />
                       </button>
                       <p className="text-gray-400 text-sm">{formatShiftTimeForDisplay(tradingModal.shift?.time)} ээлжинд байгаа ажилтнууд:</p>
                     </div>
-                    
+
+                    {tradingModal.candidateError && (
+                      <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 text-xs font-bold">
+                        {tradingModal.candidateError}
+                      </div>
+                    )}
+
                     <div className="space-y-3 mb-8">
                       {tradingModal.shift?.bookedBy?.filter(u => u.userId !== csrProfile.id).length ? (
                         tradingModal.shift.bookedBy
@@ -3170,11 +3007,12 @@ export default function CsrDashboard() {
                                 </div>
                                 <span className="font-bold text-white">{user.userName}</span>
                               </div>
-                              <button 
-                                onClick={() => handleSendTradeRequest(user.userId, user.userName, tradingModal.shift!.id, tradingModal.shift!.time, tradingModal.dateKey)}
-                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all"
+                              <button
+                                onClick={() => handleSelectTradePartner({ userId: user.userId, userName: user.userName })}
+                                disabled={tradingModal.isLoadingCandidates}
+                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all disabled:opacity-50"
                               >
-                                Солих хүсэлт
+                                {tradingModal.isLoadingCandidates ? 'Хайж байна...' : 'Солих хүсэлт'}
                               </button>
                             </div>
                           ))
@@ -3185,6 +3023,30 @@ export default function CsrDashboard() {
                       )}
                     </div>
                   </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 mb-4">
+                      <button
+                        onClick={() => setTradingModal({ ...tradingModal, step: 'employees', candidates: undefined })}
+                        className="p-1 text-gray-500 hover:text-white transition-colors"
+                      >
+                        <ChevronDown size={20} className="rotate-90" />
+                      </button>
+                      <p className="text-gray-400 text-sm">Хоёр дахь (нөхөх) өдрөө сонгоно уу:</p>
+                    </div>
+                    <div className="space-y-3 mb-8">
+                      {(tradingModal.candidates || []).map((candidate, idx) => (
+                        <button
+                          key={`second-day-${candidate.date}-${idx}`}
+                          onClick={() => handleConfirmSecondDay(candidate)}
+                          className="w-full flex items-center justify-between p-4 bg-gray-800/50 border border-gray-700 rounded-2xl hover:border-blue-500/50 transition-all"
+                        >
+                          <span className="font-bold text-white">{candidate.date}</span>
+                          <ChevronDown size={16} className="text-gray-600 -rotate-90" />
+                        </button>
+                      ))}
+                    </div>
+                  </>
                 )}
 
                 <button onClick={() => setTradingModal(null)} className="w-full py-3 bg-gray-800 text-white font-bold rounded-xl hover:bg-gray-700 transition-all">Хаах</button>
@@ -3192,17 +3054,15 @@ export default function CsrDashboard() {
             </div>
           )}
         </AnimatePresence>
-
         {/* Incoming Trade Requests */}
         {(() => {
           const incoming = tradeRequests.find(r => r.receiverId === csrProfile.id && r.status === 'pending');
           if (!incoming) return null;
-
           return (
             <div className="fixed bottom-24 right-8 z-[120]">
-              <motion.div 
-                initial={{ opacity: 0, x: 50 }} 
-                animate={{ opacity: 1, x: 0 }} 
+              <motion.div
+                initial={{ opacity: 0, x: 50 }}
+                animate={{ opacity: 1, x: 0 }}
                 className="bg-gray-900 border border-blue-500/30 p-6 rounded-3xl shadow-2xl w-80"
               >
                 <div className="flex items-center gap-3 mb-4">
@@ -3218,11 +3078,11 @@ export default function CsrDashboard() {
                   <span className="font-bold text-white">{incoming.senderName}</span> таны <span className="text-blue-400 font-bold">{formatShiftTimeForDisplay(incoming.receiverShiftTime)}</span> ээлжийг өөрийн <span className="text-purple-400 font-bold">{formatShiftTimeForDisplay(incoming.senderShiftTime)}</span> ээлжээр солих хүсэлт ирүүллээ.
                 </p>
                 <div className="flex gap-2">
-                  <button 
+                  <button
                     onClick={() => handleDeclineTrade(incoming)}
                     className="flex-1 py-2.5 bg-gray-800 text-white text-xs font-bold rounded-xl hover:bg-gray-700 transition-all"
                   >Татгалзах</button>
-                  <button 
+                  <button
                     onClick={() => handleAcceptTrade(incoming)}
                     className="flex-1 py-2.5 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 transition-all"
                   >Зөвшөөрөх</button>
@@ -3231,7 +3091,6 @@ export default function CsrDashboard() {
             </div>
           );
         })()}
-
         {/* Hourly Leave Request Modal */}
         <AnimatePresence>
           {isRequestingHourlyLeave && (
@@ -3241,7 +3100,6 @@ export default function CsrDashboard() {
                 <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
                   <Clock size={120} className="text-blue-500" />
                 </div>
-
                 <div className="relative">
                   <h2 className="text-2xl font-black text-white mb-6 tracking-tight">{editingLeaveId ? 'Чөлөөний хүсэлт засах' : 'Чөлөө авах'}</h2>
                   <form onSubmit={handleRequestHourlyLeave} className="space-y-4">
@@ -3299,7 +3157,6 @@ export default function CsrDashboard() {
                             })}
                           </div>
                         </div>
-
                         {selectedLeaveBooking && (
                           <>
                             <div className="flex bg-gray-800 p-1 rounded-xl">
@@ -3322,7 +3179,6 @@ export default function CsrDashboard() {
                                 Хэсэгчлэн
                               </button>
                             </div>
-
                             {!hourlyLeaveForm.wholeShift && (
                               <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
@@ -3351,7 +3207,6 @@ export default function CsrDashboard() {
                                 </div>
                               </div>
                             )}
-
                             <p className="text-[10px] text-gray-500 leading-relaxed ml-1">
                               {selectedLeaveBooking.dateKey} өдрийн {selectedLeaveBooking.startTime}-{selectedLeaveBooking.endTime} ээлжийн{' '}
                               {hourlyLeaveForm.wholeShift
@@ -3363,10 +3218,9 @@ export default function CsrDashboard() {
                         )}
                       </>
                     )}
-
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Шалтгаан</label>
-                      <textarea 
+                      <textarea
                         required
                         value={hourlyLeaveForm.reason}
                         onChange={e => setHourlyLeaveForm(prev => ({ ...prev, reason: e.target.value }))}
@@ -3374,7 +3228,6 @@ export default function CsrDashboard() {
                         placeholder="Чөлөө авах шалтгаанаа тодорхой бичнэ үү..."
                       />
                     </div>
-
                     <div className="pt-4 flex gap-3">
                       <button type="button" onClick={() => { setIsRequestingHourlyLeave(false); resetHourlyLeaveForm(); }} className="flex-1 py-4 bg-gray-800 text-white font-black rounded-xl hover:bg-gray-700 transition-all uppercase tracking-widest text-xs">Цуцлах</button>
                       <button
@@ -3391,11 +3244,10 @@ export default function CsrDashboard() {
             </div>
           )}
         </AnimatePresence>
-
         {/* Success Toast */}
         <AnimatePresence>
           {showSuccess && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
@@ -3410,3 +3262,4 @@ export default function CsrDashboard() {
     </div>
   );
 }
+
