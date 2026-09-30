@@ -509,6 +509,19 @@ router.get('/', authenticate, async (req: any, res) => {
 //     pending/approved leave, not already traded-away, no other approved
 //     trade that date for either person) is re-checked for the candidate
 //     day too, so every day this returns is immediately usable.
+//
+// 2026-09-30 BUGFIX: senderNextSlotId/receiverNextSlotId were swapped.
+// restSideNextBooking is the day-2 (WORK) booking belonging to whichever
+// person is CURRENTLY resting on day 1 (restSideUserId); workSideNextBooking
+// is the day-2 (REST) booking belonging to whichever person is CURRENTLY
+// working on day 1 (workSideUserId). Which of "sender" or "receiver" is the
+// "rest side" depends on senderRest - so senderNextSlotId must follow
+// senderRest the SAME way restSideUserId/workSideUserId do above, not the
+// reverse. The previous version had this backwards, which handed the
+// sender the OTHER person's day-2 slot id and vice versa, so a perfectly
+// valid candidate failed re-validation in POST / with "Хоёр дахь өдрийн
+// хуваарь эхний өдрийн эсрэг байх ёстой" as soon as it was actually
+// submitted.
 // ---------------------------------------------------------------------------
 router.get('/candidate-second-days', authenticate, authorize(['csr']), async (req: any, res) => {
   const senderSlotId = String(req.query.senderSlotId || '');
@@ -548,11 +561,15 @@ router.get('/candidate-second-days', authenticate, authorize(['csr']), async (re
       // tradeable WORK booking; whoever WORKED on day 1 must be resting.
       const restSideUserId = senderRest ? senderId : receiverId;
       const workSideUserId = senderRest ? receiverId : senderId;
+      // restSideNextBooking: the day-2 WORK booking for restSideUserId
+      // (whoever rested day 1 must be working day 2).
       const restSideNextBooking = await db('slot_bookings')
         .join('work_slots', 'slot_bookings.slot_id', 'work_slots.id')
         .where({ 'slot_bookings.user_id': restSideUserId, 'slot_bookings.status': 'confirmed', 'work_slots.date': dateKey, 'work_slots.is_rest': 0, 'work_slots.segment': segment, 'work_slots.employment_type': employmentType, 'work_slots.location': location })
         .select('slot_bookings.id as booking_id', 'work_slots.*')
         .first();
+      // workSideNextBooking: the day-2 REST booking for workSideUserId
+      // (whoever worked day 1 must be resting day 2).
       const workSideNextBooking = await db('slot_bookings')
         .join('work_slots', 'slot_bookings.slot_id', 'work_slots.id')
         .where({ 'slot_bookings.user_id': workSideUserId, 'slot_bookings.status': 'confirmed', 'work_slots.date': dateKey, 'work_slots.is_rest': 1, 'work_slots.segment': segment, 'work_slots.employment_type': employmentType, 'work_slots.location': location })
@@ -565,10 +582,13 @@ router.get('/candidate-second-days', authenticate, authorize(['csr']), async (re
       if (await bookingAcquiredViaTrade(db, workSideNextBooking.booking_id)) continue;
       if (await hasApprovedTradeOnDate(db, senderId, dateKey)) continue;
       if (await hasApprovedTradeOnDate(db, receiverId, dateKey)) continue;
+      // senderNextSlotId must belong to whichever side the SENDER is on -
+      // exactly mirroring how restSideUserId/workSideUserId were assigned
+      // above from senderRest, not the reverse.
       candidates.push({
         date: dateKey,
-        senderNextSlotId: senderRest ? workSideNextBooking.id : restSideNextBooking.id,
-        receiverNextSlotId: senderRest ? restSideNextBooking.id : workSideNextBooking.id,
+        senderNextSlotId: senderRest ? restSideNextBooking.id : workSideNextBooking.id,
+        receiverNextSlotId: senderRest ? workSideNextBooking.id : restSideNextBooking.id,
       });
     }
     res.json({ candidates, applicable: true });
