@@ -72,8 +72,9 @@ export function rateLimiter(options: {
     // and legitimate users on a shared/office IP aren't blocked by someone
     // else's failed attempts on a *different* account.
     const emailPart = typeof req.body?.email === 'string' ? req.body.email.toLowerCase().trim() : '';
-    const identity = keyByAuthenticatedUser && req.user?.id
-      ? `user:${req.user.id}`
+    const authenticatedUserId = (req as Request & { user?: { id?: string } }).user?.id;
+    const identity = keyByAuthenticatedUser && authenticatedUserId
+      ? `user:${authenticatedUserId}`
       : `ip:${ip}:${emailPart}`;
     const key = `${keyPrefix}:${identity}`;
 
