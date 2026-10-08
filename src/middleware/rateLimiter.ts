@@ -61,8 +61,9 @@ export function rateLimiter(options: {
   max: number;
   keyPrefix: string;
   message?: string;
+  keyByAuthenticatedUser?: boolean;
 }) {
-  const { windowMs, max, keyPrefix, message } = options;
+  const { windowMs, max, keyPrefix, message, keyByAuthenticatedUser } = options;
 
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = getClientKey(req);
@@ -71,7 +72,10 @@ export function rateLimiter(options: {
     // and legitimate users on a shared/office IP aren't blocked by someone
     // else's failed attempts on a *different* account.
     const emailPart = typeof req.body?.email === 'string' ? req.body.email.toLowerCase().trim() : '';
-    const key = `${keyPrefix}:${ip}:${emailPart}`;
+    const identity = keyByAuthenticatedUser && req.user?.id
+      ? `user:${req.user.id}`
+      : `ip:${ip}:${emailPart}`;
+    const key = `${keyPrefix}:${identity}`;
 
     const now = Date.now();
     const bucket = buckets.get(key);
@@ -131,5 +135,6 @@ export const confirmPasswordRateLimiter = rateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 10,
   keyPrefix: 'confirm-password',
+  keyByAuthenticatedUser: true,
   message: 'Хэт олон удаа оролдлоо. 15 минутын дараа дахин оролдоно уу.',
 });

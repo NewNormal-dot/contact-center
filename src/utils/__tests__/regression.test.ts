@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { toSqlDate, toSqlTime, toSqlDateTime, displayTime } from '../sqlDate';
 import { sanitizeCell, sanitizeRows, sanitizeAoa } from '../excel';
-import { getClientKey } from '../../middleware/rateLimiter';
+import { getClientKey, rateLimiter } from '../../middleware/rateLimiter';
 import { normalizeShiftTemplateValue } from '../shiftTime';
 
 // Each block below pins a bug that actually shipped. The comment says which.
@@ -115,5 +115,43 @@ describe('rateLimiter - X-Forwarded-For is client-controlled', () => {
     const a = getClientKey(req({ 'x-forwarded-for': 'spoof-1, 203.0.113.7' }));
     const b = getClientKey(req({ 'x-forwarded-for': 'spoof-2, 203.0.113.7' }));
     expect(a).toBe(b);
+  });
+
+  it('isolates authenticated password-confirmation attempts by user', () => {
+    const limiter = rateLimiter({
+      windowMs: 15 * 60 * 1000,
+      max: 10,
+      keyPrefix: 'confirm-password-test',
+      keyByAuthenticatedUser: true,
+    });
+    const attempt = (userId: string) => {
+      let passed = false;
+      let statusCode = 200;
+      const response = {
+        setHeader: () => undefined,
+        status: (status: number) => {
+          statusCode = status;
+          return response;
+        },
+        json: () => response,
+      } as any;
+      limiter(
+        {
+          headers: { 'x-forwarded-for': '203.0.113.44' },
+          socket: { remoteAddress: '10.0.0.1' },
+          user: { id: userId },
+          body: { password: 'wrong' },
+        } as any,
+        response,
+        () => { passed = true; },
+      );
+      return { passed, statusCode };
+    };
+
+    for (let index = 0; index < 10; index += 1) {
+      expect(attempt('admin-one').passed).toBe(true);
+    }
+    expect(attempt('admin-one').statusCode).toBe(429);
+    expect(attempt('admin-two').passed).toBe(true);
   });
 });
