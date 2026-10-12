@@ -4613,26 +4613,19 @@ export default function AdminDashboard() {
         });
       });
 
-      // Only employees who have at least one booking this month, grouped by
-      // supervisor then sorted by name within each group (matches the
-      // reference report layout).
+      // Only employees who have at least one booking this month, sorted by name.
       const reportRows = Array.from(bookingsByUser.keys())
         .map((userId) => csrById.get(userId))
         .filter((csr): csr is CSR => Boolean(csr))
-        .sort((a, b) => {
-          const bySupervisor = String(a.supervisorName || "").localeCompare(String(b.supervisorName || ""));
-          if (bySupervisor !== 0) return bySupervisor;
-          return String(a.name || "").localeCompare(String(b.name || ""));
-        });
+        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 
       if (reportRows.length === 0) {
         alert("Энэ сард захиалсан ажилтан алга байна.");
         return;
       }
 
-      // Header row: №, SV, Nice user, then one date label per pair of columns
-      // (shift time + hours worked), matching the reference report exactly.
-      const headerRow: any[] = ["№", "SV", "Nice user"];
+      // Keep employee details before the date columns for easy filtering.
+      const headerRow: any[] = ["№", "Nice user", "Location", "Segment", "Part/Full"];
       validDates.forEach((date) => {
         headerRow.push(`${date.getDate()}-${ENG_MONTHS[date.getMonth()].charAt(0)}${ENG_MONTHS[date.getMonth()].slice(1).toLowerCase()}`, "");
       });
@@ -4644,8 +4637,10 @@ export default function AdminDashboard() {
       reportRows.forEach((csr, index) => {
         const row: any[] = [
           index + 1,
-          csr.supervisorName || "",
           (csr.email || "").split("@")[0] || csr.name,
+          getCsrLocation(csr),
+          csr.lineType || "",
+          csr.employmentType || "Full Time",
         ];
         validDates.forEach((date) => {
           const dateKey = formatDateKey(date);
@@ -4662,7 +4657,7 @@ export default function AdminDashboard() {
           // since this row hasn't been pushed yet - it will land at index
           // aoa.length, i.e. the current length of aoa before pushing).
           const rowIndex = aoa.length;
-          const colIndex = 3 + validDates.indexOf(date) * 2;
+          const colIndex = 5 + validDates.indexOf(date) * 2;
 
           if (approvedLeave) {
             const when = new Date(approvedLeave.updatedAt);
@@ -4701,7 +4696,7 @@ export default function AdminDashboard() {
       // Merge each date's header cell across its 2 sub-columns (shift + hours).
       const merges: any[] = [];
       validDates.forEach((_date, i) => {
-        const col = 3 + i * 2;
+        const col = 5 + i * 2;
         merges.push({ s: { r: 0, c: col }, e: { r: 0, c: col + 1 } });
       });
       ws["!merges"] = merges;
@@ -4720,7 +4715,7 @@ export default function AdminDashboard() {
         const isHoliday = holidayDateSet.has(dateKey);
         if (!isWeekend && !isHoliday) return;
 
-        const col = 3 + i * 2;
+        const col = 5 + i * 2;
         for (let r = 0; r <= reportRows.length; r++) {
           [col, col + 1].forEach((c) => {
             const ref = XLSX.utils.encode_cell({ r, c });
@@ -4735,8 +4730,10 @@ export default function AdminDashboard() {
 
       ws["!cols"] = [
         { wch: 4 },
-        { wch: 16 },
         { wch: 20 },
+        { wch: 16 },
+        { wch: 18 },
+        { wch: 12 },
         ...validDates.flatMap(() => [{ wch: 9 }, { wch: 5 }]),
       ];
 
