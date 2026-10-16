@@ -713,7 +713,7 @@ export default function CsrDashboard() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [schedule, setSchedule] = useState<Record<string, DayData>>({});
   const [selectedMonth, setSelectedMonth] = useState(formatMonthKey(new Date()));
-  // Default schedule view is a rolling ±10-day window centered on today
+  // Default schedule view shows 10 days back and 30 days ahead
   // (see displayDays below), not tied to calendar month boundaries. Set to
   // true only when the person explicitly steps to another month using the
   // new prev/next month arrows next to "N-р сарын фонт цаг" - that switches
@@ -856,12 +856,12 @@ export default function CsrDashboard() {
       return { date, isToday, isPast, isTomorrow, isYesterday };
     };
     if (!monthNavActive) {
-      // Default rolling view: 10 days back through 10 days forward from
+      // Default rolling view: 10 days back through 30 days forward from
       // today, regardless of calendar month boundaries.
       const start = new Date(now);
       start.setDate(start.getDate() - 10);
       const end = new Date(now);
-      end.setDate(end.getDate() + 10);
+      end.setDate(end.getDate() + 30);
       const current = new Date(start);
       while (current <= end) {
         days.push(buildDay(new Date(current)));
