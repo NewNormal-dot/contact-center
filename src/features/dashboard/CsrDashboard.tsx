@@ -20,6 +20,8 @@ const normalizeEmployeeLocation = (value: unknown): typeof EMPLOYEE_LOCATIONS[nu
   const normalized = String(value ?? '').trim().toLowerCase();
   return EMPLOYEE_LOCATIONS.find((location) => location.toLowerCase() === normalized) || '';
 };
+const normalizeEmploymentType = (value: unknown) =>
+  String(value || 'Full Time').trim() === 'Part Time' ? 'Part Time' : 'Full Time';
 const MONTHS = [
   '1-р сар', '2-р сар', '3-р сар', '4-р сар', '5-р сар', '6-р сар',
   '7-р сар', '8-р сар', '9-р сар', '10-р сар', '11-р сар', '12-р сар'
@@ -984,8 +986,8 @@ export default function CsrDashboard() {
       // Segments are fully separate business units - no cross-segment
       // matching, "VIP" included. A segment named "VIP" grants no special
       // access to a "Premium" segment's shifts. (Removed 2026-09-29.)
-      const matchesSegment = slot.segment === csrProfile.lineType;
-      const matchesEmployment = (slot.employmentType || slot.employment_type || 'Full Time') === csrProfile.employmentType;
+      const matchesSegment = String(slot.segment || '').trim() === String(csrProfile.lineType || '').trim();
+      const matchesEmployment = normalizeEmploymentType(slot.employmentType || slot.employment_type) === normalizeEmploymentType(csrProfile.employmentType);
       const slotLocation = normalizeEmployeeLocation(slot.location) || 'Ulaanbaatar';
       const csrLocationForMatch = normalizeEmployeeLocation(csrProfile.location) || 'Ulaanbaatar';
       const matchesLocation = slotLocation === csrLocationForMatch;
